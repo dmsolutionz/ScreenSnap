@@ -120,10 +120,10 @@ function pickMime(preferMp4) {
 }
 
 async function finalize() {
-  cleanupTracks();
   const { chunks, mime, opts, discard } = current;
 
   if (discard || !chunks || !chunks.length) {
+    cleanupTracks();
     send({ type: MSG.REC_DONE, filename: null, cancelled: true });
     resetCurrent();
     return;
@@ -137,38 +137,54 @@ async function finalize() {
 
   send({ type: MSG.REC_PHASE, phase: PHASE.SAVING });
   const filename = `screensnap/recording-${stamp()}.${ext}`;
+  // Download BEFORE stopping the tracks: a USER_MEDIA offscreen document can be auto-closed by
+  // Chrome once its media ends, which would kill the in-flight download.
   await downloadBlob(blob, filename);
+  cleanupTracks();
   send({ type: MSG.REC_DONE, filename, note });
   resetCurrent();
 }
 
-// Resolve only when the download has actually finished. The caller (finalize) tears down this
-// offscreen document right after — if we resolved early, the blob: URL would die mid-download and
-// the file would never be written.
-function downloadBlob(blob, filename) {
+// Save the recording. chrome.downloads.download can reject a blob: URL created in an offscreen
+// document on some Chrome builds — so on any failure we fall back to an anchor-click download
+// (rock-solid for blobs in a document). We wait for the download to finish before resolving,
+// because finalize() tears this document down right after.
+async function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  try {
+    await downloadViaApi(url, filename);
+  } catch {
+    anchorDownload(url, filename.split("/").pop());
+    await new Promise((r) => setTimeout(r, 3500)); // let the browser read the blob before revoke
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function downloadViaApi(url, filename) {
   return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(blob);
-    chrome.downloads.download({ url, filename, saveAs: false }, (downloadId) => {
+    chrome.downloads.download({ url, filename, saveAs: false }, (id) => {
       const err = chrome.runtime.lastError;
-      if (err || downloadId == null) {
-        URL.revokeObjectURL(url);
-        return reject(new Error(err ? err.message : "Download failed to start."));
-      }
-      let done = false;
-      const finish = () => {
-        if (done) return;
-        done = true;
-        chrome.downloads.onChanged.removeListener(onChanged);
-        URL.revokeObjectURL(url);
-        resolve(downloadId);
-      };
-      const onChanged = (delta) => {
-        if (delta.id === downloadId && delta.state && delta.state.current !== "in_progress") finish();
+      if (err || id == null) return reject(new Error(err ? err.message : "no download id"));
+      const onChanged = (d) => {
+        if (d.id === id && d.state && d.state.current !== "in_progress") {
+          chrome.downloads.onChanged.removeListener(onChanged);
+          resolve();
+        }
       };
       chrome.downloads.onChanged.addListener(onChanged);
-      setTimeout(finish, 60000); // safety: never hang the recorder
+      setTimeout(resolve, 30000); // safety: never hang
     });
   });
+}
+
+function anchorDownload(url, name) {
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
 }
 
 function cleanupTracks() {
@@ -178,9 +194,12 @@ function cleanupTracks() {
   try {
     current.rawStreams?.forEach((s) => s.getTracks().forEach((t) => t.stop()));
   } catch {}
+  // AudioContext.close() returns a promise; closing an already-closed one rejects (and a bare
+  // try/catch won't catch that async rejection). Guard on state, catch, and null it out.
   try {
-    current.audioContext?.close();
+    if (current.audioContext && current.audioContext.state !== "closed") current.audioContext.close().catch(() => {});
   } catch {}
+  current.audioContext = null;
 }
 function resetCurrent() {
   current = {};

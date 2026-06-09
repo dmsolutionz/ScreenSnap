@@ -79,14 +79,13 @@ async function handle(msg, sender) {
       return setState({ phase: PHASE.IDLE, lastSaved: msg.filename || null, recordedDurationMs: msg.durationMs || 0, note: msg.note || null, error: msg.error || null });
 
     // ── from the offscreen document (tab / video circle) ──
-    case MSG.REC_STARTED: {
-      const res = await setState({
+    case MSG.REC_STARTED:
+      // No on-page control for tab recording (it appears in the capture and is redundant with the
+      // toolbar badge + popup). Video Circle injects its own bubble at start.
+      return setState({
         phase: PHASE.RECORDING, startedAt: Date.now(), mime: msg.mime,
         paused: false, pausedAt: null, pausedTotalMs: 0, recordedDurationMs: 0, error: null, note: null, lastSaved: null,
       });
-      await injectOverlay();
-      return res;
-    }
     case MSG.REC_PHASE: {
       const st = await getState();
       const patch = { phase: msg.phase };
@@ -342,13 +341,6 @@ async function pauseResume(pause) {
   if (pause && !st.paused) { await sendOffscreen({ type: MSG.OFFSCREEN_PAUSE }); await setState({ paused: true, pausedAt: Date.now() }); }
   else if (!pause && st.paused) { await sendOffscreen({ type: MSG.OFFSCREEN_RESUME }); await setState({ paused: false, pausedAt: null, pausedTotalMs: (st.pausedTotalMs || 0) + (Date.now() - (st.pausedAt || Date.now())) }); }
   return { ok: true };
-}
-
-// inject the on-page control for TAB recording (video circle injects its own bubble at start)
-async function injectOverlay() {
-  const st = await getState();
-  if (st.source !== SOURCE.TAB || st.recordingTabId == null || !st.controlInjectable) return;
-  try { await injectFile(st.recordingTabId, "src/content/recorder-control.js"); } catch {}
 }
 
 async function openRecorderWindow() {

@@ -157,7 +157,8 @@ async function finalize() {
 
   try { stream?.getTracks().forEach((t) => t.stop()); } catch {}
   try { rawStreams.forEach((s) => s.getTracks().forEach((t) => t.stop())); } catch {}
-  try { audioCtx?.close(); } catch {}
+  try { if (audioCtx && audioCtx.state !== "closed") audioCtx.close().catch(() => {}); } catch {}
+  audioCtx = null;
 
   const durationMs = savedDuration;
   if (discardFlag || !chunks.length) {
@@ -175,18 +176,37 @@ async function finalize() {
   window.close();
 }
 
-// Resolve only when the download finishes — finalize() calls window.close() right after, which
-// would otherwise destroy the blob: URL before the file is written.
-function downloadBlob(blob, filename) {
-  return new Promise((resolve) => {
-    const url = URL.createObjectURL(blob);
+// Save the recording, waiting for completion before window.close() destroys the blob: URL.
+// Falls back to an anchor-click download if chrome.downloads rejects the blob URL.
+async function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  try {
+    await downloadViaApi(url, filename);
+  } catch {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename.split("/").pop();
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    await new Promise((r) => setTimeout(r, 3500));
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+function downloadViaApi(url, filename) {
+  return new Promise((resolve, reject) => {
     chrome.downloads.download({ url, filename, saveAs: false }, (id) => {
-      if (chrome.runtime.lastError || id == null) { URL.revokeObjectURL(url); return resolve(); }
-      let done = false;
-      const finish = () => { if (done) return; done = true; chrome.downloads.onChanged.removeListener(onChanged); URL.revokeObjectURL(url); resolve(); };
-      const onChanged = (d) => { if (d.id === id && d.state && d.state.current !== "in_progress") finish(); };
+      const err = chrome.runtime.lastError;
+      if (err || id == null) return reject(new Error(err ? err.message : "no id"));
+      const onChanged = (d) => {
+        if (d.id === id && d.state && d.state.current !== "in_progress") {
+          chrome.downloads.onChanged.removeListener(onChanged);
+          resolve();
+        }
+      };
       chrome.downloads.onChanged.addListener(onChanged);
-      setTimeout(finish, 60000);
+      setTimeout(resolve, 30000);
     });
   });
 }
