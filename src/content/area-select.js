@@ -31,10 +31,7 @@ export function selectArea() {
     }
 
     const bar = document.createElement("div");
-    bar.innerHTML =
-      `<span>Drag to select</span><span style="color:#252525">·</span>` +
-      `<span><kbd>Enter</kbd> Capture</span><span style="color:#252525">·</span>` +
-      `<span><kbd>Esc</kbd> Cancel</span>`;
+    bar.innerHTML = `<span>Drag to select</span><span style="color:#252525">·</span><span>release to capture</span><span style="color:#252525">·</span><span><kbd>Esc</kbd> Cancel</span>`;
     Object.assign(bar.style, {
       position: "fixed", bottom: "16px", left: "50%", transform: "translateX(-50%)", display: "flex", gap: "14px",
       alignItems: "center", background: "rgba(5,5,5,0.88)", backdropFilter: "blur(12px)", border: "1px solid rgba(255,255,255,0.1)",
@@ -73,13 +70,15 @@ export function selectArea() {
       if (!dragging) return;
       apply(Math.min(e.clientX, sx), Math.min(e.clientY, sy), Math.abs(e.clientX - sx), Math.abs(e.clientY - sy));
     };
-    const onUp = () => { dragging = false; };
+    // Release immediately captures (drag view -> straight to capture). Tiny drags cancel.
+    const onUp = () => {
+      if (!dragging) return;
+      dragging = false;
+      if (rect && rect.w >= 5 && rect.h >= 5) finish({ ...rect, dpr: window.devicePixelRatio || 1 });
+      else finish(null);
+    };
     const onKey = (e) => {
       if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); finish(null); }
-      else if (e.key === "Enter") {
-        e.preventDefault(); e.stopPropagation();
-        if (rect && rect.w >= 5 && rect.h >= 5) finish({ ...rect, dpr: window.devicePixelRatio || 1 });
-      }
     };
 
     root.addEventListener("mousedown", onDown, true);

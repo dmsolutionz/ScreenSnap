@@ -275,6 +275,7 @@ async function doCapture(mode) {
   let res;
   try { res = await send({ type: typeMap[mode] }); } catch (e) { res = { ok: false, error: String((e && e.message) || e) }; }
   capturing = null;
+  if (res && res.editing) return window.close(); // area → editor opens on the page
   if (res && res.captured) captured = { thumb: res.thumb, filename: res.filename, width: res.width, height: res.height };
   else if (res && !res.ok && res.error) { captured = null; render(); return flashError(res.error); }
   render();

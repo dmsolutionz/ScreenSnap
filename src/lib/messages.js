@@ -25,8 +25,14 @@ export const MSG = Object.freeze({
   EDITOR_SAVE: "editor-save",
   EDITOR_CANCEL: "editor-cancel",
 
-  // recorder window -> service worker
-  RW_CHOOSE: "recorder-window-choose",
+  // recorder window <-> service worker (screen recording runs in the recorder window via
+  // getDisplayMedia — it needs a real user gesture, which the offscreen doc doesn't have)
+  SCREEN_STARTED: "screen-started",
+  SCREEN_STOPPED: "screen-stopped",
+  SCREEN_CONTROL: "screen-control", // SW -> recorder window: { action: 'stop'|'pause'|'resume' }
+
+  // webcam bubble -> service worker: countdown finished, begin the actual recording
+  VC_GO: "videocircle-go",
 
   // service worker -> offscreen document
   OFFSCREEN_START: "offscreen-start",

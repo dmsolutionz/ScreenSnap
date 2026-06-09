@@ -1,6 +1,6 @@
-// Injected webcam bubble for Video Circle recording (self-contained). Shows a draggable circular
-// webcam feed + control pill on the page; the page (this tab) is what gets recorded, so the bubble
-// appears in the capture — Loom-style. Repositions on "bubble-pos" messages from the popup.
+// Injected webcam bubble for Video Circle recording (self-contained). Loom-style: a large draggable
+// circular webcam feed (default bottom-LEFT) with a 3-2-1 countdown, then a prominent Stop control.
+// The page (this tab) is what gets recorded, so the bubble appears in the capture.
 // Message strings mirror src/lib/messages.js.
 (() => {
   const MONO = "'Geist Mono',ui-monospace,'SF Mono',Menlo,monospace";
@@ -15,22 +15,11 @@
       else if (msg.type === "bubble-pos") window.__screensnapBub.setPos(msg.pos);
     });
   }
-  if (window.__screensnapBub) {
-    window.__screensnapBub.requestState();
-    return;
-  }
+  if (window.__screensnapBub) { window.__screensnapBub.requestState(); return; }
   window.__screensnapBub = new Bubble();
 
-  function elapsed(s, now) {
-    if (!s || !s.startedAt) return 0;
-    const end = s.paused && s.pausedAt ? s.pausedAt : now;
-    return Math.max(0, end - s.startedAt - (s.pausedTotalMs || 0));
-  }
-  function fmt(ms) {
-    const s = Math.floor(ms / 1000);
-    const p = [Math.floor(s / 3600), Math.floor((s % 3600) / 60), s % 60].map((n) => String(n).padStart(2, "0"));
-    return (s >= 3600 ? p : p.slice(1)).join(":");
-  }
+  function elapsed(s, now) { if (!s || !s.startedAt) return 0; const end = s.paused && s.pausedAt ? s.pausedAt : now; return Math.max(0, end - s.startedAt - (s.pausedTotalMs || 0)); }
+  function fmt(ms) { const s = Math.floor(ms / 1000); const p = [Math.floor(s / 3600), Math.floor((s % 3600) / 60), s % 60].map((n) => String(n).padStart(2, "0")); return (s >= 3600 ? p : p.slice(1)).join(":"); }
 
   function Bubble() {
     const ID = "__screensnap_bubble_host";
@@ -41,31 +30,35 @@
     root.innerHTML = `
       <style>
         :host { all: initial; }
-        .wrap { position: fixed; z-index: 2147483647; display: flex; flex-direction: column; align-items: center; gap: 8px; }
-        .circle { width: 96px; height: 96px; border-radius: 50%; position: relative; overflow: hidden; cursor: grab;
-          border: 2.5px solid rgba(34,197,94,0.55); box-shadow: 0 8px 32px rgba(0,0,0,0.65), 0 0 0 4px rgba(34,197,94,0.09); }
-        .circle video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); display: block; background:
-          radial-gradient(circle at 42% 38%,#243824 0%,#0d1a0d 55%,#050505 100%); }
-        .rec { position: absolute; top: 6px; right: 6px; width: 8px; height: 8px; border-radius: 50%; background: #ef4444;
-          box-shadow: 0 0 6px rgba(239,68,68,0.5); animation: rp 1.2s infinite; }
-        .paused .rec { animation: none; background: #f59e0b; border-radius: 1px; }
+        .wrap { position: fixed; z-index: 2147483647; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+        .circle { width: 140px; height: 140px; border-radius: 50%; position: relative; overflow: hidden; cursor: grab;
+          border: 3px solid rgba(34,197,94,0.6); box-shadow: 0 10px 40px rgba(0,0,0,0.6), 0 0 0 5px rgba(34,197,94,0.1); }
+        .circle video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); display: block;
+          background: radial-gradient(circle at 42% 38%,#243824 0%,#0d1a0d 55%,#050505 100%); }
+        .rec { position: absolute; top: 9px; right: 9px; width: 11px; height: 11px; border-radius: 50%; background: #ef4444;
+          box-shadow: 0 0 8px rgba(239,68,68,0.6); animation: rp 1.2s infinite; }
+        .paused .rec { animation: none; background: #f59e0b; border-radius: 2px; }
         @keyframes rp { 0%,100% { opacity: 1; } 50% { opacity: 0.2; } }
+        .count { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+          background: rgba(5,5,5,0.55); color: #fff; font: 700 64px ${SANS}; }
         .pill { background: rgba(5,5,5,0.92); backdrop-filter: blur(14px); border: 1px solid rgba(255,255,255,0.12);
-          border-radius: 26px; padding: 7px 14px; display: flex; gap: 10px; align-items: center;
+          border-radius: 30px; padding: 9px 12px 9px 16px; display: flex; gap: 12px; align-items: center;
           box-shadow: 0 8px 24px rgba(0,0,0,0.55); user-select: none; }
-        .time { font-family: ${MONO}; font-size: 12px; font-weight: 500; color: #e5e7eb; min-width: 38px; }
-        .sep { width: 1px; height: 14px; background: rgba(255,255,255,0.1); }
-        button { all: unset; cursor: pointer; padding: 3px 5px; border-radius: 5px; display: flex; align-items: center; gap: 4px; font-family: ${SANS}; font-size: 11px; }
-        button:hover { background: rgba(255,255,255,0.06); }
+        .time { font-family: ${MONO}; font-size: 14px; font-weight: 500; color: #e5e7eb; min-width: 42px; }
+        .sep { width: 1px; height: 18px; background: rgba(255,255,255,0.12); }
+        .pbtn { all: unset; cursor: pointer; padding: 5px 7px; border-radius: 6px; display: flex; align-items: center; gap: 5px; color: #9ca3af; font: 500 12px ${SANS}; }
+        .pbtn:hover { background: rgba(255,255,255,0.06); }
+        .stopbtn { all: unset; cursor: pointer; background: #ef4444; color: #fff; font: 600 13px ${SANS}; padding: 9px 18px;
+          border-radius: 22px; display: flex; align-items: center; gap: 7px; }
+        .stopbtn:hover { background: #dc2626; }
       </style>
       <div class="wrap" id="wrap">
-        <div class="circle" id="circle"><video id="vid" autoplay muted playsinline></video><div class="rec" id="rec"></div></div>
-        <div class="pill">
+        <div class="circle" id="circle"><video id="vid" autoplay muted playsinline></video><div class="rec" id="rec" style="display:none"></div><div class="count" id="count">3</div></div>
+        <div class="pill" id="pill" style="display:none">
           <span class="time" id="time">00:00</span>
+          <button class="pbtn" id="pause"></button>
           <span class="sep"></span>
-          <button id="pause" style="color:#9ca3af"></button>
-          <span class="sep"></span>
-          <button id="stop" style="color:#ef4444"></button>
+          <button class="stopbtn" id="stop"><svg width="11" height="11" viewBox="0 0 24 24" fill="#fff"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>Stop recording</button>
         </div>
       </div>`;
     (document.body || document.documentElement).appendChild(host);
@@ -73,40 +66,50 @@
     const wrap = root.getElementById("wrap");
     const circle = root.getElementById("circle");
     const vid = root.getElementById("vid");
+    const recDot = root.getElementById("rec");
+    const countEl = root.getElementById("count");
+    const pill = root.getElementById("pill");
     const timeEl = root.getElementById("time");
     const pauseBtn = root.getElementById("pause");
     const stopBtn = root.getElementById("stop");
-    let state = null;
-    let camStream = null;
-    let dragged = false;
+    let state = null, camStream = null, dragged = false, started = false;
 
-    const PAUSE = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>';
-    const PLAY = '<svg width="10" height="10" viewBox="0 0 24 24" fill="#22c55e" stroke="#22c55e"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
-    const STOP = '<svg width="10" height="10" viewBox="0 0 24 24" fill="#ef4444"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>';
-    stopBtn.innerHTML = `${STOP}<span>Stop</span>`;
+    const PAUSE = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>';
+    const PLAY = '<svg width="11" height="11" viewBox="0 0 24 24" fill="#22c55e" stroke="#22c55e"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
     pauseBtn.innerHTML = `${PAUSE}<span>Pause</span>`;
-
     pauseBtn.onclick = () => send(state && state.paused ? "resume-recording" : "pause-recording");
     stopBtn.onclick = () => send("stop-recording");
 
-    // webcam
-    navigator.mediaDevices
-      .getUserMedia({ video: { width: 480, height: 480, facingMode: "user" }, audio: false })
+    navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 640, facingMode: "user" }, audio: false })
       .then((s) => { camStream = s; vid.srcObject = s; })
-      .catch(() => { /* camera denied — keep the gradient placeholder, recording still works */ });
+      .catch(() => {});
 
-    // position: default bottom-right; respond to popup grid + dragging
+    // default bottom-LEFT
     this.setPos = (pos) => {
-      if (dragged) return; // explicit drag wins
+      if (dragged) return;
       const map = {
-        tl: { top: "18px", left: "18px", right: "auto", bottom: "auto" },
-        tr: { top: "18px", right: "18px", left: "auto", bottom: "auto" },
-        bl: { bottom: "18px", left: "18px", right: "auto", top: "auto" },
-        br: { bottom: "18px", right: "18px", left: "auto", top: "auto" },
+        tl: { top: "24px", left: "24px", right: "auto", bottom: "auto" },
+        tr: { top: "24px", right: "24px", left: "auto", bottom: "auto" },
+        bl: { bottom: "24px", left: "24px", right: "auto", top: "auto" },
+        br: { bottom: "24px", right: "24px", left: "auto", top: "auto" },
       };
-      Object.assign(wrap.style, map[pos] || map.br);
+      Object.assign(wrap.style, map[pos] || map.bl);
     };
-    this.setPos("br");
+    this.setPos("bl");
+
+    // 3-2-1 countdown, then begin the actual recording
+    let n = 3;
+    countEl.textContent = n;
+    const cd = setInterval(() => {
+      n -= 1;
+      if (n <= 0) {
+        clearInterval(cd);
+        countEl.style.display = "none";
+        recDot.style.display = "";
+        pill.style.display = "flex";
+        send("videocircle-go"); // tells the service worker to start capturing now
+      } else countEl.textContent = n;
+    }, 1000);
 
     let drag = null;
     circle.addEventListener("pointerdown", (e) => { const r = wrap.getBoundingClientRect(); drag = { dx: e.clientX - r.left, dy: e.clientY - r.top }; circle.setPointerCapture(e.pointerId); circle.style.cursor = "grabbing"; });
@@ -119,25 +122,21 @@
     });
     circle.addEventListener("pointerup", () => { drag = null; circle.style.cursor = "grab"; });
 
-    const interval = setInterval(() => { if (state) timeEl.textContent = fmt(elapsed(state, Date.now())); }, 500);
+    const interval = setInterval(() => { if (state && started) timeEl.textContent = fmt(elapsed(state, Date.now())); }, 500);
 
     this.onState = (s) => {
       state = s;
       const phase = s && s.phase;
       if (!phase || phase === "idle") return this.destroy();
+      if (phase === "recording") { started = true; pill.style.display = "flex"; countEl.style.display = "none"; recDot.style.display = ""; }
       wrap.classList.toggle("paused", !!s.paused);
       pauseBtn.innerHTML = s.paused ? `${PLAY}<span style="color:#22c55e">Resume</span>` : `${PAUSE}<span>Pause</span>`;
-      const finalizing = phase === "transcoding" || phase === "saving";
+      const finalizing = phase === "saving" || phase === "transcoding";
       pauseBtn.style.display = finalizing ? "none" : "";
       timeEl.textContent = finalizing ? "Saving…" : fmt(elapsed(s, Date.now()));
     };
     this.requestState = () => chrome.runtime.sendMessage({ type: "get-state" }, (res) => { if (!chrome.runtime.lastError && res && res.state) this.onState(res.state); });
-    this.destroy = () => {
-      clearInterval(interval);
-      try { camStream?.getTracks().forEach((t) => t.stop()); } catch {}
-      host.remove();
-      window.__screensnapBub = null;
-    };
+    this.destroy = () => { clearInterval(interval); try { camStream?.getTracks().forEach((t) => t.stop()); } catch {} host.remove(); window.__screensnapBub = null; };
     this.requestState();
   }
 })();
