@@ -164,7 +164,15 @@ async function shotCopy() { return pendingCapture ? { ok: true, dataUrl: pending
 async function shotClear() { pendingCapture = null; return { ok: true }; }
 async function editorGetImage() { return pendingCapture ? { ok: true, dataUrl: pendingCapture.dataUrl, filename: pendingCapture.filename } : { ok: false, error: "no pending image" }; }
 async function editorSave(msg) {
-  await chrome.downloads.download({ url: msg.dataUrl, filename: msg.filename || `${DL_DIR}/screenshot-${stamp()}.png`, saveAs: false });
+  // The payload arrives from the injected editor overlay. Constrain it so this can only ever write a
+  // PNG into the screensnap/ download folder — never an arbitrary URL or path-shaped filename.
+  if (typeof msg.dataUrl !== "string" || !msg.dataUrl.startsWith("data:image/png;base64,")) {
+    return { ok: false, error: "Invalid image data." };
+  }
+  const filename = typeof msg.filename === "string" && /^screensnap\/[\w.-]+\.png$/.test(msg.filename)
+    ? msg.filename
+    : `${DL_DIR}/screenshot-${stamp()}.png`;
+  await chrome.downloads.download({ url: msg.dataUrl, filename, saveAs: false });
   pendingCapture = null;
   return { ok: true };
 }

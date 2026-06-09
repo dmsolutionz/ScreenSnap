@@ -9,7 +9,8 @@
 
   if (!window.__screensnapBubListener) {
     window.__screensnapBubListener = true;
-    chrome.runtime.onMessage.addListener((msg) => {
+    chrome.runtime.onMessage.addListener((msg, sender) => {
+      if (sender.id !== chrome.runtime.id) return; // only this extension's own service worker
       if (!msg || !window.__screensnapBub) return;
       if (msg.type === "state-changed") window.__screensnapBub.onState(msg.state);
       else if (msg.type === "bubble-pos") window.__screensnapBub.setPos(msg.pos);
@@ -84,9 +85,35 @@
     pauseBtn.onclick = () => send(state && state.paused ? "resume-recording" : "pause-recording");
     stopBtn.onclick = () => send("stop-recording");
 
-    navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 640, facingMode: "user" }, audio: false })
-      .then((s) => { camStream = s; vid.srcObject = s; })
-      .catch(() => {});
+    // Show a waiting state; only run the countdown + start recording once the camera is
+    // initialised/allowed — never record before the webcam is live.
+    cnum.textContent = "Allow camera…";
+    cnum.style.font = `600 26px ${SANS}`;
+    navigator.mediaDevices
+      .getUserMedia({ video: { width: 640, height: 640, facingMode: "user" }, audio: false })
+      .then((s) => { camStream = s; vid.srcObject = s; startCountdown(); })
+      .catch(() => {
+        cnum.textContent = "Camera blocked";
+        cnum.style.font = `600 26px ${SANS}`;
+        setTimeout(() => send("cancel-recording"), 1400); // back to idle; bubble removes itself on state change
+      });
+
+    function startCountdown() {
+      cnum.style.font = `700 160px ${SANS}`;
+      let n = 3;
+      const tick = () => { cnum.textContent = n; cnum.style.animation = "none"; void cnum.offsetWidth; cnum.style.animation = "pop 1s ease-out"; };
+      tick();
+      const cd = setInterval(() => {
+        n -= 1;
+        if (n <= 0) {
+          clearInterval(cd);
+          center.remove();
+          recDot.style.display = "";
+          pill.style.display = "flex";
+          send("videocircle-go"); // tells the service worker to start capturing now
+        } else tick();
+      }, 1000);
+    }
 
     // default bottom-LEFT
     this.setPos = (pos) => {
@@ -100,21 +127,6 @@
       Object.assign(wrap.style, map[pos] || map.bl);
     };
     this.setPos("bl");
-
-    // 3-2-1 countdown, centred on the screen, then begin the actual recording
-    let n = 3;
-    const tick = () => { cnum.textContent = n; cnum.style.animation = "none"; void cnum.offsetWidth; cnum.style.animation = "pop 1s ease-out"; };
-    tick();
-    const cd = setInterval(() => {
-      n -= 1;
-      if (n <= 0) {
-        clearInterval(cd);
-        center.remove();
-        recDot.style.display = "";
-        pill.style.display = "flex";
-        send("videocircle-go"); // tells the service worker to start capturing now
-      } else tick();
-    }, 1000);
 
     let drag = null;
     circle.addEventListener("pointerdown", (e) => { const r = wrap.getBoundingClientRect(); drag = { dx: e.clientX - r.left, dy: e.clientY - r.top }; circle.setPointerCapture(e.pointerId); circle.style.cursor = "grabbing"; });

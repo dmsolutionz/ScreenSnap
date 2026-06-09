@@ -26,6 +26,10 @@ const C = {
 const MONO = "'Geist Mono',ui-monospace,'SF Mono',Menlo,monospace";
 const clockStr = (ms) => fmtClock((ms || 0) / 1000);
 const shortName = (f) => (f || "").split("/").pop();
+// Escape anything interpolated into innerHTML. Today these fields (filenames, notes) are all
+// extension-controlled, but the popup is a privileged page — escape so a future state field that
+// becomes page-influenced can't inject markup here.
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
 const P = {
   camera: '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>',
@@ -125,7 +129,7 @@ function capturedView() {
     <div style="width:100%;height:130px;border-radius:9px;overflow:hidden;border:1px solid ${C.boxLine};margin-bottom:11px;background:${C.box};display:flex;align-items:center;justify-content:center">
       <img src="${captured.thumb}" alt="" style="max-width:100%;max-height:100%;object-fit:contain;display:block"/>
     </div>
-    <div style="font-family:${MONO};font-size:11px;color:${C.muted};text-transform:uppercase;letter-spacing:0.04em;margin-bottom:13px;text-align:center">${shortName(captured.filename)} · ${captured.width}×${captured.height}</div>
+    <div style="font-family:${MONO};font-size:11px;color:${C.muted};text-transform:uppercase;letter-spacing:0.04em;margin-bottom:13px;text-align:center">${esc(shortName(captured.filename))} · ${captured.width}×${captured.height}</div>
     <button class="prim-b" data-act="annotate" style="width:100%;padding:12px;background:${C.green};border:none;border-radius:9px;color:#fff;font-size:14px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:9px">${ico("pencil", { sz: 14, c: "#fff" })}Annotate &amp; save</button>
     <button class="ghost-b" data-act="save" style="width:100%;padding:11px;background:#fff;border:1px solid ${C.boxLine};border-radius:9px;color:${C.fg};font-size:13px;font-weight:500;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:9px">${ico("down", { sz: 14, c: C.muted })}Save PNG directly</button>
     <div style="display:flex;gap:8px">
@@ -194,11 +198,11 @@ function savingView() {
   </div>`;
 }
 function doneView() {
-  const note = doneInfo.note ? `<div style="font-family:${MONO};font-size:11px;color:${C.amber};margin-top:7px;text-align:center;max-width:260px">${doneInfo.note}</div>` : "";
+  const note = doneInfo.note ? `<div style="font-family:${MONO};font-size:11px;color:${C.amber};margin-top:7px;text-align:center;max-width:260px">${esc(doneInfo.note)}</div>` : "";
   return `<div style="padding:38px 20px 30px;display:flex;flex-direction:column;align-items:center">
     <div style="width:46px;height:46px;border-radius:50%;background:${C.greenTint};border:1px solid ${C.greenLine};display:flex;align-items:center;justify-content:center">${ico("check", { sz: 22, c: C.green })}</div>
     <div style="font-size:15px;font-weight:500;color:${C.fg};margin-top:15px">Saved to Downloads</div>
-    <div style="font-family:${MONO};font-size:11px;color:${C.muted};margin-top:6px">${shortName(doneInfo.filename)}</div>
+    <div style="font-family:${MONO};font-size:11px;color:${C.muted};margin-top:6px">${esc(shortName(doneInfo.filename))}</div>
     <div style="font-family:${MONO};font-size:11px;color:${C.faint};margin-top:3px">${clockStr(doneInfo.durationMs)} · ${shortName(doneInfo.filename).endsWith(".mp4") ? "H.264 + AAC" : "VP9 + Opus"}</div>${note}
     <button class="prim-b" data-act="done" style="margin-top:20px;padding:11px 30px;background:${C.green};border:none;border-radius:9px;color:#fff;font-size:13px;font-weight:600;cursor:pointer">Done</button>
   </div>`;
@@ -325,7 +329,7 @@ function onState(state) {
 
 async function init() {
   settings = await getSettings();
-  chrome.runtime.onMessage.addListener((msg) => { if (msg && msg.type === MSG.STATE_CHANGED) onState(msg.state); });
+  chrome.runtime.onMessage.addListener((msg, sender) => { if (sender.id === chrome.runtime.id && msg && msg.type === MSG.STATE_CHANGED) onState(msg.state); });
   try {
     const res = await send({ type: MSG.GET_STATE });
     rec = res?.state || { phase: PHASE.IDLE };
