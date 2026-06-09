@@ -115,9 +115,8 @@
           .wt:hover { background: rgba(0,0,0,0.04); }
           .wt.on { background: rgba(22,163,74,0.1); border-color: rgba(22,163,74,0.25); }
           .wt i { width: 100%; border-radius: 4px; display: block; }
-          .stage { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; overflow: hidden;
-            background: #e9ebef; position: relative; }
-          canvas { display: block; box-shadow: 0 4px 24px rgba(0,0,0,0.12); background: #fff; }
+          .stage { flex: 1; min-width: 0; min-height: 0; overflow: auto; background: #e9ebef; position: relative; text-align: center; padding: 24px; }
+          canvas { display: inline-block; vertical-align: top; box-shadow: 0 4px 24px rgba(0,0,0,0.12); background: #fff; }
           .txtin { position: absolute; background: transparent; border: 1px dashed ${GREEN}; outline: none;
             padding: 0 2px; margin: 0; font-family: ${SANS}; font-weight: 600; line-height: 1.1; }
           .status { height: 38px; flex: 0 0 auto; background: #f7f7f9; border-top: 1px solid #e6e7eb;
@@ -212,7 +211,13 @@
 
     fit() {
       const rect = this.stage.getBoundingClientRect();
-      const scale = Math.min((rect.width - 48) / this.iw, (rect.height - 48) / this.ih, 1);
+      const pad = 48;
+      // Tall full-page shots fit to WIDTH and scroll vertically (so they stay readable, not tiny);
+      // normal/area shots are contained so they fit without scrolling.
+      const tall = this.ih > this.iw * 2.2;
+      const scale = tall
+        ? Math.min((rect.width - pad) / this.iw, 1)
+        : Math.min((rect.width - pad) / this.iw, (rect.height - pad) / this.ih, 1);
       this.scale = scale;
       this.canvas.style.width = Math.round(this.iw * scale) + "px";
       this.canvas.style.height = Math.round(this.ih * scale) + "px";
@@ -290,13 +295,12 @@
       this.editingText = true;
       this.selected = null;
       const size = this.textPx();
-      const cRect = this.canvas.getBoundingClientRect();
-      const sRect = this.stage.getBoundingClientRect();
-      const sc = cRect.width / this.iw;
+      const sc = this.scale;
       const input = document.createElement("input");
       input.className = "txtin";
-      input.style.left = cRect.left - sRect.left + p.x * sc + "px";
-      input.style.top = cRect.top - sRect.top + p.y * sc + "px";
+      // position relative to the canvas within the (scrollable) stage — offset coords scroll with content
+      input.style.left = this.canvas.offsetLeft + p.x * sc + "px";
+      input.style.top = this.canvas.offsetTop + p.y * sc + "px";
       input.style.color = this.color;
       input.style.fontSize = size * sc + "px";
       this.stage.appendChild(input);

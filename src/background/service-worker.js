@@ -208,11 +208,21 @@ async function captureFullPage(tab) {
     const ctx = canvas.getContext("2d");
     const maxX = Math.max(0, m.pageW - m.viewW);
     const maxY = Math.max(0, m.pageH - m.viewH);
+    // Explicit tile positions that ALWAYS include the bottom-/right-aligned edge. A plain
+    // `y += viewH` loop skips the final strip whenever the page isn't an exact multiple of the
+    // viewport, which cut the bottom off.
+    const xs = [];
+    for (let x = 0; x < maxX; x += m.viewW) xs.push(x);
+    xs.push(maxX);
+    const ys = [];
+    for (let y = 0; y < maxY; y += m.viewH) ys.push(y);
+    ys.push(maxY);
+
     const seen = new Set();
     let tile = 0;
-    for (let y = 0; y <= maxY; y += m.viewH) {
-      for (let x = 0; x <= maxX; x += m.viewW) {
-        const pos = await run(gotoTile, [Math.min(x, maxX), Math.min(y, maxY), tile > 0]);
+    for (const y of ys) {
+      for (const x of xs) {
+        const pos = await run(gotoTile, [x, y, tile > 0]);
         const key = `${pos.scrollX},${pos.scrollY}`;
         if (seen.has(key)) continue;
         seen.add(key);
