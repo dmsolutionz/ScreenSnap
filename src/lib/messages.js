@@ -6,7 +6,6 @@ export const MSG = Object.freeze({
   // popup -> service worker
   CAPTURE_VISIBLE: "capture-visible",
   CAPTURE_FULLPAGE: "capture-fullpage",
-  CAPTURE_AREA: "capture-area",
   START_RECORDING: "start-recording",
   STOP_RECORDING: "stop-recording",
   CANCEL_RECORDING: "cancel-recording",
@@ -24,12 +23,6 @@ export const MSG = Object.freeze({
   EDITOR_GET_IMAGE: "editor-get-image",
   EDITOR_SAVE: "editor-save",
   EDITOR_CANCEL: "editor-cancel",
-
-  // recorder window <-> service worker (screen recording runs in the recorder window via
-  // getDisplayMedia — it needs a real user gesture, which the offscreen doc doesn't have)
-  SCREEN_STARTED: "screen-started",
-  SCREEN_STOPPED: "screen-stopped",
-  SCREEN_CONTROL: "screen-control", // SW -> recorder window: { action: 'stop'|'pause'|'resume' }
 
   // webcam bubble -> service worker: countdown finished, begin the actual recording
   VC_GO: "videocircle-go",
@@ -62,10 +55,10 @@ export const PHASE = Object.freeze({
 });
 
 // Source kinds for recording.
-export const SOURCE = Object.freeze({ TAB: "tab", SCREEN: "screen", VIDEO_CIRCLE: "videocircle" });
+export const SOURCE = Object.freeze({ TAB: "tab", VIDEO_CIRCLE: "videocircle" });
 
 export const DEFAULT_SETTINGS = Object.freeze({
-  withMic: false,
+  withMic: true,
   withSystemAudio: true,
   videoFormat: "mp4", // mp4 | webm (no UI toggle; MP4 by default per design)
   videoMaxHeight: 2160,

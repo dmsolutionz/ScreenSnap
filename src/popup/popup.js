@@ -90,29 +90,20 @@ function camCircle(size, paused) {
     <div style="position:absolute;bottom:-4px;left:-4px;right:-4px;height:${Math.round(size * 0.48)}px;border-radius:50% 50% 0 0;background:rgba(255,255,255,0.08)"></div>${overlay}</div>`;
 }
 
-function captureRow(mode, icon, label, desc, last) {
-  const hot = capturing === mode;
-  return `<div class="pr" data-act="cap" data-mode="${mode}" style="display:flex;align-items:center;gap:13px;padding:13px 16px;cursor:pointer;border-bottom:${last ? "none" : `1px solid ${C.line}`};background:${hot ? C.greenTint : "transparent"}">
-    <div style="width:36px;height:36px;border-radius:9px;flex-shrink:0;background:${hot ? C.greenIcon : C.box};border:1px solid ${hot ? C.greenIconLine : C.boxLine};display:flex;align-items:center;justify-content:center">${ico(icon, { sz: 16, c: hot ? C.green : C.icon })}</div>
-    <div style="flex:1;min-width:0">
-      <div style="font-size:15px;font-weight:500;color:${C.fg}">${label}</div>
-      <div style="font-family:${MONO};font-size:11px;color:${C.muted};text-transform:uppercase;letter-spacing:0.05em;margin-top:3px">${hot ? "Capturing…" : desc}</div>
-    </div>${ico("chev", { sz: 14, c: C.chev })}</div>`;
-}
-function captureTab() {
-  return `<div>
-    ${captureRow("visible", "camera", "Visible Tab", "PNG · instant", false)}
-    ${captureRow("fullpage", "page", "Full Page", "PNG · scroll + stitch", false)}
-    ${captureRow("area", "cross", "Select Area", "PNG · draw a region", true)}
-  </div>`;
-}
-function recordRow(src, icon, label, desc, accent) {
-  return `<div class="rb" data-act="rec" data-src="${src}" style="display:flex;align-items:center;gap:13px;padding:14px;border:1px solid ${accent ? C.greenLine : C.boxLine};border-radius:11px;margin:0 14px 9px;cursor:pointer;background:${accent ? C.greenTint : "#fff"}">
-    <div style="width:40px;height:40px;border-radius:10px;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:${accent ? C.greenIcon : C.box};border:1px solid ${accent ? C.greenIconLine : C.boxLine}">${ico(icon, { sz: 17, c: accent ? C.green : C.icon })}</div>
+// One row style shared by both tabs so Capture and Record look identical.
+function navRow(attrs, icon, label, desc, hot) {
+  return `<div class="rb" ${attrs} style="display:flex;align-items:center;gap:13px;padding:14px;border:1px solid ${hot ? C.greenLine : C.boxLine};border-radius:11px;margin:0 14px 9px;cursor:pointer;background:${hot ? C.greenTint : "#fff"}">
+    <div style="width:40px;height:40px;border-radius:10px;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:${hot ? C.greenIcon : C.box};border:1px solid ${hot ? C.greenIconLine : C.boxLine}">${ico(icon, { sz: 17, c: hot ? C.green : C.icon })}</div>
     <div style="flex:1;min-width:0">
       <div style="font-size:15px;font-weight:500;color:${C.fg};margin-bottom:3px">${label}</div>
       <div style="font-family:${MONO};font-size:11px;color:${C.muted};text-transform:uppercase;letter-spacing:0.05em">${desc}</div>
     </div>${ico("chev", { sz: 14, c: C.chev })}</div>`;
+}
+function captureTab() {
+  return `<div style="padding-top:13px">
+    ${navRow(`data-act="cap" data-mode="visible"`, "camera", "Visible Tab", capturing === "visible" ? "Capturing…" : "PNG · instant", capturing === "visible")}
+    ${navRow(`data-act="cap" data-mode="fullpage"`, "page", "Full Page", capturing === "fullpage" ? "Capturing…" : "PNG · scroll + stitch", capturing === "fullpage")}
+  </div>`;
 }
 function audioRow(icon, label, key) {
   return `<div style="display:flex;align-items:center;gap:11px;margin-bottom:${key === "withSystemAudio" ? "11px" : "0"}">
@@ -120,9 +111,8 @@ function audioRow(icon, label, key) {
 }
 function recordTab() {
   return `<div style="padding-top:13px;padding-bottom:5px">
-    ${recordRow("tab", "tab", "Current Tab", "No picker · tab audio", true)}
-    ${recordRow("screen", "monitor", "Screen / Window", "Native picker · any source", false)}
-    ${recordRow("videocircle", "video", "Video Circle", "Webcam bubble · sys audio", false)}
+    ${navRow(`data-act="rec" data-src="tab"`, "tab", "Current Tab", "No picker · tab audio", false)}
+    ${navRow(`data-act="rec" data-src="videocircle"`, "video", "Video Circle", "Webcam bubble · sys audio", false)}
     <div style="padding:13px 16px;border-top:1px solid ${C.line};margin-top:5px">
       <div style="font-family:${MONO};font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:${C.faint};margin-bottom:11px">Audio</div>
       ${audioRow("vol", "System audio", "withSystemAudio")}
@@ -145,7 +135,7 @@ function capturedView() {
   </div>`;
 }
 const codecLabel = () => ((rec.mime || "").includes("mp4") ? "MP4 · H.264" : "WebM · VP9");
-const srcName = () => (rec.source === SOURCE.SCREEN ? "Screen" : rec.source === SOURCE.VIDEO_CIRCLE ? "Video circle" : "Current tab");
+const srcName = () => (rec.source === SOURCE.VIDEO_CIRCLE ? "Video circle" : "Current tab");
 function audioChips() {
   const chip = (l) => `<span style="font-family:${MONO};font-size:10px;color:${C.green};background:${C.greenTint};border:1px solid ${C.greenLine};border-radius:5px;padding:3px 8px">${l}</span>`;
   const chips = [];
@@ -271,20 +261,33 @@ app.addEventListener("click", async (e) => {
 async function doCapture(mode) {
   capturing = mode;
   render();
-  const typeMap = { visible: MSG.CAPTURE_VISIBLE, fullpage: MSG.CAPTURE_FULLPAGE, area: MSG.CAPTURE_AREA };
+  const typeMap = { visible: MSG.CAPTURE_VISIBLE, fullpage: MSG.CAPTURE_FULLPAGE };
   let res;
   try { res = await send({ type: typeMap[mode] }); } catch (e) { res = { ok: false, error: String((e && e.message) || e) }; }
   capturing = null;
-  if (res && res.editing) return window.close(); // area → editor opens on the page
   if (res && res.captured) captured = { thumb: res.thumb, filename: res.filename, width: res.width, height: res.height };
   else if (res && !res.ok && res.error) { captured = null; render(); return flashError(res.error); }
   render();
 }
 async function doRecord(src) {
   const options = { recordSource: src, withMic: !!settings.withMic, withSystemAudio: !!settings.withSystemAudio };
+  // The offscreen document can't show a mic permission prompt, so grant it here (the popup can).
+  // Once granted to the extension origin, the offscreen's getUserMedia(mic) works. Only the first
+  // time prompts; after that the permission query reports "granted" and we skip straight through.
+  if (options.withMic) {
+    let state = "prompt";
+    try { state = (await navigator.permissions.query({ name: "microphone" })).state; } catch {}
+    if (state !== "granted") {
+      try {
+        const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+        s.getTracks().forEach((t) => t.stop());
+      } catch {
+        options.withMic = false; // denied/unavailable — record without it rather than fail
+      }
+    }
+  }
   let res;
   try { res = await send({ type: MSG.START_RECORDING, options }); } catch (e) { return flashError(String((e && e.message) || e)); }
-  if (res && res.recorderWindow) return window.close();
   if (res && res.ok === false) return flashError(res.error || "Couldn't start recording");
 }
 async function doCopy(btn) {

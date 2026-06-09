@@ -1,9 +1,7 @@
 // Service worker — orchestrates everything. No DOM: screenshots stitch with OffscreenCanvas; tab &
-// video-circle recording run in the offscreen document; SCREEN recording runs in the recorder window
-// (it needs a real user gesture for getDisplayMedia). Recordings save as native MP4 (no transcoding).
+// video-circle recording run in the offscreen document. Recordings save as native MP4 (no transcoding).
 import { MSG, TARGET, PHASE, SOURCE, getSettings, stamp, elapsedMs } from "../lib/messages.js";
 import { preparePageForCapture, gotoTile, restorePageAfterCapture } from "../content/fullpage.js";
-import { selectArea } from "../content/area-select.js";
 
 const STATE_KEY = "recordingState";
 const DL_DIR = "screensnap";
@@ -16,7 +14,11 @@ let pendingCapture = null;
 
 // ── routing ──────────────────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (!msg || msg.target === TARGET.OFFSCREEN || msg.type === MSG.STATE_CHANGED || msg.type === MSG.SCREEN_CONTROL) return false;
+  // Only ever act on messages from this extension's own contexts (content scripts, popup, offscreen,
+  // recorder window). There is no externally_connectable, so this is defence-in-depth: it ensures a
+  // future/co-installed sender can't drive downloads, capture, or recording.
+  if (sender.id !== chrome.runtime.id) return false;
+  if (!msg || msg.target === TARGET.OFFSCREEN || msg.type === MSG.STATE_CHANGED) return false;
   handle(msg, sender)
     .then((res) => sendResponse(res ?? { ok: true }))
     .catch((err) => sendResponse({ ok: false, error: String((err && err.message) || err) }));
@@ -31,8 +33,6 @@ async function handle(msg, sender) {
       return doScreenshot("visible");
     case MSG.CAPTURE_FULLPAGE:
       return doScreenshot("fullpage");
-    case MSG.CAPTURE_AREA:
-      return doScreenshot("area");
 
     case MSG.SHOT_ANNOTATE:
       return shotAnnotate();
@@ -66,17 +66,6 @@ async function handle(msg, sender) {
       if (st.recordingTabId != null) chrome.tabs.sendMessage(st.recordingTabId, { type: "bubble-pos", pos: msg.pos }).catch(() => {});
       return { ok: true };
     }
-
-    // ── from the recorder window (screen recording) ──
-    case MSG.SCREEN_STARTED:
-      return setState({
-        phase: PHASE.RECORDING, source: SOURCE.SCREEN, startedAt: msg.startedAt, mime: msg.mime,
-        paused: !!msg.paused, pausedAt: msg.pausedAt ?? null, pausedTotalMs: msg.pausedTotalMs || 0,
-        recordingTabId: null, controlInjectable: false, recordedDurationMs: 0, error: null, note: null, lastSaved: null,
-      });
-    case MSG.SCREEN_STOPPED:
-      await chrome.storage.session.remove("recorderWindowId");
-      return setState({ phase: PHASE.IDLE, lastSaved: msg.filename || null, recordedDurationMs: msg.durationMs || 0, note: msg.note || null, error: msg.error || null });
 
     // ── from the offscreen document (tab / video circle) ──
     case MSG.REC_STARTED:
@@ -132,15 +121,6 @@ async function reflectBadge(state) {
 chrome.runtime.onStartup.addListener(() => getState().then(reflectBadge));
 getState().then(reflectBadge);
 
-chrome.windows.onRemoved.addListener(async (windowId) => {
-  const { recorderWindowId } = await chrome.storage.session.get("recorderWindowId");
-  if (recorderWindowId === windowId) {
-    await chrome.storage.session.remove("recorderWindowId");
-    const st = await getState();
-    if (st.source === SOURCE.SCREEN && st.phase !== PHASE.IDLE) await setState({ phase: PHASE.IDLE });
-  }
-});
-
 // ── screenshots ──────────────────────────────────────────────────────────────
 async function doScreenshot(mode) {
   const tab = await getActiveTab();
@@ -150,8 +130,7 @@ async function doScreenshot(mode) {
   let fullDataUrl = null;
   let prefix;
   if (mode === "visible") { fullDataUrl = await captureWithRetry(tab.windowId); prefix = "screenshot"; }
-  else if (mode === "fullpage") { canvas = await captureFullPage(tab); prefix = "fullpage"; }
-  else { canvas = await captureArea(tab); if (!canvas) return { ok: true, cancelled: true }; prefix = "area"; }
+  else { canvas = await captureFullPage(tab); prefix = "fullpage"; }
 
   const filename = `${DL_DIR}/${prefix}-${stamp()}.png`;
   let thumb, w, h;
@@ -166,12 +145,6 @@ async function doScreenshot(mode) {
     bmp.close?.();
   }
   pendingCapture = { tabId: tab.id, dataUrl: fullDataUrl, filename };
-
-  // Area goes drag -> straight to the editor; visible/full-page show the captured card in the popup.
-  if (mode === "area") {
-    await injectFile(tab.id, "src/content/editor-overlay.js");
-    return { ok: true, editing: true };
-  }
   return { ok: true, captured: true, thumb, filename, width: w, height: h };
 }
 
@@ -238,19 +211,6 @@ async function captureFullPage(tab) {
   }
 }
 
-async function captureArea(tab) {
-  const [{ result: rect } = {}] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: selectArea });
-  if (!rect) return null;
-  await delay(150);
-  const bmp = await dataUrlToBitmap(await captureWithRetry(tab.windowId));
-  const { dpr } = rect;
-  const sw = Math.round(rect.w * dpr), sh = Math.round(rect.h * dpr);
-  const canvas = new OffscreenCanvas(sw, sh);
-  canvas.getContext("2d").drawImage(bmp, Math.round(rect.x * dpr), Math.round(rect.y * dpr), sw, sh, 0, 0, sw, sh);
-  bmp.close?.();
-  return canvas;
-}
-
 let lastCaptureAt = 0;
 async function captureWithRetry(windowId, attempts = 4) {
   let lastErr;
@@ -272,12 +232,6 @@ async function captureWithRetry(windowId, attempts = 4) {
 // ── recording ──────────────────────────────────────────────────────────────────
 async function startRecording(options) {
   const opts = { ...(await getSettings()), ...options };
-
-  if (opts.recordSource === SOURCE.SCREEN) {
-    await openRecorderWindow();
-    return { ok: true, recorderWindow: true };
-  }
-
   const tab = await getActiveTab();
   assertCapturable(tab);
 
@@ -321,10 +275,6 @@ async function videoCircleGo() {
 async function stopRecording(discard) {
   const st = await getState();
   if (!st.phase || st.phase === PHASE.IDLE) return { ok: true };
-  if (st.source === SOURCE.SCREEN) {
-    chrome.runtime.sendMessage({ type: MSG.SCREEN_CONTROL, action: discard ? "discard" : "stop" }).catch(() => {});
-    return { ok: true };
-  }
   if (await chrome.offscreen.hasDocument()) await sendOffscreen({ type: MSG.OFFSCREEN_STOP, discard });
   else await setState({ phase: PHASE.IDLE });
   return { ok: true };
@@ -333,23 +283,10 @@ async function stopRecording(discard) {
 async function pauseResume(pause) {
   const st = await getState();
   if (st.phase !== PHASE.RECORDING) return { ok: true };
-  if (st.source === SOURCE.SCREEN) {
-    chrome.runtime.sendMessage({ type: MSG.SCREEN_CONTROL, action: pause ? "pause" : "resume" }).catch(() => {});
-    return { ok: true }; // recorder window reports the new paused state back via SCREEN_STARTED
-  }
   if (!(await chrome.offscreen.hasDocument())) return { ok: true };
   if (pause && !st.paused) { await sendOffscreen({ type: MSG.OFFSCREEN_PAUSE }); await setState({ paused: true, pausedAt: Date.now() }); }
   else if (!pause && st.paused) { await sendOffscreen({ type: MSG.OFFSCREEN_RESUME }); await setState({ paused: false, pausedAt: null, pausedTotalMs: (st.pausedTotalMs || 0) + (Date.now() - (st.pausedAt || Date.now())) }); }
   return { ok: true };
-}
-
-async function openRecorderWindow() {
-  const { recorderWindowId } = await chrome.storage.session.get("recorderWindowId");
-  if (recorderWindowId != null) {
-    try { await chrome.windows.update(recorderWindowId, { focused: true }); return; } catch {}
-  }
-  const win = await chrome.windows.create({ url: "src/recorder-window/recorder.html", type: "popup", width: 400, height: 184, focused: true });
-  await chrome.storage.session.set({ recorderWindowId: win.id });
 }
 
 // ── offscreen (tab / video circle) ────────────────────────────────────────────

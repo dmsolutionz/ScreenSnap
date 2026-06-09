@@ -5,7 +5,8 @@ import { MSG, TARGET, PHASE, stamp } from "../lib/messages.js";
 
 let current = {}; // { recorder, stream, rawStreams, audioContext, chunks, opts, mime, discard }
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (sender.id !== chrome.runtime.id) return false; // only this extension's own service worker
   if (!msg || msg.target !== TARGET.OFFSCREEN) return false;
   (async () => {
     if (msg.type === MSG.OFFSCREEN_START) await startRecording(msg);
