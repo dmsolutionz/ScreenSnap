@@ -13,9 +13,10 @@ const OUT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "icons");
 const SIZES = [16, 32, 48, 128];
 const SS = 4; // supersampling factor for anti-aliasing
 
-const ACCENT = [79, 70, 229]; // #4F46E5 indigo
-const WHITE = [255, 255, 255];
-const RECORD = [239, 68, 68]; // #EF4444 red
+// screensnap. mark: near-black rounded square with a green camera "lens" ring.
+const ACCENT = [17, 17, 19]; // #111113 dark background
+const WHITE = [34, 197, 94]; // #22c55e green lens ring
+const RECORD = [5, 5, 6]; // #050506 dark pupil/center
 
 // --- tiny PNG encoder (RGBA, 8-bit) -----------------------------------------
 const CRC_TABLE = (() => {

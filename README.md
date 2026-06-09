@@ -1,94 +1,84 @@
-# Clippy — screenshots & screen recording
+# screensnap.
 
 A free, local, watermark-free Chrome extension (Manifest V3) for screenshots and screen recording.
 Built because being nagged to log in just to save a screenshot is miserable.
 
-- **Free & unrestricted** — no paywalls, no watermarks, no sign-ups, no upsell prompts.
+- **Free & unrestricted** — no paywalls, no watermarks, no sign-ups, no upsell.
 - **Private & local** — every byte of capture, processing, and storage stays on your machine. No
-  servers, no telemetry, no cloud, no runtime network calls.
+  servers, no telemetry, no cloud, **no runtime network requests** (fonts are vendored, not fetched).
 - **No dark patterns** — no forced new tab after recording, no mandatory cloud hosting. Capture →
   it lands in your Downloads. Done.
 
 ## Features
 
-**Screenshots** (saved as PNG in one click)
-- Visible area of the tab
-- Full scrolling page (auto-scroll + stitch, with fixed/sticky headers de-duplicated)
-- A drag-selected region
+**Screenshots** (PNG)
+- **Visible Tab** · **Full Page** (auto-scroll + stitch, de-dupes sticky headers) · **Select Area**
+  (on-page green marquee with live dimensions, Enter to capture)
+- After capture you get a **captured card**: **Annotate & save**, **Save PNG directly**, **Copy**, or Discard
+- **Annotation editor** — Draw, Arrow, Rectangle, Text, Highlight, Blur/Redact, Eraser, colours,
+  stroke weights, undo/redo, copy-to-clipboard
 
-**Screen recording** → exports **`.mp4`**
-- Record the current **tab**, or a **screen / window / tab** via Chrome's native picker
-- Capture **system / tab audio** and/or the **microphone** (mixed together)
-- A red **`REC`** toolbar badge while recording is live
-- On stop it converts to MP4 and triggers a normal browser download — no detour, no new tab
+**Screen recording** → **native `.mp4`**
+- **Current Tab** — instant, no picker; a draggable control pill sits on the page
+- **Screen / Window** — Chrome's native picker, driven from a separate **recorder window** so the
+  control isn't baked into the capture
+- **Video Circle** — a Loom-style draggable **webcam bubble** on the page, recorded with the tab
+- **System / tab audio** and/or **microphone** (mixed), **pause / resume**, and a red **REC** badge
+
+## MP4, natively — no transcoding
+
+`MediaRecorder` records **H.264 MP4 directly** on modern Chrome, so there's **no ffmpeg, no WASM, no
+conversion step** — the recording is saved the instant you stop. (On the rare build without native
+MP4 support it saves `.webm` rather than lose your recording.)
 
 ## Install (load unpacked)
 
-```bash
-git clone <this repo> && cd clippy-but-good
-npm run setup            # generates icons + fetches the ffmpeg core (pinned + checksum-verified)
+```
+chrome://extensions  →  enable Developer mode  →  Load unpacked  →  select this folder
 ```
 
-Then in Chrome: **`chrome://extensions`** → enable **Developer mode** → **Load unpacked** → select
-this folder. Pin the toolbar icon and click it.
-
-> `npm run setup` runs two zero-dependency Node scripts. `make:icons` draws the placeholder icons;
-> `fetch:ffmpeg` downloads the single-thread ffmpeg.wasm core into `vendor/ffmpeg/`. **The ffmpeg
-> step is optional** — most modern Chrome builds record MP4 natively (see below). Skip it and the
-> extension still works; it just falls back to saving `.webm` on the rare browser that can't.
-
-There is **no build step and no bundler** — the extension runs the source in `src/` directly.
-
-## How MP4 export works
-
-MediaRecorder usually produces WebM. Clippy gets you MP4 two ways, preferring the fast path:
-
-1. **Native MP4** — if `MediaRecorder` supports `video/mp4` (true on most current Chrome, especially
-   macOS/Windows with hardware H.264), it records MP4 directly. No conversion, instant save.
-2. **ffmpeg.wasm fallback** — otherwise it records WebM and transcodes to H.264/AAC MP4 locally with
-   the vendored ffmpeg core, off the main thread, with a live progress bar. If the core isn't
-   present, it saves the `.webm` rather than lose your recording.
+That's it — **no build step, no `npm install`, zero dependencies.** Icons and fonts are committed, so
+it runs straight from source. (`npm run make:icons` only re-generates the placeholder icons.)
 
 ## Architecture
 
-No framework, no bundler, zero runtime npm dependencies — plain ES modules + self-contained
-injected functions. The pieces and why they exist:
+No framework, no bundler, zero runtime dependencies — plain ES modules + self-contained injected
+overlays.
 
-| Piece | File | Role |
+| Piece | File(s) | Role |
 | --- | --- | --- |
-| **Service worker** | `src/background/service-worker.js` | Orchestrates everything. Coordinates screenshots (`captureVisibleTab` + injected scroll/crop helpers, stitched/cropped with `OffscreenCanvas`), owns the recording lifecycle, badge, downloads, and persisted state. |
-| **Offscreen document** | `src/offscreen/` | Hosts `MediaRecorder` and the transcode worker. Needed because a service worker has no DOM and the popup closes on blur — neither can hold a recording. |
-| **ffmpeg worker** | `src/lib/ffmpeg-worker.js` | Classic Web Worker driving the single-thread ffmpeg core, so transcoding never freezes the offscreen page. Loaded lazily, only when a fallback transcode is actually needed. |
-| **Popup** | `src/popup/` | UI + message dispatch only. Reflects live state via `GET_STATE` / `STATE_CHANGED`. |
-| **Page helpers** | `src/content/` | Pure functions injected via `chrome.scripting.executeScript({func})` for full-page scrolling and the area-select overlay. |
+| **Service worker** | `src/background/service-worker.js` | Orchestrates everything: screenshots (`captureVisibleTab` + injected scroll/crop helpers stitched with `OffscreenCanvas`), the recording lifecycle, downloads, badge, and persisted state. |
+| **Popup** | `src/popup/` | The screensnap UI — capture/record tabs, captured card, recording / saving / done. UI + dispatch only. |
+| **Offscreen document** | `src/offscreen/` | Hosts `MediaRecorder` (a service worker has no DOM; the popup closes on blur). Saves native MP4. |
+| **Recorder window** | `src/recorder-window/` | Separate floating window for screen/window recording (picker → live timer + stop). |
+| **On-page overlays** | `src/content/` | Injected via `executeScript`: `editor-overlay` (annotation editor), `area-select` (region picker), `recorder-control` (tab-recording pill), `webcam-bubble` (Video Circle). |
 
-Capture/record start in the popup → message the service worker → it gets a media stream id
-(`tabCapture` for the tab, `desktopCapture` for screen/window) → hands it to the offscreen doc →
-`MediaRecorder` runs → on stop it (optionally) transcodes, then downloads. State lives in
-`chrome.storage.session` so it survives the service worker being torn down mid-recording.
+State lives in `chrome.storage.session` so it survives the service worker being torn down
+mid-recording. The popup, recorder window, and overlays all reflect it live via `STATE_CHANGED`.
 
 ## Permissions (deliberately minimal)
 
-`activeTab` + `scripting` (capture/inject only the tab you invoked it on — **no `<all_urls>`,
-no broad history access**), `tabCapture`, `desktopCapture`, `offscreen`, `downloads`, `storage`.
+`activeTab` + `scripting` (only the tab you invoked it on — **no `<all_urls>`, no history scope**),
+`tabCapture`, `desktopCapture`, `offscreen`, `downloads`, `storage`. Video Circle requests camera
+access per-site via the standard browser prompt.
 
-## Known limitations (v1)
+## Known limitations
 
-- **Full-page capture** uses `captureVisibleTab`, which is rate-limited to ~2/sec, so very long
-  pages take a few seconds. Lazy-loaded content and complex sticky layouts can still leave seams.
-- Capturing a **browser/internal page** (`chrome://`, the Web Store, etc.) isn't possible — Chrome
-  blocks it. Use a normal website tab.
-- The ffmpeg fallback core is ~32 MB and the single-thread transcode is slower than real time on
-  long clips. The native-MP4 path avoids this entirely where available.
+- **Full-page capture** uses `captureVisibleTab` (rate-limited ~2/sec), so long pages take a few
+  seconds; lazy-loaded content and complex sticky layouts can still leave seams.
+- **Video Circle** records the current tab (the bubble lives in the page); it's not a full-desktop
+  composite. Camera permission is per-site.
+- Internal pages (`chrome://`, the Web Store, etc.) can't be captured — Chrome blocks it.
+
+## Fonts
+
+UI type is [Geist / Geist Mono](https://github.com/vercel/geist-font) (SIL OFL 1.1), vendored as
+`.woff2` under `src/popup/fonts/` so nothing is fetched at runtime.
 
 ## Project conventions
 
-See [CLAUDE.md](CLAUDE.md) — trunk-based commits to `main` with no attribution trailers, zero
-runtime dependencies (anything unavoidable is pinned + checksum-verified), and the privacy/free
-principles above are non-negotiable.
-
-> **Note:** the popup's visual design is an intentional neutral placeholder, themed entirely via CSS
-> variables in `src/popup/popup.css` so it can be re-skinned wholesale once a design reference lands.
+See [CLAUDE.md](CLAUDE.md) — trunk-based commits to `main` with no attribution trailers, zero runtime
+dependencies, and the privacy/free principles above are non-negotiable.
 
 ## License
 

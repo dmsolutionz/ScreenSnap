@@ -11,8 +11,10 @@ These are hard rules for anyone — human or AI — working in this project.
 - **Zero runtime npm dependencies. No bundler. No framework.** The extension is plain ES modules + self-contained
   content scripts and loads *unpacked directly from the repo root* — what you read is what ships.
 - Avoid adding packages. If a dependency is genuinely unavoidable, **pin it to an exact version** (no `^`/`~`) and
-  **verify its integrity with a checksum**. See `scripts/fetch-ffmpeg.mjs` for the pattern (the ffmpeg.wasm core is
-  vendored this way: pinned version + SHA-256 verification, downloaded once, never auto-updated).
+  **verify its integrity with a checksum**. The only vendored assets are the Geist `.woff2` fonts (committed under
+  `src/popup/fonts/`, SIL OFL) — committed so the UI renders with no runtime network request.
+- **No ffmpeg / no WASM.** Recordings are saved as native MP4 via `MediaRecorder` (`video/mp4`); there is no
+  transcoding step. If a browser lacks native MP4 it saves `.webm` rather than lose the recording.
 
 ## Product principles (do not regress)
 - Completely free and unrestricted: no paywalls, no watermarks, no forced sign-ups, no upsell prompts.
@@ -20,10 +22,17 @@ These are hard rules for anyone — human or AI — working in this project.
   servers, no telemetry, no analytics, no runtime network calls.
 - No "Awesome Screenshot" antipatterns: no forced new tab after recording, no mandatory cloud hosting.
 
+## Branding
+Product name is **screensnap.** (green-dot wordmark, dark theme, green `#22c55e` accent, Geist type). The repo
+directory is still `clippy-but-good`; the shipped name everywhere is screensnap.
+
 ## Architecture (1-paragraph map)
-Service worker (`src/background/`) orchestrates everything: it coordinates screenshots (visible / full-page /
-area) using `chrome.tabs.captureVisibleTab` + injected content scripts + `OffscreenCanvas`, and it owns the
-recording lifecycle. Recording and MP4 transcoding happen in an **offscreen document** (`src/offscreen/`) because a
-service worker has no DOM and a popup closes on blur. The offscreen doc runs `MediaRecorder` and — only when the
-browser can't record MP4 natively — transcodes WebM→MP4 in a **Web Worker** (`src/lib/ffmpeg-worker.js`) driving the
-vendored single-thread ffmpeg.wasm core. The popup (`src/popup/`) is just UI + message dispatch.
+Service worker (`src/background/`) orchestrates everything: it coordinates screenshots (visible / full-page / area)
+using `chrome.tabs.captureVisibleTab` + injected page helpers + `OffscreenCanvas`, and owns the recording lifecycle,
+badge, downloads, and `chrome.storage.session` state. Recording happens in an **offscreen document**
+(`src/offscreen/`) because a service worker has no DOM and the popup closes on blur — it runs `MediaRecorder` and
+saves **native MP4** (no transcoding). The **popup** (`src/popup/`) is the screensnap UI. Recording controls live on
+the surface that fits: a **recorder window** (`src/recorder-window/`) for screen/window capture, and injected
+overlays (`src/content/`) for everything else — `editor-overlay` (annotation editor), `area-select` (region picker),
+`recorder-control` (tab-recording pill), and `webcam-bubble` (Video Circle). All surfaces reflect state live via
+`STATE_CHANGED`.

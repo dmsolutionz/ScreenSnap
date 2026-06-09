@@ -1,13 +1,11 @@
 {
-  "name": "clippy-but-good",
+  "name": "screensnap",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Free, local, watermark-free screenshot + screen recording Chrome extension (MV3). Exports PNG and MP4 entirely on-device.",
+  "description": "Free, local, watermark-free screenshot + screen recording Chrome extension (MV3). Records native MP4 entirely on-device.",
   "license": "MIT",
   "scripts": {
-    "setup": "node scripts/make-icons.mjs && node scripts/fetch-ffmpeg.mjs",
-    "fetch:ffmpeg": "node scripts/fetch-ffmpeg.mjs",
     "make:icons": "node scripts/make-icons.mjs"
   },
   "dependencies": {},

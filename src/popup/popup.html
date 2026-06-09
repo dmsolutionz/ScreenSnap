@@ -4,74 +4,10 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="stylesheet" href="popup.css" />
-    <title>Clippy</title>
+    <title>screensnap.</title>
   </head>
   <body>
-    <!-- PLACEHOLDER VISUAL DESIGN. Layout/colour/type are intentionally neutral and driven by CSS
-         variables in popup.css so they can be re-skinned wholesale once the design reference lands. -->
-    <header class="app-header">
-      <img src="../../icons/icon-48.png" alt="" class="logo" width="26" height="26" />
-      <div class="titles">
-        <h1>Clippy</h1>
-        <p>Local · free · no watermark</p>
-      </div>
-    </header>
-
-    <main id="idle-view">
-      <section class="card">
-        <div class="card-head"><span class="card-title">Screenshot</span></div>
-        <div class="segmented" role="group" aria-label="Screenshot mode" id="seg-shot">
-          <button type="button" data-mode="visible" class="seg">Visible</button>
-          <button type="button" data-mode="fullpage" class="seg">Full page</button>
-          <button type="button" data-mode="area" class="seg">Area</button>
-        </div>
-        <button type="button" id="btn-shot" class="primary">Capture screenshot</button>
-      </section>
-
-      <section class="card">
-        <div class="card-head"><span class="card-title">Record</span></div>
-        <div class="segmented" role="group" aria-label="Recording source" id="seg-source">
-          <button type="button" data-source="tab" class="seg">This tab</button>
-          <button type="button" data-source="screen" class="seg">Screen</button>
-        </div>
-        <label class="toggle"><span>Microphone</span><input type="checkbox" id="opt-mic" /></label>
-        <label class="toggle"><span>System / tab audio</span><input type="checkbox" id="opt-sys" /></label>
-        <div class="row">
-          <span class="row-label">Format</span>
-          <div class="segmented small" role="group" aria-label="Video format" id="seg-format">
-            <button type="button" data-format="mp4" class="seg">MP4</button>
-            <button type="button" data-format="webm" class="seg">WebM</button>
-          </div>
-        </div>
-        <button type="button" id="btn-record" class="primary">Start recording</button>
-        <p class="hint" id="format-hint">MP4 · falls back to WebM if unsupported</p>
-      </section>
-    </main>
-
-    <main id="rec-view" hidden>
-      <section class="card rec-card">
-        <div class="rec-status">
-          <span class="rec-dot" aria-hidden="true"></span>
-          <div>
-            <div class="rec-line"><strong id="rec-label">Recording…</strong></div>
-            <div class="rec-timer" id="rec-timer">00:00</div>
-          </div>
-        </div>
-        <div class="progress" id="progress-wrap" hidden>
-          <div class="progress-track"><div class="progress-bar" id="progress-bar"></div></div>
-          <span class="progress-text" id="progress-text">Converting to MP4…</span>
-        </div>
-        <div class="rec-actions">
-          <button type="button" id="btn-stop" class="primary">Stop &amp; save</button>
-          <button type="button" id="btn-discard" class="ghost">Discard</button>
-        </div>
-      </section>
-    </main>
-
-    <div id="toast" class="toast" hidden></div>
-
-    <footer class="app-footer">Saved to <strong>Downloads/Clippy</strong> · 100% on-device</footer>
-
+    <div id="app"></div>
     <script type="module" src="popup.js"></script>
   </body>
 </html>

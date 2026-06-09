@@ -2,11 +2,11 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Clippy — recorder</title>
+    <title>screensnap — recorder</title>
   </head>
   <body>
-    <!-- No visible UI. This document exists only to host MediaRecorder + the ffmpeg worker,
-         which a service worker (no DOM) and the popup (closes on blur) can't do. -->
+    <!-- No visible UI. This document exists only to host MediaRecorder, which a service worker
+         (no DOM) and the popup (closes on blur) can't keep running. -->
     <script type="module" src="offscreen.js"></script>
   </body>
 </html>

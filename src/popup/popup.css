@@ -1,176 +1,35 @@
-/* Placeholder theme — all visual tokens live here as CSS variables for easy re-skinning. */
-:root {
-  --bg: #ffffff;
-  --fg: #111827;
-  --muted: #6b7280;
-  --border: #e5e7eb;
-  --card: #f9fafb;
-  --card-active: #eef2ff;
-  --accent: #4f46e5;
-  --accent-fg: #ffffff;
-  --danger: #ef4444;
-  --radius: 10px;
-  --gap: 12px;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #1f2024;
-    --fg: #f3f4f6;
-    --muted: #9ca3af;
-    --border: #34363c;
-    --card: #26272c;
-    --card-active: #2e2b4d;
-    --accent: #818cf8;
-    --accent-fg: #14152a;
-  }
-}
+/* screensnap. popup — dark theme, green accent, Geist type. Fonts are vendored locally
+   (no runtime network requests, per the privacy principle). */
+@font-face { font-family: 'Geist'; font-weight: 400; font-display: swap; src: url('fonts/geist-400.woff2') format('woff2'); }
+@font-face { font-family: 'Geist'; font-weight: 500; font-display: swap; src: url('fonts/geist-500.woff2') format('woff2'); }
+@font-face { font-family: 'Geist'; font-weight: 600; font-display: swap; src: url('fonts/geist-600.woff2') format('woff2'); }
+@font-face { font-family: 'Geist Mono'; font-weight: 400; font-display: swap; src: url('fonts/geist-mono-400.woff2') format('woff2'); }
+@font-face { font-family: 'Geist Mono'; font-weight: 500; font-display: swap; src: url('fonts/geist-mono-500.woff2') format('woff2'); }
 
-* { box-sizing: border-box; }
-
+* { box-sizing: border-box; margin: 0; padding: 0; }
 body {
   width: 320px;
-  margin: 0;
-  padding: 14px;
-  background: var(--bg);
-  color: var(--fg);
-  font: 13px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  -webkit-font-smoothing: antialiased;
-}
-
-.app-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 14px;
-}
-.logo { border-radius: 7px; }
-.titles h1 { font-size: 15px; font-weight: 650; margin: 0; }
-.titles p { font-size: 11px; color: var(--muted); margin: 1px 0 0; }
-
-.card {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 12px;
-  margin-bottom: var(--gap);
-}
-.card-head { margin-bottom: 10px; }
-.card-title { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
-
-/* Segmented control */
-.segmented {
-  display: flex;
-  gap: 4px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 3px;
-  margin-bottom: 10px;
-}
-.segmented.small { margin-bottom: 0; flex: 0 0 auto; }
-.seg {
-  flex: 1;
-  appearance: none;
-  border: 0;
-  background: transparent;
-  color: var(--fg);
-  font: inherit;
-  font-size: 12px;
-  padding: 6px 8px;
-  border-radius: 6px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.seg:hover { background: var(--border); }
-.seg.active { background: var(--accent); color: var(--accent-fg); font-weight: 600; }
-.seg.active:hover { background: var(--accent); }
-
-/* Toggles */
-.toggle {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 2px;
-  cursor: pointer;
-}
-.toggle span { font-size: 13px; }
-.toggle input { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
-
-.row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 2px 2px; }
-.row-label { font-size: 13px; }
-
-/* Buttons */
-.primary {
-  width: 100%;
-  appearance: none;
-  border: 0;
-  background: var(--accent);
-  color: var(--accent-fg);
-  font: inherit;
-  font-weight: 600;
-  font-size: 13px;
-  padding: 10px;
-  border-radius: 8px;
-  cursor: pointer;
-  margin-top: 10px;
-}
-.primary:hover { filter: brightness(1.05); }
-.primary:disabled { opacity: 0.6; cursor: default; }
-.ghost {
-  appearance: none;
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--fg);
-  font: inherit;
-  font-size: 13px;
-  padding: 10px 14px;
-  border-radius: 8px;
-  cursor: pointer;
-}
-.ghost:hover { background: var(--border); }
-.ghost:disabled { opacity: 0.5; cursor: default; }
-
-.hint { font-size: 11px; color: var(--muted); margin: 8px 0 0; text-align: center; }
-
-/* Recording view */
-.rec-card { border-color: var(--danger); }
-.rec-status { display: flex; align-items: center; gap: 12px; }
-.rec-dot {
-  width: 12px; height: 12px; border-radius: 50%;
-  background: var(--danger);
-  box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6);
-  animation: pulse 1.4s infinite;
-  flex: 0 0 auto;
-}
-@keyframes pulse {
-  0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.55); }
-  70% { box-shadow: 0 0 0 9px rgba(239, 68, 68, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
-}
-.rec-line strong { font-size: 14px; }
-.rec-timer { font-variant-numeric: tabular-nums; font-size: 20px; font-weight: 650; letter-spacing: 0.02em; }
-.rec-actions { display: flex; gap: 8px; margin-top: 14px; }
-.rec-actions .primary { margin-top: 0; }
-
-/* Progress */
-.progress { margin-top: 12px; }
-.progress-track { height: 6px; background: var(--border); border-radius: 999px; overflow: hidden; }
-.progress-bar { height: 100%; width: 0%; background: var(--accent); transition: width 0.2s ease; }
-.progress-text { display: block; font-size: 11px; color: var(--muted); margin-top: 6px; }
-
-/* Toast */
-.toast {
-  position: sticky;
-  bottom: 0;
-  margin-top: 10px;
-  background: #111827;
+  background: #050505;
   color: #fff;
-  font-size: 12px;
-  padding: 8px 12px;
-  border-radius: 8px;
-  text-align: center;
+  font-family: 'Geist', -apple-system, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
 }
-.toast.error { background: var(--danger); }
 
-.app-footer { font-size: 10.5px; color: var(--muted); text-align: center; margin-top: 12px; }
-.app-footer strong { color: var(--fg); font-weight: 600; }
+/* hover transitions (mirror the design prototype) */
+.pr { transition: background 0.12s; }
+.pr:hover { background: rgba(255,255,255,0.025) !important; }
+.rb { transition: border-color 0.15s, background 0.15s; }
+.rb:hover { border-color: rgba(255,255,255,0.18) !important; background: rgba(255,255,255,0.025) !important; }
+.tab-t { transition: color 0.12s; }
+.tab-t:hover { color: #c4c4c4 !important; }
+.ghost-b { transition: background 0.12s, color 0.12s; }
+.ghost-b:hover { background: rgba(255,255,255,0.06) !important; color: #fff !important; }
+.stop-b { transition: background 0.12s; }
+.stop-b:hover { background: rgba(239,68,68,0.18) !important; }
+.prim-b { transition: background 0.12s; }
+.prim-b:hover { background: #16a34a !important; }
+
+@keyframes recPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.15; } }
+@keyframes pingRing { 0% { transform: scale(1); opacity: 0.7; } 100% { transform: scale(2.6); opacity: 0; } }
+@keyframes shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(260%); } }

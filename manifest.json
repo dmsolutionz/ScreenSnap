@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Clippy — Screenshots & Screen Recording",
+  "name": "screensnap.",
   "version": "0.1.0",
-  "description": "Free, local, watermark-free screenshots and screen recording. Exports PNG and MP4 entirely on your machine — no sign-up, no cloud, no upsell.",
+  "description": "Free, local, watermark-free screenshots and screen recording. Records native MP4 entirely on your machine — no sign-up, no cloud, no upsell.",
   "minimum_chrome_version": "116",
   "icons": {
     "16": "icons/icon-16.png",
@@ -12,7 +12,7 @@
   },
   "action": {
     "default_popup": "src/popup/popup.html",
-    "default_title": "Clippy — capture & record",
+    "default_title": "screensnap — capture & record",
     "default_icon": {
       "16": "icons/icon-16.png",
       "32": "icons/icon-32.png",
@@ -32,8 +32,5 @@
     "offscreen",
     "downloads",
     "storage"
-  ],
-  "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; object-src 'self'"
-  }
+  ]
 }

@@ -1,8 +1,3 @@
-# Vendored ffmpeg.wasm core (~32 MB) — fetched + checksum-verified via `npm run fetch:ffmpeg`.
-# Not committed; reproducible from scripts/fetch-ffmpeg.mjs.
-vendor/ffmpeg/ffmpeg-core.js
-vendor/ffmpeg/ffmpeg-core.wasm
-
 node_modules/
 dist/
 *.log
