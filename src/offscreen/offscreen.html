@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Clippy — recorder</title>
+  </head>
+  <body>
+    <!-- No visible UI. This document exists only to host MediaRecorder + the ffmpeg worker,
+         which a service worker (no DOM) and the popup (closes on blur) can't do. -->
+    <script type="module" src="offscreen.js"></script>
+  </body>
+</html>
