@@ -1,22 +1,32 @@
-// screensnap. popup — UI + message dispatch. Ports the screensnap design to vanilla DOM.
-// All capture/record work happens in the service worker + offscreen document; the popup just
+// screensnap. popup — UI + message dispatch (light theme). Ports the screensnap design to vanilla
+// DOM. All capture/record work happens in the service worker + offscreen document; the popup just
 // reflects live state (GET_STATE / STATE_CHANGED) and can close at any time without interrupting.
 import { MSG, PHASE, SOURCE, getSettings, setSettings, elapsedMs, fmtClock } from "../lib/messages.js";
 
 const app = document.getElementById("app");
 const send = (m) => chrome.runtime.sendMessage(m);
 
-let settings = { ...{} };
+let settings = {};
 let localTab = "capture";
 let rec = { phase: PHASE.IDLE };
-let captured = null; // { thumb, filename, width, height }
-let doneInfo = null; // { filename, durationMs, note }
-let capturing = null; // mode currently being captured
+let captured = null;
+let doneInfo = null;
+let capturing = null;
 let bubPos = "br";
 let prevPhase = PHASE.IDLE;
 let timer = null;
 
-// ── icons ────────────────────────────────────────────────────────────────────
+// light palette
+const C = {
+  line: "#eef0f3", fg: "#18181b", fg2: "#3f3f46", muted: "#6b7280", faint: "#9aa0ab", chev: "#c4c8d0",
+  box: "#f3f4f6", boxLine: "#e4e6eb", icon: "#a1a7b3",
+  green: "#16a34a", greenTint: "rgba(22,163,74,0.08)", greenLine: "rgba(22,163,74,0.30)", greenIcon: "rgba(22,163,74,0.10)", greenIconLine: "rgba(22,163,74,0.30)",
+  red: "#dc2626", redTint: "rgba(220,38,38,0.08)", redLine: "rgba(220,38,38,0.22)", amber: "#d97706",
+};
+const MONO = "'Geist Mono',ui-monospace,'SF Mono',Menlo,monospace";
+const clockStr = (ms) => fmtClock((ms || 0) / 1000);
+const shortName = (f) => (f || "").split("/").pop();
+
 const P = {
   camera: '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>',
   page: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>',
@@ -38,87 +48,56 @@ const P = {
 const ico = (n, { sz = 16, c = "currentColor", sw = 1.75 } = {}) =>
   `<svg width="${sz}" height="${sz}" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round">${P[n]}</svg>`;
 
-const MONO = "'Geist Mono',monospace";
-const clockStr = (ms) => fmtClock((ms || 0) / 1000);
-const shortName = (f) => (f || "").split("/").pop();
-
-// ── partials ───────────────────────────────────────────────────────────────────
 function wordmark() {
-  return `<div style="display:flex;align-items:center;gap:8px">
-    <div style="width:24px;height:24px;border-radius:7px;background:#111;border:1px solid rgba(255,255,255,0.09);display:flex;align-items:center;justify-content:center;flex-shrink:0">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><rect x="1" y="3" width="20" height="13" rx="2" stroke="rgba(255,255,255,0.4)" stroke-width="1.5"/><circle cx="18.5" cy="6.5" r="3.5" fill="#22c55e"/><circle cx="18.5" cy="6.5" r="1.5" fill="#050505"/></svg>
+  return `<div style="display:flex;align-items:center;gap:9px">
+    <div style="width:28px;height:28px;border-radius:8px;background:#fff;border:1px solid ${C.boxLine};display:flex;align-items:center;justify-content:center;flex-shrink:0">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><rect x="1" y="3" width="20" height="13" rx="2" stroke="${C.fg2}" stroke-width="1.6"/><circle cx="18.5" cy="6.5" r="3.5" fill="${C.green}"/><circle cx="18.5" cy="6.5" r="1.5" fill="#fff"/></svg>
     </div>
-    <span style="font-weight:600;font-size:13px;letter-spacing:-0.025em;color:#fff">screensnap<span style="color:#22c55e">.</span></span>
+    <span style="font-weight:600;font-size:16px;letter-spacing:-0.025em;color:${C.fg}">screensnap<span style="color:${C.green}">.</span></span>
   </div>`;
 }
 function recBadge() {
   const paused = !!rec.paused;
   const dot = paused
-    ? '<div style="width:5px;height:5px;border-radius:1px;background:#f59e0b"></div>'
-    : '<div style="width:5px;height:5px;border-radius:50%;background:#ef4444;animation:recPulse 1.2s ease-in-out infinite"></div>';
-  return `<div style="display:flex;align-items:center;gap:5px;background:rgba(239,68,68,0.09);border:1px solid rgba(239,68,68,0.22);border-radius:999px;padding:3px 9px">
-    ${dot}<span style="font-family:${MONO};font-size:9px;text-transform:uppercase;letter-spacing:0.08em;color:${paused ? "#f59e0b" : "#ef4444"}">${paused ? "paused" : "rec"}</span></div>`;
+    ? `<div style="width:6px;height:6px;border-radius:1px;background:${C.amber}"></div>`
+    : `<div style="width:6px;height:6px;border-radius:50%;background:${C.red};animation:recPulse 1.2s ease-in-out infinite"></div>`;
+  return `<div style="display:flex;align-items:center;gap:5px;background:${C.redTint};border:1px solid ${C.redLine};border-radius:999px;padding:4px 10px">
+    ${dot}<span style="font-family:${MONO};font-size:10px;text-transform:uppercase;letter-spacing:0.08em;color:${paused ? C.amber : C.red}">${paused ? "paused" : "rec"}</span></div>`;
 }
-function pingDot(s = 7) {
+function pingDot(s = 8) {
   return `<div style="position:relative;width:${s}px;height:${s}px;flex-shrink:0">
-    <div style="position:absolute;inset:0;border-radius:50%;background:rgba(239,68,68,0.5);animation:pingRing 1.5s ease-out infinite"></div>
-    <div style="position:absolute;inset:0;border-radius:50%;background:#ef4444"></div></div>`;
+    <div style="position:absolute;inset:0;border-radius:50%;background:rgba(220,38,38,0.5);animation:pingRing 1.5s ease-out infinite"></div>
+    <div style="position:absolute;inset:0;border-radius:50%;background:${C.red}"></div></div>`;
 }
 function tabsBar() {
-  return `<div style="display:flex;padding:0 16px;border-bottom:1px solid rgba(255,255,255,0.07)">
+  return `<div style="display:flex;padding:0 16px;border-bottom:1px solid ${C.line}">
     ${["capture", "record"]
-      .map(
-        (t) =>
-          `<button class="tab-t" data-act="tab" data-tab="${t}" style="font-family:${MONO};font-size:10px;text-transform:uppercase;letter-spacing:0.09em;color:${
-            localTab === t ? "#fff" : "#555"
-          };background:none;border:none;padding:9px 0;margin-right:20px;cursor:pointer;border-bottom:2px solid ${
-            localTab === t ? "#22c55e" : "transparent"
-          };margin-bottom:-1px">${t}</button>`
-      )
+      .map((t) => `<button class="tab-t" data-act="tab" data-tab="${t}" style="font-family:${MONO};font-size:12px;text-transform:uppercase;letter-spacing:0.08em;color:${localTab === t ? C.fg : C.faint};background:none;border:none;padding:11px 0;margin-right:22px;cursor:pointer;border-bottom:2px solid ${localTab === t ? C.green : "transparent"};margin-bottom:-1px">${t}</button>`)
       .join("")}
   </div>`;
 }
 function toggle(on, key) {
-  return `<div class="tg" data-act="toggle" data-key="${key}" style="width:34px;height:18px;border-radius:9px;background:${
-    on ? "#22c55e" : "rgba(255,255,255,0.11)"
-  };cursor:pointer;position:relative;flex-shrink:0">
-    <div style="position:absolute;width:13px;height:13px;border-radius:50%;background:#fff;top:2.5px;left:${
-      on ? "18.5px" : "2.5px"
-    };transition:left 0.2s;box-shadow:0 1px 3px rgba(0,0,0,0.5)"></div></div>`;
+  return `<div class="tg" data-act="toggle" data-key="${key}" style="width:38px;height:21px;border-radius:11px;background:${on ? C.green : "#d4d4d8"};cursor:pointer;position:relative;flex-shrink:0;transition:background .2s">
+    <div style="position:absolute;width:15px;height:15px;border-radius:50%;background:#fff;top:3px;left:${on ? "20px" : "3px"};transition:left .2s;box-shadow:0 1px 3px rgba(0,0,0,0.25)"></div></div>`;
 }
 function camCircle(size, paused) {
   const overlay = paused
-    ? `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.48)">${ico(
-        "pause",
-        { sz: Math.round(size * 0.28), c: "rgba(255,255,255,0.65)" }
-      )}</div>`
-    : `<div style="position:absolute;top:5px;right:5px;width:7px;height:7px;border-radius:50%;background:#ef4444;animation:recPulse 1.2s ease-in-out infinite"></div>`;
-  return `<div style="width:${size}px;height:${size}px;border-radius:50%;flex-shrink:0;position:relative;overflow:hidden;border:2px solid rgba(34,197,94,0.4);box-shadow:0 0 0 3px rgba(34,197,94,0.07)">
+    ? `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.48)">${ico("pause", { sz: Math.round(size * 0.28), c: "rgba(255,255,255,0.75)" })}</div>`
+    : `<div style="position:absolute;top:5px;right:5px;width:7px;height:7px;border-radius:50%;background:${C.red};animation:recPulse 1.2s ease-in-out infinite"></div>`;
+  return `<div style="width:${size}px;height:${size}px;border-radius:50%;flex-shrink:0;position:relative;overflow:hidden;border:2px solid ${C.greenLine};box-shadow:0 0 0 3px ${C.greenTint}">
     <div style="position:absolute;inset:0;background:radial-gradient(circle at 42% 38%,#243824 0%,#0d1a0d 55%,#050505 100%)"></div>
-    <div style="position:absolute;top:${Math.round(size * 0.16)}px;left:50%;transform:translateX(-50%);width:${Math.round(
-    size * 0.38
-  )}px;height:${Math.round(size * 0.38)}px;border-radius:50%;background:rgba(255,255,255,0.11)"></div>
-    <div style="position:absolute;bottom:-4px;left:-4px;right:-4px;height:${Math.round(
-      size * 0.48
-    )}px;border-radius:50% 50% 0 0;background:rgba(255,255,255,0.07)"></div>${overlay}</div>`;
+    <div style="position:absolute;top:${Math.round(size * 0.16)}px;left:50%;transform:translateX(-50%);width:${Math.round(size * 0.38)}px;height:${Math.round(size * 0.38)}px;border-radius:50%;background:rgba(255,255,255,0.13)"></div>
+    <div style="position:absolute;bottom:-4px;left:-4px;right:-4px;height:${Math.round(size * 0.48)}px;border-radius:50% 50% 0 0;background:rgba(255,255,255,0.08)"></div>${overlay}</div>`;
 }
 
-// ── views ────────────────────────────────────────────────────────────────────
 function captureRow(mode, icon, label, desc, last) {
   const hot = capturing === mode;
-  return `<div class="pr" data-act="cap" data-mode="${mode}" style="display:flex;align-items:center;gap:12px;padding:11px 16px;cursor:pointer;border-bottom:${
-    last ? "none" : "1px solid rgba(255,255,255,0.05)"
-  };background:${hot ? "rgba(34,197,94,0.06)" : "transparent"}">
-    <div style="width:32px;height:32px;border-radius:8px;flex-shrink:0;background:#0f0f0f;border:1px solid rgba(255,255,255,0.08);display:flex;align-items:center;justify-content:center">${ico(
-      icon,
-      { sz: 14, c: hot ? "#22c55e" : "#555" }
-    )}</div>
+  return `<div class="pr" data-act="cap" data-mode="${mode}" style="display:flex;align-items:center;gap:13px;padding:13px 16px;cursor:pointer;border-bottom:${last ? "none" : `1px solid ${C.line}`};background:${hot ? C.greenTint : "transparent"}">
+    <div style="width:36px;height:36px;border-radius:9px;flex-shrink:0;background:${hot ? C.greenIcon : C.box};border:1px solid ${hot ? C.greenIconLine : C.boxLine};display:flex;align-items:center;justify-content:center">${ico(icon, { sz: 16, c: hot ? C.green : C.icon })}</div>
     <div style="flex:1;min-width:0">
-      <div style="font-size:13px;font-weight:500;color:#e5e7eb">${label}</div>
-      <div style="font-family:${MONO};font-size:10px;color:#4b5563;text-transform:uppercase;letter-spacing:0.06em;margin-top:2px">${
-    hot ? "Capturing…" : desc
-  }</div>
-    </div>${ico("chev", { sz: 13, c: "#2a2a2a" })}</div>`;
+      <div style="font-size:15px;font-weight:500;color:${C.fg}">${label}</div>
+      <div style="font-family:${MONO};font-size:11px;color:${C.muted};text-transform:uppercase;letter-spacing:0.05em;margin-top:3px">${hot ? "Capturing…" : desc}</div>
+    </div>${ico("chev", { sz: 14, c: C.chev })}</div>`;
 }
 function captureTab() {
   return `<div>
@@ -128,34 +107,24 @@ function captureTab() {
   </div>`;
 }
 function recordRow(src, icon, label, desc, accent) {
-  return `<div class="rb" data-act="rec" data-src="${src}" style="display:flex;align-items:center;gap:12px;padding:13px 14px;border:1px solid ${
-    accent ? "rgba(34,197,94,0.24)" : "rgba(255,255,255,0.08)"
-  };border-radius:10px;margin:0 14px 8px;cursor:pointer;background:${accent ? "rgba(34,197,94,0.04)" : "transparent"}">
-    <div style="width:36px;height:36px;border-radius:9px;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:${
-      accent ? "rgba(34,197,94,0.10)" : "#0f0f0f"
-    };border:1px solid ${accent ? "rgba(34,197,94,0.28)" : "rgba(255,255,255,0.08)"}">${ico(icon, {
-    sz: 16,
-    c: accent ? "#22c55e" : "#555",
-  })}</div>
+  return `<div class="rb" data-act="rec" data-src="${src}" style="display:flex;align-items:center;gap:13px;padding:14px;border:1px solid ${accent ? C.greenLine : C.boxLine};border-radius:11px;margin:0 14px 9px;cursor:pointer;background:${accent ? C.greenTint : "#fff"}">
+    <div style="width:40px;height:40px;border-radius:10px;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:${accent ? C.greenIcon : C.box};border:1px solid ${accent ? C.greenIconLine : C.boxLine}">${ico(icon, { sz: 17, c: accent ? C.green : C.icon })}</div>
     <div style="flex:1;min-width:0">
-      <div style="font-size:13px;font-weight:500;color:#e5e7eb;margin-bottom:2px">${label}</div>
-      <div style="font-family:${MONO};font-size:10px;color:#4b5563;text-transform:uppercase;letter-spacing:0.06em">${desc}</div>
-    </div>${ico("chev", { sz: 13, c: "#2a2a2a" })}</div>`;
+      <div style="font-size:15px;font-weight:500;color:${C.fg};margin-bottom:3px">${label}</div>
+      <div style="font-family:${MONO};font-size:11px;color:${C.muted};text-transform:uppercase;letter-spacing:0.05em">${desc}</div>
+    </div>${ico("chev", { sz: 14, c: C.chev })}</div>`;
 }
 function audioRow(icon, label, key) {
-  return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:${key === "withSystemAudio" ? "9px" : "0"}">
-    ${ico(icon, { sz: 13, c: "#444" })}<span style="flex:1;font-size:12px;color:#9ca3af">${label}</span>${toggle(
-    !!settings[key],
-    key
-  )}</div>`;
+  return `<div style="display:flex;align-items:center;gap:11px;margin-bottom:${key === "withSystemAudio" ? "11px" : "0"}">
+    ${ico(icon, { sz: 15, c: C.icon })}<span style="flex:1;font-size:14px;color:${C.fg2}">${label}</span>${toggle(!!settings[key], key)}</div>`;
 }
 function recordTab() {
-  return `<div style="padding-top:12px;padding-bottom:4px">
+  return `<div style="padding-top:13px;padding-bottom:5px">
     ${recordRow("tab", "tab", "Current Tab", "No picker · tab audio", true)}
     ${recordRow("screen", "monitor", "Screen / Window", "Native picker · any source", false)}
     ${recordRow("videocircle", "video", "Video Circle", "Webcam bubble · sys audio", false)}
-    <div style="padding:12px 16px;border-top:1px solid rgba(255,255,255,0.06);margin-top:4px">
-      <div style="font-family:${MONO};font-size:9px;text-transform:uppercase;letter-spacing:0.1em;color:#333;margin-bottom:10px">Audio</div>
+    <div style="padding:13px 16px;border-top:1px solid ${C.line};margin-top:5px">
+      <div style="font-family:${MONO};font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:${C.faint};margin-bottom:11px">Audio</div>
       ${audioRow("vol", "System audio", "withSystemAudio")}
       ${audioRow("mic", "Microphone", "withMic")}
     </div>
@@ -163,142 +132,88 @@ function recordTab() {
 }
 function capturedView() {
   return `<div style="padding:14px 16px 18px">
-    <div style="width:100%;height:118px;border-radius:8px;overflow:hidden;border:1px solid rgba(255,255,255,0.08);margin-bottom:11px;background:#0f0f0f;display:flex;align-items:center;justify-content:center">
+    <div style="width:100%;height:130px;border-radius:9px;overflow:hidden;border:1px solid ${C.boxLine};margin-bottom:11px;background:${C.box};display:flex;align-items:center;justify-content:center">
       <img src="${captured.thumb}" alt="" style="max-width:100%;max-height:100%;object-fit:contain;display:block"/>
     </div>
-    <div style="font-family:${MONO};font-size:9px;color:#4b5563;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:12px;text-align:center">${shortName(
-    captured.filename
-  )} · ${captured.width}×${captured.height}</div>
-    <button class="prim-b" data-act="annotate" style="width:100%;padding:10px;background:#22c55e;border:none;border-radius:8px;color:#000;font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;margin-bottom:8px">${ico(
-    "pencil",
-    { sz: 13, c: "#000" }
-  )}Annotate &amp; save</button>
-    <button class="ghost-b" data-act="save" style="width:100%;padding:10px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.09);border-radius:8px;color:#e5e7eb;font-size:12px;font-weight:500;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;margin-bottom:8px">${ico(
-    "down",
-    { sz: 13, c: "#9ca3af" }
-  )}Save PNG directly</button>
-    <div style="display:flex;gap:7px">
-      <button class="ghost-b" data-act="copy" style="flex:1;padding:7px;background:none;border:1px solid rgba(255,255,255,0.07);border-radius:7px;color:#6b7280;font-size:11px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:5px">${ico(
-        "copy",
-        { sz: 11, c: "#6b7280" }
-      )}<span data-copylabel>Copy</span></button>
-      <button class="ghost-b" data-act="shot-discard" style="flex:1;padding:7px;background:none;border:none;color:#383838;font-size:11px;cursor:pointer;border-radius:7px">Discard</button>
+    <div style="font-family:${MONO};font-size:11px;color:${C.muted};text-transform:uppercase;letter-spacing:0.04em;margin-bottom:13px;text-align:center">${shortName(captured.filename)} · ${captured.width}×${captured.height}</div>
+    <button class="prim-b" data-act="annotate" style="width:100%;padding:12px;background:${C.green};border:none;border-radius:9px;color:#fff;font-size:14px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:9px">${ico("pencil", { sz: 14, c: "#fff" })}Annotate &amp; save</button>
+    <button class="ghost-b" data-act="save" style="width:100%;padding:11px;background:#fff;border:1px solid ${C.boxLine};border-radius:9px;color:${C.fg};font-size:13px;font-weight:500;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:9px">${ico("down", { sz: 14, c: C.muted })}Save PNG directly</button>
+    <div style="display:flex;gap:8px">
+      <button class="ghost-b" data-act="copy" style="flex:1;padding:9px;background:#fff;border:1px solid ${C.boxLine};border-radius:8px;color:${C.fg2};font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px">${ico("copy", { sz: 12, c: C.muted })}<span data-copylabel>Copy</span></button>
+      <button class="ghost-b" data-act="shot-discard" style="flex:1;padding:9px;background:#fff;border:1px solid ${C.boxLine};color:${C.muted};font-size:12px;cursor:pointer;border-radius:8px">Discard</button>
     </div>
   </div>`;
 }
-function codecLabel() {
-  return (rec.mime || "").includes("mp4") ? "MP4 · H.264" : "WebM · VP9";
-}
-function srcName() {
-  return rec.source === SOURCE.SCREEN ? "Screen" : rec.source === SOURCE.VIDEO_CIRCLE ? "Video circle" : "Current tab";
-}
+const codecLabel = () => ((rec.mime || "").includes("mp4") ? "MP4 · H.264" : "WebM · VP9");
+const srcName = () => (rec.source === SOURCE.SCREEN ? "Screen" : rec.source === SOURCE.VIDEO_CIRCLE ? "Video circle" : "Current tab");
 function audioChips() {
-  const chip = (l) =>
-    `<span style="font-family:${MONO};font-size:9px;color:rgba(34,197,94,0.85);background:rgba(34,197,94,0.07);border:1px solid rgba(34,197,94,0.18);border-radius:4px;padding:2px 7px">${l}</span>`;
+  const chip = (l) => `<span style="font-family:${MONO};font-size:10px;color:${C.green};background:${C.greenTint};border:1px solid ${C.greenLine};border-radius:5px;padding:3px 8px">${l}</span>`;
   const chips = [];
   if (rec.withSystemAudio) chips.push(chip("sys audio"));
   if (rec.withMic) chips.push(chip("mic"));
-  if (!chips.length) return "";
-  return `<div style="display:flex;gap:4px;margin-top:10px">${chips.join("")}</div>`;
+  return chips.length ? `<div style="display:flex;gap:5px;margin-top:11px">${chips.join("")}</div>` : "";
 }
 function recRegular() {
-  return `<div style="padding:28px 20px 22px;display:flex;flex-direction:column;align-items:center">
-    <div id="timer" style="font-family:${MONO};font-size:46px;font-weight:500;letter-spacing:-0.04em;line-height:1;color:${
-    rec.paused ? "#555" : "#fff"
-  }">${clockStr(elapsedMs(rec))}</div>
-    <div style="display:flex;align-items:center;gap:6px;margin-top:10px">
-      ${rec.paused ? `<span style="font-family:${MONO};font-size:9px;text-transform:uppercase;letter-spacing:0.1em;color:#555">Paused</span>` : `${pingDot()}<span style="font-family:${MONO};font-size:9px;text-transform:uppercase;letter-spacing:0.1em;color:#6b7280">${srcName()} · ${codecLabel()}</span>`}
+  return `<div style="padding:30px 20px 22px;display:flex;flex-direction:column;align-items:center">
+    <div id="timer" style="font-family:${MONO};font-size:46px;font-weight:500;letter-spacing:-0.04em;line-height:1;color:${rec.paused ? C.faint : C.fg}">${clockStr(elapsedMs(rec))}</div>
+    <div style="display:flex;align-items:center;gap:7px;margin-top:11px">
+      ${rec.paused ? `<span style="font-family:${MONO};font-size:11px;text-transform:uppercase;letter-spacing:0.09em;color:${C.faint}">Paused</span>` : `${pingDot()}<span style="font-family:${MONO};font-size:11px;text-transform:uppercase;letter-spacing:0.09em;color:${C.muted}">${srcName()} · ${codecLabel()}</span>`}
     </div>
     ${audioChips()}
-    <button class="stop-b" data-act="stop" style="margin-top:22px;width:100%;padding:11px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:9px;color:#ef4444;font-size:13px;font-weight:500;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px">${ico(
-    "stop",
-    { sz: 12, c: "#ef4444" }
-  )}Stop &amp; save as MP4</button>
-    <div style="display:flex;gap:16px;margin-top:8px">
-      <button class="ghost-b" data-act="pause" style="padding:5px 12px;background:none;border:none;color:#9ca3af;font-size:11px;cursor:pointer;border-radius:6px;display:flex;align-items:center;gap:5px">${
-        rec.paused ? `${ico("play", { sz: 10, c: "#22c55e" })}Resume` : `${ico("pause", { sz: 10, c: "currentColor" })}Pause`
-      }</button>
-      <button class="ghost-b" data-act="discard" style="padding:5px 12px;background:none;border:none;color:#383838;font-size:11px;cursor:pointer;border-radius:6px">Discard</button>
+    <button class="stop-b" data-act="stop" style="margin-top:22px;width:100%;padding:13px;background:${C.redTint};border:1px solid ${C.redLine};border-radius:10px;color:${C.red};font-size:14px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px">${ico("stop", { sz: 13, c: C.red })}Stop &amp; save as MP4</button>
+    <div style="display:flex;gap:18px;margin-top:10px">
+      <button class="ghost-b" data-act="pause" style="padding:6px 12px;background:none;border:none;color:${C.fg2};font-size:12px;cursor:pointer;border-radius:7px;display:flex;align-items:center;gap:6px">${rec.paused ? `${ico("play", { sz: 11, c: C.green })}Resume` : `${ico("pause", { sz: 11, c: "currentColor" })}Pause`}</button>
+      <button class="ghost-b" data-act="discard" style="padding:6px 12px;background:none;border:none;color:${C.faint};font-size:12px;cursor:pointer;border-radius:7px">Discard</button>
     </div>
   </div>`;
 }
 function recVideoCircle() {
-  const grid = [
-    ["tl", "↖"],
-    ["tr", "↗"],
-    ["bl", "↙"],
-    ["br", "↘"],
-  ]
-    .map(
-      ([pos, arrow]) =>
-        `<div data-act="bubble-pos" data-pos="${pos}" style="height:28px;border-radius:6px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:5px;background:${
-          bubPos === pos ? "rgba(34,197,94,0.12)" : "rgba(255,255,255,0.04)"
-        };border:1px solid ${
-          bubPos === pos ? "rgba(34,197,94,0.35)" : "rgba(255,255,255,0.07)"
-        }"><span style="font-size:11px">${arrow}</span><div style="width:5px;height:5px;border-radius:50%;background:${
-          bubPos === pos ? "#22c55e" : "rgba(255,255,255,0.15)"
-        }"></div></div>`
-    )
+  const grid = [["tl", "↖"], ["tr", "↗"], ["bl", "↙"], ["br", "↘"]]
+    .map(([pos, arrow]) => `<div data-act="bubble-pos" data-pos="${pos}" style="height:30px;border-radius:7px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:5px;background:${bubPos === pos ? C.greenTint : C.box};border:1px solid ${bubPos === pos ? C.greenLine : C.boxLine}"><span style="font-size:12px;color:${C.fg2}">${arrow}</span><div style="width:5px;height:5px;border-radius:50%;background:${bubPos === pos ? C.green : "#cbd0d8"}"></div></div>`)
     .join("");
-  return `<div style="padding:16px 16px 18px;display:flex;flex-direction:column;gap:14px">
+  return `<div style="padding:18px 16px;display:flex;flex-direction:column;gap:15px">
     <div style="display:flex;align-items:center;gap:14px">
       ${camCircle(66, rec.paused)}
       <div style="flex:1">
-        <div id="timer" style="font-family:${MONO};font-size:32px;font-weight:500;letter-spacing:-0.035em;line-height:1;color:${
-    rec.paused ? "#555" : "#fff"
-  }">${clockStr(elapsedMs(rec))}</div>
-        <div style="display:flex;align-items:center;gap:5px;margin-top:7px">
-          ${rec.paused ? `<span style="font-family:${MONO};font-size:9px;text-transform:uppercase;letter-spacing:0.1em;color:#555">Paused</span>` : `${pingDot(6)}<span style="font-family:${MONO};font-size:9px;text-transform:uppercase;letter-spacing:0.1em;color:#6b7280">Video circle · sys audio</span>`}
+        <div id="timer" style="font-family:${MONO};font-size:34px;font-weight:500;letter-spacing:-0.035em;line-height:1;color:${rec.paused ? C.faint : C.fg}">${clockStr(elapsedMs(rec))}</div>
+        <div style="display:flex;align-items:center;gap:6px;margin-top:8px">
+          ${rec.paused ? `<span style="font-family:${MONO};font-size:11px;text-transform:uppercase;letter-spacing:0.09em;color:${C.faint}">Paused</span>` : `${pingDot(7)}<span style="font-family:${MONO};font-size:11px;text-transform:uppercase;letter-spacing:0.09em;color:${C.muted}">Video circle · sys audio</span>`}
         </div>
       </div>
     </div>
     <div>
-      <div style="font-family:${MONO};font-size:9px;text-transform:uppercase;letter-spacing:0.1em;color:#333;margin-bottom:7px">Bubble position</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;width:88px">${grid}</div>
+      <div style="font-family:${MONO};font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:${C.faint};margin-bottom:8px">Bubble position</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;width:96px">${grid}</div>
     </div>
-    <div style="display:flex;gap:8px">
-      <button class="ghost-b" data-act="pause" style="flex:1;padding:9px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.10);border-radius:9px;color:#e5e7eb;font-size:12px;font-weight:500;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px">${
-        rec.paused ? `${ico("play", { sz: 11, c: "#22c55e" })}Resume` : `${ico("pause", { sz: 11, c: "currentColor" })}Pause`
-      }</button>
-      <button class="stop-b" data-act="stop" style="flex:1;padding:9px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:9px;color:#ef4444;font-size:12px;font-weight:500;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px">${ico(
-    "stop",
-    { sz: 11, c: "#ef4444" }
-  )}Stop &amp; save</button>
+    <div style="display:flex;gap:9px">
+      <button class="ghost-b" data-act="pause" style="flex:1;padding:11px;background:#fff;border:1px solid ${C.boxLine};border-radius:10px;color:${C.fg};font-size:13px;font-weight:500;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px">${rec.paused ? `${ico("play", { sz: 12, c: C.green })}Resume` : `${ico("pause", { sz: 12, c: "currentColor" })}Pause`}</button>
+      <button class="stop-b" data-act="stop" style="flex:1;padding:11px;background:${C.redTint};border:1px solid ${C.redLine};border-radius:10px;color:${C.red};font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px">${ico("stop", { sz: 12, c: C.red })}Stop</button>
     </div>
-    <button class="ghost-b" data-act="discard" style="align-self:center;padding:4px 12px;background:none;border:none;color:#333;font-size:11px;cursor:pointer;border-radius:6px">Discard</button>
+    <button class="ghost-b" data-act="discard" style="align-self:center;padding:5px 12px;background:none;border:none;color:${C.faint};font-size:12px;cursor:pointer;border-radius:6px">Discard</button>
   </div>`;
 }
 function savingView() {
-  const footage = clockStr(rec.recordedDurationMs);
-  return `<div style="padding:36px 20px 30px;display:flex;flex-direction:column;align-items:center;gap:10px">
-    <div style="font-family:${MONO};font-size:10px;text-transform:uppercase;letter-spacing:0.1em;color:#6b7280">Finalizing · ${footage} recorded</div>
-    <div style="width:100%;height:3px;background:rgba(255,255,255,0.06);border-radius:2px;overflow:hidden">
-      <div style="height:100%;width:40%;background:#22c55e;border-radius:2px;position:relative;overflow:hidden">
-        <div style="position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,0.4),transparent);animation:shimmer 1.2s ease-in-out infinite"></div>
+  return `<div style="padding:38px 20px 32px;display:flex;flex-direction:column;align-items:center;gap:11px">
+    <div style="font-family:${MONO};font-size:12px;text-transform:uppercase;letter-spacing:0.08em;color:${C.muted}">Finalizing · ${clockStr(rec.recordedDurationMs)} recorded</div>
+    <div style="width:100%;height:4px;background:${C.box};border-radius:2px;overflow:hidden">
+      <div style="height:100%;width:42%;background:${C.green};border-radius:2px;position:relative;overflow:hidden">
+        <div style="position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,0.6),transparent);animation:shimmer 1.2s ease-in-out infinite"></div>
       </div>
     </div>
-    <div style="font-family:${MONO};font-size:9px;color:#383838;text-transform:uppercase;letter-spacing:0.06em">Writing native MP4 to Downloads…</div>
+    <div style="font-family:${MONO};font-size:11px;color:${C.faint};text-transform:uppercase;letter-spacing:0.05em">Writing native MP4 to Downloads…</div>
   </div>`;
 }
 function doneView() {
-  const note = doneInfo.note
-    ? `<div style="font-family:${MONO};font-size:9px;color:#f59e0b;margin-top:6px;text-align:center;max-width:240px">${doneInfo.note}</div>`
-    : "";
-  return `<div style="padding:34px 20px 26px;display:flex;flex-direction:column;align-items:center">
-    <div style="width:44px;height:44px;border-radius:50%;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.22);display:flex;align-items:center;justify-content:center">${ico(
-      "check",
-      { sz: 20, c: "#22c55e" }
-    )}</div>
-    <div style="font-size:14px;font-weight:500;color:#e5e7eb;margin-top:14px">Saved to Downloads</div>
-    <div style="font-family:${MONO};font-size:10px;color:#6b7280;margin-top:5px">${shortName(doneInfo.filename)}</div>
-    <div style="font-family:${MONO};font-size:10px;color:#383838;margin-top:3px">${clockStr(doneInfo.durationMs)} · ${
-    shortName(doneInfo.filename).endsWith(".mp4") ? "H.264 + AAC" : "VP9 + Opus"
-  }</div>${note}
-    <button class="prim-b" data-act="done" style="margin-top:18px;padding:9px 28px;background:#22c55e;border:none;border-radius:8px;color:#000;font-size:12px;font-weight:600;cursor:pointer">Done</button>
+  const note = doneInfo.note ? `<div style="font-family:${MONO};font-size:11px;color:${C.amber};margin-top:7px;text-align:center;max-width:260px">${doneInfo.note}</div>` : "";
+  return `<div style="padding:38px 20px 30px;display:flex;flex-direction:column;align-items:center">
+    <div style="width:46px;height:46px;border-radius:50%;background:${C.greenTint};border:1px solid ${C.greenLine};display:flex;align-items:center;justify-content:center">${ico("check", { sz: 22, c: C.green })}</div>
+    <div style="font-size:15px;font-weight:500;color:${C.fg};margin-top:15px">Saved to Downloads</div>
+    <div style="font-family:${MONO};font-size:11px;color:${C.muted};margin-top:6px">${shortName(doneInfo.filename)}</div>
+    <div style="font-family:${MONO};font-size:11px;color:${C.faint};margin-top:3px">${clockStr(doneInfo.durationMs)} · ${shortName(doneInfo.filename).endsWith(".mp4") ? "H.264 + AAC" : "VP9 + Opus"}</div>${note}
+    <button class="prim-b" data-act="done" style="margin-top:20px;padding:11px 30px;background:${C.green};border:none;border-radius:9px;color:#fff;font-size:13px;font-weight:600;cursor:pointer">Done</button>
   </div>`;
 }
 
-// ── render ───────────────────────────────────────────────────────────────────
 function render() {
   const phase = rec.phase || PHASE.IDLE;
   const recording = phase === PHASE.RECORDING;
@@ -313,12 +228,13 @@ function render() {
   else if (localTab === "capture") body = captureTab();
   else body = recordTab();
 
-  app.innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.07)">
+  app.innerHTML = `<div class="sheet">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-bottom:1px solid ${C.line}">
       ${wordmark()}${recording ? recBadge() : ""}
     </div>
     ${showTabs ? tabsBar() : ""}
-    ${body}`;
+    ${body}
+  </div>`;
   manageTimer();
 }
 
@@ -333,54 +249,23 @@ function manageTimer() {
   }
 }
 
-// ── actions ──────────────────────────────────────────────────────────────────
 app.addEventListener("click", async (e) => {
   const node = e.target.closest("[data-act]");
   if (!node) return;
   const act = node.dataset.act;
-
-  if (act === "tab") {
-    localTab = node.dataset.tab;
-    captured = null;
-    return render();
-  }
-  if (act === "toggle") {
-    const key = node.dataset.key;
-    settings = await setSettings({ [key]: !settings[key] });
-    return render();
-  }
+  if (act === "tab") { localTab = node.dataset.tab; captured = null; return render(); }
+  if (act === "toggle") { const k = node.dataset.key; settings = await setSettings({ [k]: !settings[k] }); return render(); }
   if (act === "cap") return doCapture(node.dataset.mode);
   if (act === "rec") return doRecord(node.dataset.src);
   if (act === "stop") return void send({ type: MSG.STOP_RECORDING });
   if (act === "discard") return void send({ type: MSG.CANCEL_RECORDING });
   if (act === "pause") return void send({ type: rec.paused ? MSG.RESUME_RECORDING : MSG.PAUSE_RECORDING });
-  if (act === "bubble-pos") {
-    bubPos = node.dataset.pos;
-    send({ type: "bubble-pos", pos: bubPos });
-    return render();
-  }
-  if (act === "annotate") {
-    await send({ type: MSG.SHOT_ANNOTATE });
-    window.close(); // editor opens on the page
-    return;
-  }
-  if (act === "save") {
-    await send({ type: MSG.SHOT_SAVE });
-    captured = null;
-    localTab = "capture";
-    return render();
-  }
+  if (act === "bubble-pos") { bubPos = node.dataset.pos; send({ type: "bubble-pos", pos: bubPos }); return render(); }
+  if (act === "annotate") { await send({ type: MSG.SHOT_ANNOTATE }); window.close(); return; }
+  if (act === "save") { await send({ type: MSG.SHOT_SAVE }); captured = null; localTab = "capture"; return render(); }
   if (act === "copy") return doCopy(node);
-  if (act === "shot-discard") {
-    await send({ type: MSG.SHOT_DISCARD });
-    captured = null;
-    return render();
-  }
-  if (act === "done") {
-    doneInfo = null;
-    localTab = "record";
-    return render();
-  }
+  if (act === "shot-discard") { await send({ type: MSG.SHOT_DISCARD }); captured = null; return render(); }
+  if (act === "done") { doneInfo = null; localTab = "record"; return render(); }
 });
 
 async function doCapture(mode) {
@@ -388,35 +273,19 @@ async function doCapture(mode) {
   render();
   const typeMap = { visible: MSG.CAPTURE_VISIBLE, fullpage: MSG.CAPTURE_FULLPAGE, area: MSG.CAPTURE_AREA };
   let res;
-  try {
-    res = await send({ type: typeMap[mode] });
-  } catch (e) {
-    res = { ok: false, error: String((e && e.message) || e) };
-  }
+  try { res = await send({ type: typeMap[mode] }); } catch (e) { res = { ok: false, error: String((e && e.message) || e) }; }
   capturing = null;
-  if (res && res.captured) {
-    captured = { thumb: res.thumb, filename: res.filename, width: res.width, height: res.height };
-  } else if (res && !res.ok && res.error) {
-    captured = null;
-    render();
-    return flashError(res.error);
-  }
+  if (res && res.captured) captured = { thumb: res.thumb, filename: res.filename, width: res.width, height: res.height };
+  else if (res && !res.ok && res.error) { captured = null; render(); return flashError(res.error); }
   render();
 }
-
 async function doRecord(src) {
   const options = { recordSource: src, withMic: !!settings.withMic, withSystemAudio: !!settings.withSystemAudio };
   let res;
-  try {
-    res = await send({ type: MSG.START_RECORDING, options });
-  } catch (e) {
-    return flashError(String((e && e.message) || e));
-  }
-  if (res && res.recorderWindow) return window.close(); // screen → recorder window takes over
+  try { res = await send({ type: MSG.START_RECORDING, options }); } catch (e) { return flashError(String((e && e.message) || e)); }
+  if (res && res.recorderWindow) return window.close();
   if (res && res.ok === false) return flashError(res.error || "Couldn't start recording");
-  // tab / video-circle: recording state arrives via STATE_CHANGED
 }
-
 async function doCopy(btn) {
   const label = btn.querySelector("[data-copylabel]");
   try {
@@ -425,30 +294,21 @@ async function doCopy(btn) {
     const blob = await (await fetch(res.dataUrl)).blob();
     await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
     if (label) label.textContent = "Copied ✓";
-  } catch {
-    if (label) label.textContent = "Blocked";
-  }
+  } catch { if (label) label.textContent = "Blocked"; }
   if (label) setTimeout(() => (label.textContent = "Copy"), 1300);
 }
-
 function flashError(msg) {
-  // lightweight inline error toast
   const t = document.createElement("div");
   t.textContent = msg;
-  t.style.cssText =
-    "position:fixed;left:12px;right:12px;bottom:12px;background:#ef4444;color:#fff;font-size:11px;font-family:'Geist',sans-serif;padding:8px 10px;border-radius:8px;text-align:center;z-index:9";
+  t.style.cssText = `position:fixed;left:12px;right:12px;bottom:12px;background:${C.red};color:#fff;font-size:12px;font-family:'Geist',sans-serif;padding:9px 11px;border-radius:9px;text-align:center;z-index:9`;
   document.body.appendChild(t);
   setTimeout(() => t.remove(), 2800);
 }
 
-// ── state sync ───────────────────────────────────────────────────────────────
 function onState(state) {
   const next = state || { phase: PHASE.IDLE };
   const phase = next.phase || PHASE.IDLE;
-
-  if (phase === PHASE.RECORDING) captured = null; // a recording supersedes a pending capture
-
-  // recording finished → show the done card (only when something was actually saved)
+  if (phase === PHASE.RECORDING) captured = null;
   if (prevPhase && prevPhase !== PHASE.IDLE && phase === PHASE.IDLE) {
     if (next.error) flashError(next.error);
     else if (next.lastSaved) doneInfo = { filename: next.lastSaved, durationMs: next.recordedDurationMs, note: next.note };
@@ -461,17 +321,12 @@ function onState(state) {
 
 async function init() {
   settings = await getSettings();
-  chrome.runtime.onMessage.addListener((msg) => {
-    if (msg && msg.type === MSG.STATE_CHANGED) onState(msg.state);
-  });
+  chrome.runtime.onMessage.addListener((msg) => { if (msg && msg.type === MSG.STATE_CHANGED) onState(msg.state); });
   try {
     const res = await send({ type: MSG.GET_STATE });
     rec = res?.state || { phase: PHASE.IDLE };
     prevPhase = rec.phase || PHASE.IDLE;
-  } catch {
-    rec = { phase: PHASE.IDLE };
-  }
+  } catch { rec = { phase: PHASE.IDLE }; }
   render();
 }
-
 init();

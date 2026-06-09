@@ -1,5 +1,5 @@
-/* screensnap. popup — dark theme, green accent, Geist type. Fonts are vendored locally
-   (no runtime network requests, per the privacy principle). */
+/* screensnap. popup — light theme, green accent, Geist type. Fonts vendored locally (no runtime
+   network requests, per the privacy principle). */
 @font-face { font-family: 'Geist'; font-weight: 400; font-display: swap; src: url('fonts/geist-400.woff2') format('woff2'); }
 @font-face { font-family: 'Geist'; font-weight: 500; font-display: swap; src: url('fonts/geist-500.woff2') format('woff2'); }
 @font-face { font-family: 'Geist'; font-weight: 600; font-display: swap; src: url('fonts/geist-600.woff2') format('woff2'); }
@@ -7,29 +7,30 @@
 @font-face { font-family: 'Geist Mono'; font-weight: 500; font-display: swap; src: url('fonts/geist-mono-500.woff2') format('woff2'); }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { background: transparent; }
 body {
-  width: 320px;
-  background: #050505;
-  color: #fff;
+  width: 340px;
   font-family: 'Geist', -apple-system, system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   user-select: none;
 }
+/* The sheet carries the background + Chrome-matched rounded corners; the transparent body lets the
+   window's own rounding show through at the corners. */
+.sheet { background: #ffffff; color: #18181b; border-radius: 12px; overflow: hidden; border: 1px solid #e6e7eb; box-shadow: 0 6px 22px rgba(0,0,0,0.12); }
 
-/* hover transitions (mirror the design prototype) */
 .pr { transition: background 0.12s; }
-.pr:hover { background: rgba(255,255,255,0.025) !important; }
+.pr:hover { background: rgba(0,0,0,0.035) !important; }
 .rb { transition: border-color 0.15s, background 0.15s; }
-.rb:hover { border-color: rgba(255,255,255,0.18) !important; background: rgba(255,255,255,0.025) !important; }
+.rb:hover { border-color: rgba(0,0,0,0.20) !important; background: rgba(0,0,0,0.025) !important; }
 .tab-t { transition: color 0.12s; }
-.tab-t:hover { color: #c4c4c4 !important; }
+.tab-t:hover { color: #18181b !important; }
 .ghost-b { transition: background 0.12s, color 0.12s; }
-.ghost-b:hover { background: rgba(255,255,255,0.06) !important; color: #fff !important; }
+.ghost-b:hover { background: rgba(0,0,0,0.05) !important; color: #18181b !important; }
 .stop-b { transition: background 0.12s; }
-.stop-b:hover { background: rgba(239,68,68,0.18) !important; }
+.stop-b:hover { background: rgba(220,38,38,0.12) !important; }
 .prim-b { transition: background 0.12s; }
-.prim-b:hover { background: #16a34a !important; }
+.prim-b:hover { background: #15803d !important; }
 
-@keyframes recPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.15; } }
+@keyframes recPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.2; } }
 @keyframes pingRing { 0% { transform: scale(1); opacity: 0.7; } 100% { transform: scale(2.6); opacity: 0; } }
 @keyframes shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(260%); } }

@@ -10,6 +10,10 @@ const DL_DIR = "screensnap";
 const MAX_CANVAS_SIDE = 16384;
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Pending screenshot held in memory (NOT chrome.storage.session — a full-page PNG data URL can be
+// tens of MB and blows past the session-storage quota). { tabId, dataUrl, filename }.
+let pendingCapture = null;
+
 // ── message routing ──────────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || msg.target === TARGET.OFFSCREEN || msg.type === MSG.STATE_CHANGED) return false;
@@ -164,60 +168,42 @@ async function doScreenshot(mode) {
   }
 
   const filename = `${DL_DIR}/${prefix}-${stamp()}.png`;
-  await chrome.storage.session.set({ [`edit:${tab.id}`]: { dataUrl, filename }, pendingShot: { tabId: tab.id, filename } });
+  pendingCapture = { tabId: tab.id, dataUrl, filename };
   const { thumb, w, h } = await makeThumb(dataUrl, 320);
   return { ok: true, captured: true, thumb, filename, width: w, height: h };
 }
 
 async function shotAnnotate() {
-  const { pendingShot } = await chrome.storage.session.get("pendingShot");
-  if (!pendingShot) return { ok: false, error: "Nothing to annotate." };
-  await chrome.scripting.executeScript({ target: { tabId: pendingShot.tabId }, files: ["src/content/editor-overlay.js"] });
-  await chrome.storage.session.remove("pendingShot"); // editor reads edit:<tabId> via EDITOR_GET_IMAGE
-  return { ok: true };
+  if (!pendingCapture) return { ok: false, error: "Nothing to annotate." };
+  await chrome.scripting.executeScript({ target: { tabId: pendingCapture.tabId }, files: ["src/content/editor-overlay.js"] });
+  return { ok: true }; // editor reads the image via EDITOR_GET_IMAGE
 }
 async function shotSave() {
-  const payload = await pendingPayload();
-  if (!payload) return { ok: false, error: "Nothing to save." };
-  await chrome.downloads.download({ url: payload.dataUrl, filename: payload.filename, saveAs: false });
-  await shotClear();
-  return { ok: true, filename: payload.filename };
+  if (!pendingCapture) return { ok: false, error: "Nothing to save." };
+  const { dataUrl, filename } = pendingCapture;
+  await chrome.downloads.download({ url: dataUrl, filename, saveAs: false });
+  pendingCapture = null;
+  return { ok: true, filename };
 }
 async function shotCopy() {
-  const payload = await pendingPayload();
-  return payload ? { ok: true, dataUrl: payload.dataUrl } : { ok: false };
+  return pendingCapture ? { ok: true, dataUrl: pendingCapture.dataUrl } : { ok: false };
 }
 async function shotClear() {
-  const { pendingShot } = await chrome.storage.session.get("pendingShot");
-  const keys = ["pendingShot"];
-  if (pendingShot) keys.push(`edit:${pendingShot.tabId}`);
-  await chrome.storage.session.remove(keys);
+  pendingCapture = null;
   return { ok: true };
 }
-async function pendingPayload() {
-  const { pendingShot } = await chrome.storage.session.get("pendingShot");
-  if (!pendingShot) return null;
-  const key = `edit:${pendingShot.tabId}`;
-  const { [key]: payload } = await chrome.storage.session.get(key);
-  return payload || null;
-}
 
-async function editorGetImage(sender) {
-  const tabId = sender?.tab?.id;
-  if (tabId == null) return { ok: false, error: "no tab" };
-  const key = `edit:${tabId}`;
-  const { [key]: payload } = await chrome.storage.session.get(key);
-  await chrome.storage.session.remove([key, "pendingShot"]);
-  if (!payload) return { ok: false, error: "no pending image" };
-  return { ok: true, dataUrl: payload.dataUrl, filename: payload.filename };
+async function editorGetImage() {
+  if (!pendingCapture) return { ok: false, error: "no pending image" };
+  return { ok: true, dataUrl: pendingCapture.dataUrl, filename: pendingCapture.filename };
 }
 async function editorSave(msg) {
   await chrome.downloads.download({ url: msg.dataUrl, filename: msg.filename || `${DL_DIR}/screenshot-${stamp()}.png`, saveAs: false });
+  pendingCapture = null;
   return { ok: true };
 }
-async function editorCancel(sender) {
-  const tabId = sender?.tab?.id;
-  if (tabId != null) await chrome.storage.session.remove(`edit:${tabId}`);
+async function editorCancel() {
+  pendingCapture = null;
   return { ok: true };
 }
 
