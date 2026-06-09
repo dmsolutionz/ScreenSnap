@@ -39,8 +39,10 @@
           box-shadow: 0 0 8px rgba(239,68,68,0.6); animation: rp 1.2s infinite; }
         .paused .rec { animation: none; background: #f59e0b; border-radius: 2px; }
         @keyframes rp { 0%,100% { opacity: 1; } 50% { opacity: 0.2; } }
-        .count { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-          background: rgba(5,5,5,0.55); color: #fff; font: 700 64px ${SANS}; }
+        .center { position: fixed; inset: 0; z-index: 2147483646; display: flex; align-items: center; justify-content: center;
+          background: rgba(5,5,5,0.5); pointer-events: none; }
+        .cnum { color: #fff; font: 700 160px ${SANS}; text-shadow: 0 4px 30px rgba(0,0,0,0.5); }
+        @keyframes pop { 0% { transform: scale(1.6); opacity: 0; } 25% { opacity: 1; } 100% { transform: scale(1); opacity: 0.92; } }
         .pill { background: rgba(5,5,5,0.92); backdrop-filter: blur(14px); border: 1px solid rgba(255,255,255,0.12);
           border-radius: 30px; padding: 9px 12px 9px 16px; display: flex; gap: 12px; align-items: center;
           box-shadow: 0 8px 24px rgba(0,0,0,0.55); user-select: none; }
@@ -52,8 +54,9 @@
           border-radius: 22px; display: flex; align-items: center; gap: 7px; }
         .stopbtn:hover { background: #dc2626; }
       </style>
+      <div class="center" id="center"><div class="cnum" id="cnum">3</div></div>
       <div class="wrap" id="wrap">
-        <div class="circle" id="circle"><video id="vid" autoplay muted playsinline></video><div class="rec" id="rec" style="display:none"></div><div class="count" id="count">3</div></div>
+        <div class="circle" id="circle"><video id="vid" autoplay muted playsinline></video><div class="rec" id="rec" style="display:none"></div></div>
         <div class="pill" id="pill" style="display:none">
           <span class="time" id="time">00:00</span>
           <button class="pbtn" id="pause"></button>
@@ -67,7 +70,8 @@
     const circle = root.getElementById("circle");
     const vid = root.getElementById("vid");
     const recDot = root.getElementById("rec");
-    const countEl = root.getElementById("count");
+    const center = root.getElementById("center");
+    const cnum = root.getElementById("cnum");
     const pill = root.getElementById("pill");
     const timeEl = root.getElementById("time");
     const pauseBtn = root.getElementById("pause");
@@ -97,18 +101,19 @@
     };
     this.setPos("bl");
 
-    // 3-2-1 countdown, then begin the actual recording
+    // 3-2-1 countdown, centred on the screen, then begin the actual recording
     let n = 3;
-    countEl.textContent = n;
+    const tick = () => { cnum.textContent = n; cnum.style.animation = "none"; void cnum.offsetWidth; cnum.style.animation = "pop 1s ease-out"; };
+    tick();
     const cd = setInterval(() => {
       n -= 1;
       if (n <= 0) {
         clearInterval(cd);
-        countEl.style.display = "none";
+        center.remove();
         recDot.style.display = "";
         pill.style.display = "flex";
         send("videocircle-go"); // tells the service worker to start capturing now
-      } else countEl.textContent = n;
+      } else tick();
     }, 1000);
 
     let drag = null;
@@ -128,7 +133,7 @@
       state = s;
       const phase = s && s.phase;
       if (!phase || phase === "idle") return this.destroy();
-      if (phase === "recording") { started = true; pill.style.display = "flex"; countEl.style.display = "none"; recDot.style.display = ""; }
+      if (phase === "recording") { started = true; pill.style.display = "flex"; root.getElementById("center")?.remove(); recDot.style.display = ""; }
       wrap.classList.toggle("paused", !!s.paused);
       pauseBtn.innerHTML = s.paused ? `${PLAY}<span style="color:#22c55e">Resume</span>` : `${PAUSE}<span>Pause</span>`;
       const finalizing = phase === "saving" || phase === "transcoding";

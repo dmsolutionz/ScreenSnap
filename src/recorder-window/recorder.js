@@ -20,6 +20,7 @@ let pausedAt = null;
 let pausedTotalMs = 0;
 let mime = "";
 let discardFlag = false;
+let savedDuration = 0;
 let timer = null;
 
 const P = {
@@ -41,7 +42,11 @@ function pingDot() { return `<div style="position:relative;width:6px;height:6px;
 
 function render() {
   let body;
-  if (view === "recording") {
+  if (view === "saving") {
+    body = `<div style="padding:34px 24px;display:flex;flex-direction:column;align-items:center;gap:10px">
+      <div style="font-family:${MONO};font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.09em">Saving · ${fmtClock(savedDuration / 1000)} recorded</div>
+      <div style="font-family:${MONO};font-size:9px;color:#333;text-transform:uppercase;letter-spacing:0.06em">Writing native MP4 to Downloads…</div></div>`;
+  } else if (view === "recording") {
     body = `<div style="padding:22px 24px;display:flex;align-items:center;justify-content:space-between;gap:16px">
       <div>
         <div id="timer" style="font-family:${MONO};font-size:36px;font-weight:500;letter-spacing:-0.03em;line-height:1;color:${paused ? "#555" : "#fff"}">${fmtClock(elapsedMs() / 1000)}</div>
@@ -145,11 +150,16 @@ function stop(discard) {
 }
 
 async function finalize() {
+  savedDuration = elapsedMs();
+  if (timer) clearInterval(timer);
+  view = "saving";
+  render();
+
   try { stream?.getTracks().forEach((t) => t.stop()); } catch {}
   try { rawStreams.forEach((s) => s.getTracks().forEach((t) => t.stop())); } catch {}
   try { audioCtx?.close(); } catch {}
 
-  const durationMs = elapsedMs();
+  const durationMs = savedDuration;
   if (discardFlag || !chunks.length) {
     send({ type: MSG.SCREEN_STOPPED, filename: null, durationMs });
     window.close();
@@ -165,15 +175,18 @@ async function finalize() {
   window.close();
 }
 
+// Resolve only when the download finishes — finalize() calls window.close() right after, which
+// would otherwise destroy the blob: URL before the file is written.
 function downloadBlob(blob, filename) {
   return new Promise((resolve) => {
     const url = URL.createObjectURL(blob);
     chrome.downloads.download({ url, filename, saveAs: false }, (id) => {
-      if (chrome.runtime.lastError) { URL.revokeObjectURL(url); return resolve(); }
-      const onChanged = (d) => { if (d.id === id && d.state && d.state.current !== "in_progress") { chrome.downloads.onChanged.removeListener(onChanged); URL.revokeObjectURL(url); } };
+      if (chrome.runtime.lastError || id == null) { URL.revokeObjectURL(url); return resolve(); }
+      let done = false;
+      const finish = () => { if (done) return; done = true; chrome.downloads.onChanged.removeListener(onChanged); URL.revokeObjectURL(url); resolve(); };
+      const onChanged = (d) => { if (d.id === id && d.state && d.state.current !== "in_progress") finish(); };
       chrome.downloads.onChanged.addListener(onChanged);
-      setTimeout(() => URL.revokeObjectURL(url), 5 * 60 * 1000);
-      resolve();
+      setTimeout(finish, 60000);
     });
   });
 }

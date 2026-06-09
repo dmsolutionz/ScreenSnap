@@ -142,24 +142,31 @@ async function finalize() {
   resetCurrent();
 }
 
+// Resolve only when the download has actually finished. The caller (finalize) tears down this
+// offscreen document right after — if we resolved early, the blob: URL would die mid-download and
+// the file would never be written.
 function downloadBlob(blob, filename) {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(blob);
     chrome.downloads.download({ url, filename, saveAs: false }, (downloadId) => {
       const err = chrome.runtime.lastError;
-      if (err) {
+      if (err || downloadId == null) {
         URL.revokeObjectURL(url);
-        return reject(new Error(err.message));
+        return reject(new Error(err ? err.message : "Download failed to start."));
       }
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        chrome.downloads.onChanged.removeListener(onChanged);
+        URL.revokeObjectURL(url);
+        resolve(downloadId);
+      };
       const onChanged = (delta) => {
-        if (delta.id === downloadId && delta.state && delta.state.current !== "in_progress") {
-          chrome.downloads.onChanged.removeListener(onChanged);
-          URL.revokeObjectURL(url);
-        }
+        if (delta.id === downloadId && delta.state && delta.state.current !== "in_progress") finish();
       };
       chrome.downloads.onChanged.addListener(onChanged);
-      setTimeout(() => URL.revokeObjectURL(url), 5 * 60 * 1000);
-      resolve(downloadId);
+      setTimeout(finish, 60000); // safety: never hang the recorder
     });
   });
 }
