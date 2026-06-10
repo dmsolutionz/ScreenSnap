@@ -14,31 +14,35 @@ Everything needed to list screensnap. Build the upload with `node scripts/packag
 - **Category:** Productivity
 - **Language:** English
 - **Summary (≤132 chars):**
-  `Free, on-device screenshots & screen recording — native MP4, webcam bubble, and a built-in video editor. No cloud, no watermark.`
+  `Free, unlimited screen & tab recording — no watermark, no sign-up, no cloud. Native MP4, webcam bubble, built-in editor.`
 - **Detailed description:**
 
   ```
-  screensnap is a completely free, privacy-first screenshot and screen recorder
-  that runs entirely on your machine. No sign-up, no watermark, no cloud, no
-  upsell — and nothing you capture ever leaves your computer.
+  Screen recording shouldn't cost money, slap a watermark on your video, or make
+  you create an account. screensnap records your screen and tabs for free — with
+  no time limit, no watermark, no sign-up, and no cloud. Everything stays on your
+  machine.
 
-  CAPTURE
-  • Visible-tab and full-page screenshots (PNG)
-  • Record the current tab to native MP4 (H.264/AAC) — no transcoding, no ffmpeg
+  FREE, UNLIMITED RECORDING
+  • Record any tab to native MP4 (H.264/AAC) — no time limit, no watermark, ever
   • Screen + Cam: a draggable Loom-style webcam bubble recorded over the page
   • System/tab audio and/or microphone, with pause & resume
+  • No account, no upgrade prompts, no "pro" tier — it's all just free
 
-  EDIT
+  BUILT-IN VIDEO EDITOR (also free)
   • Trim, change resolution, and change speed
   • Add logos/images and annotations (text, arrows, shapes, blur) as layers
   • Export to MP4, or download the original as-is
+
+  SCREENSHOTS
+  • Visible-tab and full-page screenshots (PNG), with an annotation editor
 
   PRIVATE BY DESIGN
   • 100% local: all capture, processing, and storage stay on your device
   • No servers, no telemetry, no analytics, no runtime network calls
   • Minimal permissions — no access to all your sites
 
-  Open source (GPL-3.0).
+  Free and open source (GPL-3.0). No catch.
   ```
 
 - **Privacy policy URL:** `https://dmsolutionz.github.io/ScreenSnap/`
@@ -81,7 +85,7 @@ Everything needed to list screensnap. Build the upload with `node scripts/packag
 
 ## Pre-submission checklist
 
-- [ ] Decide version (currently `0.1.0` — bump to `1.0.0` for first public release)
+- [x] Version set to `1.0.0` for first public release
 - [x] `web_accessible_resources` removed (no extension resources exposed to web pages)
 - [x] Single-purpose, minimal permissions, no remote code, no WASM
 - [x] Privacy policy drafted (`PRIVACY.md`) — needs hosting
