@@ -41,9 +41,9 @@ Everything needed to list screensnap. Build the upload with `node scripts/packag
   Open source (GPL-3.0).
   ```
 
-- **Privacy policy URL:** _host `PRIVACY.md` and paste the URL here_
-  (e.g. GitHub Pages / a gist / the repo's raw file). **Required** because the
-  extension uses `tabCapture`.
+- **Privacy policy URL:** `https://dmsolutionz.github.io/ScreenSnap/`
+  (served from `docs/index.html`). Enable once: repo **Settings → Pages → Source:
+  `main` branch, `/docs` folder**. **Required** because the extension uses `tabCapture`.
 
 ## Permission justifications (paste into the dashboard)
 
