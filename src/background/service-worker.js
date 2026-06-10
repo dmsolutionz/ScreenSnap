@@ -298,20 +298,27 @@ async function ensureMicPermission() {
   if (micPermissionGranted) return true;
   return new Promise((resolve) => {
     let settled = false;
+    let winId = null;
     const finish = (granted) => {
       if (settled) return;
       settled = true;
       chrome.runtime.onMessage.removeListener(onMsg);
+      chrome.windows.onRemoved.removeListener(onClosed);
       if (granted) chrome.storage.local.set({ micPermissionGranted: true });
       resolve(!!granted);
     };
     const onMsg = (m, sender) => {
       if (sender.id === chrome.runtime.id && m && m.type === "mic-permission-result") finish(m.granted);
     };
+    // If the user dismisses the permission window without answering, proceed without the mic
+    // immediately instead of stalling the recording until the 30s backstop.
+    const onClosed = (id) => { if (id === winId) finish(false); };
     chrome.runtime.onMessage.addListener(onMsg);
+    chrome.windows.onRemoved.addListener(onClosed);
     chrome.windows.create({ url: chrome.runtime.getURL("src/permission/mic.html"), type: "popup", width: 460, height: 280, focused: true })
+      .then((w) => { winId = w && w.id; })
       .catch(() => finish(false));
-    setTimeout(() => finish(false), 30000); // never hang the recording on a permission window
+    setTimeout(() => finish(false), 30000); // ultimate backstop
   });
 }
 
