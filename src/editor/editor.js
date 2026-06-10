@@ -2,6 +2,7 @@
 // preview / timeline / layers / annotation modules, owns the transforms state, and drives export.
 // FOUNDATION-OWNED and final — feature work happens inside the modules this orchestrates.
 import { loadClip, pickFile, toInput } from "./source.js";
+import { listIds } from "./idb.js";
 import { defaultTransforms } from "./transforms.js";
 import { createLayerStore, newImageLayer } from "./layers-model.js";
 import { buildShell } from "./ui-shell.js";
@@ -35,7 +36,8 @@ async function boot() {
     const clip = await loadClip(clipId);
     if (clip && clip.blob) return start(clip.blob, (clip.meta && clip.meta.fileName) || "recording.mp4");
     // A clip was handed off (?clipId=) but isn't in IndexedDB — the recording didn't finish stashing,
-    // or it was cleared. Surface that instead of the generic empty state so the failure is visible.
+    // or it was cleared. Log what IS in the store to aid diagnosis, then surface the failure.
+    try { console.warn("[screensnap] clip not found:", clipId, "— stored ids:", await listIds()); } catch {}
     return showEmpty("That recording couldn’t be loaded — it may not have finished saving. You can still open an MP4 below.");
   }
   showEmpty();

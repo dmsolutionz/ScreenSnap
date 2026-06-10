@@ -22,10 +22,15 @@ function tx(db, mode) {
 export async function putBlob(id, blob, meta) {
   const db = await open();
   try {
+    // Resolve on the TRANSACTION commit, not the request's onsuccess — onsuccess fires before the
+    // write is durably committed, so resolving on it let the offscreen document (and its data) be
+    // torn down before the flush, silently losing the clip.
     await new Promise((resolve, reject) => {
-      const req = tx(db, "readwrite").put({ id, blob, meta: meta || {}, savedAt: Date.now() });
-      req.onsuccess = resolve;
-      req.onerror = () => reject(req.error);
+      const t = db.transaction(DB.store, "readwrite");
+      t.objectStore(DB.store).put({ id, blob, meta: meta || {}, savedAt: Date.now() });
+      t.oncomplete = () => resolve();
+      t.onerror = () => reject(t.error);
+      t.onabort = () => reject(t.error || new Error("put aborted"));
     });
   } finally {
     db.close();
@@ -52,9 +57,11 @@ export async function delBlob(id) {
   const db = await open();
   try {
     await new Promise((resolve, reject) => {
-      const req = tx(db, "readwrite").delete(id);
-      req.onsuccess = resolve;
-      req.onerror = () => reject(req.error);
+      const t = db.transaction(DB.store, "readwrite");
+      t.objectStore(DB.store).delete(id);
+      t.oncomplete = () => resolve();
+      t.onerror = () => reject(t.error);
+      t.onabort = () => reject(t.error || new Error("delete aborted"));
     });
   } finally {
     db.close();
