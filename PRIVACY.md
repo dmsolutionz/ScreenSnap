@@ -56,4 +56,4 @@ If this policy ever changes, the updated version will be published at the same U
 
 ## Contact
 
-Questions about privacy: **daniel@dmsolutions.io**
+Questions about privacy: **help@dmsolutions.io**
