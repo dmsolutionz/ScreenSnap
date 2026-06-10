@@ -54,13 +54,16 @@ export function createAnnotator({ canvas, store, getTool, getColor, getTransform
   function unit() { return Math.max(1, srcWidth() / 900); }
   function weight() { return Math.max(2, srcWidth() / 300); }
 
-  // Top-most shape layer hit at p (search front-to-back over visible shape layers).
-  function topShapeAt(p) {
+  // Top-most layer (image OR shape) hit at p, searched front-to-back over visible layers.
+  function pointInRect(p, r) { return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h; }
+  function topLayerAt(p) {
     const tol = 9 * unit();
     const ordered = store.visibleOrdered ? store.visibleOrdered() : store.layers;
     for (let i = ordered.length - 1; i >= 0; i--) {
       const l = ordered[i];
-      if (l && l.kind === "shape" && l.shape && hit(l.shape, p, tol)) return l.id;
+      if (!l) continue;
+      if (l.kind === "image" && l.image && pointInRect(p, l.image)) return l;
+      if (l.kind === "shape" && l.shape && hit(l.shape, p, tol)) return l;
     }
     return null;
   }
@@ -103,12 +106,10 @@ export function createAnnotator({ canvas, store, getTool, getColor, getTransform
     const p = toImg(e);
     if (t === "select") {
       canvas.setPointerCapture?.(e.pointerId);
-      const id = topShapeAt(p);
-      selectedId = id;
-      if (id != null) {
-        const l = store.get(id);
-        moving = { id, start: p, orig: JSON.parse(JSON.stringify(l.shape)) };
-      }
+      const l = topLayerAt(p);
+      selectedId = l ? l.id : null;
+      if (l && l.kind === "image") moving = { id: l.id, kind: "image", start: p, orig: { x: l.image.x, y: l.image.y } };
+      else if (l) moving = { id: l.id, kind: "shape", start: p, orig: JSON.parse(JSON.stringify(l.shape)) };
       return;
     }
     canvas.setPointerCapture?.(e.pointerId);
@@ -122,7 +123,12 @@ export function createAnnotator({ canvas, store, getTool, getColor, getTransform
     if (moving) {
       const p = toImg(e);
       const dx = p.x - moving.start.x, dy = p.y - moving.start.y;
-      store.update(moving.id, { shape: translate(moving.orig, dx, dy) });
+      if (moving.kind === "image") {
+        const cur = store.get(moving.id);
+        if (cur && cur.image) store.update(moving.id, { image: { ...cur.image, x: moving.orig.x + dx, y: moving.orig.y + dy } });
+      } else {
+        store.update(moving.id, { shape: translate(moving.orig, dx, dy) });
+      }
       return;
     }
     if (!drag) return;

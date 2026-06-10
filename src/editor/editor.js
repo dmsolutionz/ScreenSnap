@@ -116,8 +116,6 @@ async function start(blob, fileName) {
   // Prominent transport: a play/pause button + time readout, plus a click-to-play overlay centred on
   // the stage (hidden while playing and while a drawing tool is active so it never blocks annotation).
   buildTransport(shell.transportEl, durationSec);
-  shell.playOverlay?.addEventListener("click", () => togglePlay());
-  shell.stageCanvas.addEventListener("dblclick", () => togglePlay());
   updateTransport();
 
   // Render the first frame.
@@ -161,7 +159,6 @@ function buildToolbar(el, transforms) {
     tool = b.dataset.tool;
     session?.annotator.setTool(tool);
     el.querySelectorAll("[data-tool]").forEach((x) => x.classList.toggle("on", x.dataset.tool === tool));
-    updateTransport(); // hide the centre play overlay while a drawing tool is active
   });
   el.querySelector("#ss-colors").addEventListener("click", (e) => {
     const b = e.target.closest("[data-color]");
@@ -204,9 +201,6 @@ function closeEditor() {
 
 const PLAY_SVG = '<svg viewBox="0 0 100 100" width="16" height="16" aria-hidden="true"><polygon points="30,20 30,80 82,50" fill="currentColor"/></svg>';
 const PAUSE_SVG = '<svg viewBox="0 0 100 100" width="16" height="16" aria-hidden="true"><rect x="28" y="22" width="16" height="56" fill="currentColor"/><rect x="56" y="22" width="16" height="56" fill="currentColor"/></svg>';
-const OVERLAY_PLAY_SVG = '<svg viewBox="0 0 100 100" width="34" height="34" aria-hidden="true"><polygon points="36,24 36,76 80,50" fill="currentColor"/></svg>';
-const OVERLAY_PAUSE_SVG = '<svg viewBox="0 0 100 100" width="34" height="34" aria-hidden="true"><rect x="32" y="24" width="13" height="52" fill="currentColor"/><rect x="55" y="24" width="13" height="52" fill="currentColor"/></svg>';
-
 function buildTransport(el, durationSec) {
   if (!el) return;
   el.innerHTML = `
@@ -224,14 +218,6 @@ function updateTransport() {
     pp.innerHTML = playing ? PAUSE_SVG : PLAY_SVG;
     pp.setAttribute("aria-label", playing ? "Pause" : "Play");
     pp.classList.toggle("on", playing);
-  }
-  const ov = session.shell.playOverlay;
-  if (ov) {
-    // Stays on the stage in select mode and swaps play <-> pause; hidden only while a drawing tool is
-    // active so it never blocks annotation.
-    ov.innerHTML = playing ? OVERLAY_PAUSE_SVG : OVERLAY_PLAY_SVG;
-    ov.setAttribute("aria-label", playing ? "Pause" : "Play");
-    ov.style.display = tool === "select" ? "flex" : "none";
   }
 }
 
@@ -323,5 +309,16 @@ function pickImageFile() {
     input.click();
   });
 }
+
+// Spacebar toggles play/pause — unless you're typing in a field (e.g. the text-annotation input).
+window.addEventListener("keydown", (e) => {
+  if (e.code !== "Space" && e.key !== " ") return;
+  const el = document.activeElement;
+  const tag = el && el.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || (el && el.isContentEditable)) return;
+  if (!session) return;
+  e.preventDefault();
+  togglePlay();
+});
 
 boot();

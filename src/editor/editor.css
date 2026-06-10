@@ -53,13 +53,6 @@ body {
   display: flex; align-items: center; justify-content: center; padding: 24px;
 }
 .ss-canvas { max-width: 100%; max-height: 100%; box-shadow: 0 6px 28px rgba(0, 0, 0, 0.18); background: #fff; display: block; }
-.ss-play-overlay {
-  position: absolute; inset: 0; margin: auto; width: 72px; height: 72px; border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
-  background: rgba(24, 24, 27, 0.55); color: #fff; border: none; cursor: pointer;
-  -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); transition: background 0.15s, transform 0.1s;
-}
-.ss-play-overlay:hover { background: rgba(24, 24, 27, 0.74); transform: scale(1.05); }
 .ss-sidebar { flex: 0 0 248px; background: var(--chrome-2); border-left: 1px solid var(--chrome-line); overflow-y: auto; }
 
 /* ── transport (prominent play/pause + time readout) ── */

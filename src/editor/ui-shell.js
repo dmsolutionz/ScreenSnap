@@ -24,9 +24,6 @@ export function buildShell(rootEl) {
       <div class="ss-main">
         <div class="ss-stage" id="ss-stage">
           <canvas id="ss-canvas" class="ss-canvas"></canvas>
-          <button class="ss-play-overlay" id="ss-play-overlay" type="button" aria-label="Play">
-            <svg viewBox="0 0 100 100" width="34" height="34" aria-hidden="true"><polygon points="32,22 32,78 80,50" fill="currentColor"/></svg>
-          </button>
         </div>
         <div class="ss-sidebar" id="ss-sidebar"></div>
       </div>
@@ -41,7 +38,6 @@ export function buildShell(rootEl) {
   const toolbarEl = rootEl.querySelector("#ss-toolbar");
   const statusEl = rootEl.querySelector("#ss-status");
   const transportEl = rootEl.querySelector("#ss-transport");
-  const playOverlay = rootEl.querySelector("#ss-play-overlay");
 
-  return { stageCanvas, sidebarEl, timelineEl, toolbarEl, statusEl, transportEl, playOverlay, bus: makeBus() };
+  return { stageCanvas, sidebarEl, timelineEl, toolbarEl, statusEl, transportEl, bus: makeBus() };
 }
