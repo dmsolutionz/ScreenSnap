@@ -1,0 +1,101 @@
+@font-face { font-family: 'Geist'; font-weight: 400; font-display: swap; src: url('../popup/fonts/geist-400.woff2') format('woff2'); }
+@font-face { font-family: 'Geist'; font-weight: 500; font-display: swap; src: url('../popup/fonts/geist-500.woff2') format('woff2'); }
+@font-face { font-family: 'Geist'; font-weight: 600; font-display: swap; src: url('../popup/fonts/geist-600.woff2') format('woff2'); }
+@font-face { font-family: 'Geist Mono'; font-weight: 400; font-display: swap; src: url('../popup/fonts/geist-mono-400.woff2') format('woff2'); }
+@font-face { font-family: 'Geist Mono'; font-weight: 500; font-display: swap; src: url('../popup/fonts/geist-mono-500.woff2') format('woff2'); }
+
+:root {
+  --green: #22c55e;
+  --green-tint: rgba(34, 197, 94, 0.12);
+  --green-line: rgba(34, 197, 94, 0.35);
+  --chrome: #18181b;
+  --chrome-2: #1f1f23;
+  --chrome-line: #2a2a30;
+  --chrome-fg: #e7e7ea;
+  --chrome-muted: #9aa0ab;
+  --stage: #e9ebef;
+  --sans: 'Geist', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+  background: var(--chrome);
+  color: var(--chrome-fg);
+}
+
+/* ── empty state ── */
+.ss-empty { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: var(--chrome); }
+.ss-empty-card { display: flex; flex-direction: column; align-items: center; text-align: center; max-width: 360px; padding: 40px; }
+.ss-wordmark { font-size: 28px; font-weight: 600; letter-spacing: -0.025em; }
+.ss-dot { color: var(--green); }
+.ss-empty-sub { font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--chrome-muted); margin-top: 8px; }
+.ss-empty-text { color: var(--chrome-muted); font-size: 14px; line-height: 1.5; margin: 22px 0 26px; }
+
+/* ── shell ── */
+.ss-root { height: 100vh; }
+.ss-ed { display: flex; flex-direction: column; height: 100vh; }
+.ss-toolbar {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  padding: 10px 16px; background: var(--chrome-2); border-bottom: 1px solid var(--chrome-line);
+}
+.ss-tb-group { display: flex; align-items: center; gap: 6px; }
+.ss-tb-right { margin-left: auto; }
+.ss-tb-label { display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--chrome-muted); }
+
+.ss-main { flex: 1; display: flex; min-height: 0; }
+.ss-stage {
+  flex: 1; min-width: 0; min-height: 0; overflow: auto; background: var(--stage);
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.ss-canvas { max-width: 100%; max-height: 100%; box-shadow: 0 6px 28px rgba(0, 0, 0, 0.18); background: #fff; display: block; }
+.ss-sidebar { flex: 0 0 248px; background: var(--chrome-2); border-left: 1px solid var(--chrome-line); overflow-y: auto; }
+
+.ss-timeline { flex: 0 0 auto; background: var(--chrome-2); border-top: 1px solid var(--chrome-line); padding: 12px 16px; }
+.ss-status {
+  flex: 0 0 auto; height: 30px; display: flex; align-items: center; padding: 0 16px;
+  background: var(--chrome); border-top: 1px solid var(--chrome-line);
+  font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--chrome-muted);
+}
+.ss-status-err { color: #f87171; }
+
+/* ── buttons / controls ── */
+.ss-btn { font-family: var(--sans); font-size: 13px; font-weight: 500; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--chrome-line); background: var(--chrome); color: var(--chrome-fg); cursor: pointer; }
+.ss-btn:hover { background: #26262c; }
+.ss-btn:disabled { opacity: 0.6; cursor: default; }
+.ss-btn-ghost { background: transparent; }
+.ss-btn-primary { background: var(--green); border-color: var(--green); color: #06250f; font-weight: 600; }
+.ss-btn-primary:hover { background: #1eb155; }
+.ss-btn-lg { padding: 12px 26px; font-size: 15px; }
+
+.ss-tool { font-family: var(--sans); font-size: 12px; padding: 7px 11px; border-radius: 7px; border: 1px solid var(--chrome-line); background: transparent; color: var(--chrome-muted); cursor: pointer; }
+.ss-tool:hover { color: var(--chrome-fg); }
+.ss-tool.on { background: var(--green-tint); border-color: var(--green-line); color: var(--green); }
+
+.ss-sw { width: 20px; height: 20px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
+.ss-sw.on { outline: 2px solid var(--green); outline-offset: 1px; }
+
+.ss-select { font-family: var(--mono); font-size: 11px; background: var(--chrome); color: var(--chrome-fg); border: 1px solid var(--chrome-line); border-radius: 6px; padding: 4px 6px; cursor: pointer; }
+
+/* ── sidebar panel ── */
+.ss-panel { padding: 14px; }
+.ss-panel-head { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--chrome-muted); margin-bottom: 12px; }
+.ss-add-image { width: 100%; margin-bottom: 12px; }
+.ss-layer-list { display: flex; flex-direction: column; gap: 5px; }
+.ss-layer-empty { font-size: 12px; color: var(--chrome-muted); padding: 10px 0; }
+.ss-layer-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--chrome-line); border-radius: 7px; }
+.ss-layer-name { flex: 1; font-size: 13px; }
+.ss-layer-del { width: 22px; height: 22px; border: none; background: transparent; color: var(--chrome-muted); font-size: 16px; line-height: 1; cursor: pointer; border-radius: 5px; }
+.ss-layer-del:hover { background: rgba(248, 113, 113, 0.14); color: #f87171; }
+
+/* ── timeline ── */
+.ss-tl { display: flex; flex-direction: column; gap: 7px; }
+.ss-tl-times { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 11px; color: var(--chrome-muted); }
+.ss-tl-play { color: var(--green); }
+.ss-tl-track { position: relative; height: 30px; background: var(--chrome); border: 1px solid var(--chrome-line); border-radius: 7px; cursor: pointer; }
+.ss-tl-trim { position: absolute; top: 0; bottom: 0; background: var(--green-tint); border-left: 2px solid var(--green); border-right: 2px solid var(--green); }
+.ss-tl-handle { position: absolute; top: -2px; width: 10px; height: 34px; margin-left: -5px; border-radius: 4px; background: var(--green); cursor: ew-resize; }
+.ss-tl-playhead { position: absolute; top: -3px; width: 2px; height: 36px; margin-left: -1px; background: #fff; pointer-events: none; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4); }

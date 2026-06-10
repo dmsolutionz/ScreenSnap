@@ -77,9 +77,9 @@ UI type is [Geist / Geist Mono](https://github.com/vercel/geist-font) (SIL OFL 1
 
 ## Project conventions
 
-See [CLAUDE.md](CLAUDE.md) — trunk-based commits to `main` with no attribution trailers, zero runtime
-dependencies, and the privacy/free principles above are non-negotiable.
+See [CLAUDE.md](CLAUDE.md) — trunk-based commits to `main`, zero runtime dependencies, and the
+privacy/free principles above are non-negotiable.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+GNU GPL v3.0 (or later) — see [LICENSE](LICENSE).

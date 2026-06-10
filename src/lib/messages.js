@@ -24,8 +24,9 @@ export const MSG = Object.freeze({
   EDITOR_SAVE: "editor-save",
   EDITOR_CANCEL: "editor-cancel",
 
-  // webcam bubble -> service worker: countdown finished, begin the actual recording
+  // on-page control / webcam bubble -> service worker: countdown finished, begin the actual capture
   VC_GO: "videocircle-go",
+  REC_GO: "rec-go",
 
   // service worker -> offscreen document
   OFFSCREEN_START: "offscreen-start",
@@ -42,6 +43,9 @@ export const MSG = Object.freeze({
 
   // service worker -> popup / recorder window / overlays (broadcast)
   STATE_CHANGED: "state-changed",
+
+  // popup -> service worker: open the just-recorded clip in the video editor
+  EDITOR_OPEN_CLIP: "editor-open-clip",
 });
 
 export const TARGET = Object.freeze({ SW: "sw", OFFSCREEN: "offscreen" });

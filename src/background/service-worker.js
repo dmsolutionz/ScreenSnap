@@ -18,7 +18,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // recorder window). There is no externally_connectable, so this is defence-in-depth: it ensures a
   // future/co-installed sender can't drive downloads, capture, or recording.
   if (sender.id !== chrome.runtime.id) return false;
-  if (!msg || msg.target === TARGET.OFFSCREEN || msg.type === MSG.STATE_CHANGED) return false;
+  // mic-permission-result is consumed by a one-shot listener in ensureMicPermission(), not here.
+  if (!msg || msg.target === TARGET.OFFSCREEN || msg.type === MSG.STATE_CHANGED || msg.type === "mic-permission-result") return false;
   handle(msg, sender)
     .then((res) => sendResponse(res ?? { ok: true }))
     .catch((err) => sendResponse({ ok: false, error: String((err && err.message) || err) }));
@@ -42,6 +43,8 @@ async function handle(msg, sender) {
       return shotCopy();
     case MSG.SHOT_DISCARD:
       return shotClear();
+    case MSG.EDITOR_OPEN_CLIP:
+      return openEditor(msg.clipId);
     case MSG.EDITOR_GET_IMAGE:
       return editorGetImage();
     case MSG.EDITOR_SAVE:
@@ -52,7 +55,8 @@ async function handle(msg, sender) {
     case MSG.START_RECORDING:
       return startRecording(msg.options || {});
     case MSG.VC_GO:
-      return videoCircleGo();
+    case MSG.REC_GO:
+      return beginCapture();
     case MSG.STOP_RECORDING:
       return stopRecording(false);
     case MSG.CANCEL_RECORDING:
@@ -82,8 +86,10 @@ async function handle(msg, sender) {
       return setState(patch);
     }
     case MSG.REC_DONE:
-      await setState({ phase: PHASE.IDLE, progress: 0, lastSaved: msg.filename || null, note: msg.note || null, error: null });
+      await setState({ phase: PHASE.IDLE, progress: 0, lastSaved: msg.filename || null, note: msg.note || null, error: null, clipId: msg.clipId || null });
       await closeOffscreen();
+      // Land the finished recording in the editor, where the user can Download it as-is or edit it.
+      if (msg.clipId) await openEditor(msg.clipId);
       return { ok: true };
     case MSG.REC_ERROR:
       await setState({ phase: PHASE.IDLE, progress: 0, error: msg.message || "Recording failed." });
@@ -162,6 +168,14 @@ async function shotSave() {
 }
 async function shotCopy() { return pendingCapture ? { ok: true, dataUrl: pendingCapture.dataUrl } : { ok: false }; }
 async function shotClear() { pendingCapture = null; return { ok: true }; }
+// Open the video editor on a previously-recorded clip (persisted in IndexedDB by the offscreen
+// document). This is the ONLY place that opens the editor tab.
+async function openEditor(clipId) {
+  if (!clipId) return { ok: false, error: "No clip to edit." };
+  const url = chrome.runtime.getURL("src/editor/editor.html") + "?clipId=" + encodeURIComponent(clipId);
+  await chrome.tabs.create({ url });
+  return { ok: true };
+}
 async function editorGetImage() { return pendingCapture ? { ok: true, dataUrl: pendingCapture.dataUrl, filename: pendingCapture.filename } : { ok: false, error: "no pending image" }; }
 async function editorSave(msg) {
   // The payload arrives from the injected editor overlay. Constrain it so this can only ever write a
@@ -243,41 +257,62 @@ async function startRecording(options) {
   const tab = await getActiveTab();
   assertCapturable(tab);
 
-  if (opts.recordSource === SOURCE.VIDEO_CIRCLE) {
-    // Two-phase: show the webcam bubble + 3-2-1 countdown first, then VC_GO begins the actual capture.
-    await setState({
-      phase: PHASE.PREPARING, source: SOURCE.VIDEO_CIRCLE, withMic: opts.withMic, withSystemAudio: opts.withSystemAudio,
-      videoFormat: opts.videoFormat, videoFps: opts.videoFps, videoMaxHeight: opts.videoMaxHeight,
-      recordingTabId: tab.id, controlInjectable: isInjectable(tab.url),
-      paused: false, pausedAt: null, pausedTotalMs: 0, recordedDurationMs: 0, error: null, note: null, lastSaved: null,
-    });
-    await injectFile(tab.id, "src/content/webcam-bubble.js");
-    return { ok: true };
-  }
+  const isVideoCircle = opts.recordSource === SOURCE.VIDEO_CIRCLE;
 
-  // Current tab
+  // The mic is captured in the offscreen document, which can't show a permission prompt. Grant it
+  // here (a dedicated extension page can prompt) before we start; if denied, record without it.
+  let withMic = !!opts.withMic;
+  if (withMic) withMic = await ensureMicPermission();
+
+  // Two-phase for BOTH sources: show an on-page control + 3-2-1 countdown first, then a *-GO message
+  // begins the actual capture. The control persists on the page so closing the popup never strands
+  // the recording (the old tab path injected nothing — there was no way to see the countdown or stop).
   await setState({
-    phase: PHASE.PREPARING, source: SOURCE.TAB, withMic: opts.withMic, withSystemAudio: opts.withSystemAudio,
+    phase: PHASE.PREPARING, source: isVideoCircle ? SOURCE.VIDEO_CIRCLE : SOURCE.TAB,
+    withMic, withSystemAudio: opts.withSystemAudio,
+    videoFormat: opts.videoFormat, videoFps: opts.videoFps, videoMaxHeight: opts.videoMaxHeight,
     recordingTabId: tab.id, controlInjectable: isInjectable(tab.url),
     paused: false, pausedAt: null, pausedTotalMs: 0, recordedDurationMs: 0, error: null, note: null, lastSaved: null,
   });
-  let streamId;
-  try { streamId = await getTabMediaStreamId(tab.id); }
-  catch (e) { await setState({ phase: PHASE.IDLE, error: String((e && e.message) || e) }); throw e; }
-  await ensureOffscreen();
-  await sendOffscreen({ type: MSG.OFFSCREEN_START, streamId, sourceKind: "tab", withMic: opts.withMic, withSystemAudio: opts.withSystemAudio, videoFormat: opts.videoFormat, fps: opts.videoFps, maxHeight: opts.videoMaxHeight });
+  await injectFile(tab.id, isVideoCircle ? "src/content/webcam-bubble.js" : "src/content/recorder-control.js");
   return { ok: true };
 }
 
-async function videoCircleGo() {
+// Countdown finished on the page (VC_GO / REC_GO): begin the actual tab capture now.
+async function beginCapture() {
   const st = await getState();
-  if (st.source !== SOURCE.VIDEO_CIRCLE || st.phase !== PHASE.PREPARING || st.recordingTabId == null) return { ok: true };
+  if (st.phase !== PHASE.PREPARING || st.recordingTabId == null) return { ok: true };
   let streamId;
   try { streamId = await getTabMediaStreamId(st.recordingTabId); }
   catch (e) { await setState({ phase: PHASE.IDLE, error: String((e && e.message) || e) }); return { ok: false }; }
   await ensureOffscreen();
   await sendOffscreen({ type: MSG.OFFSCREEN_START, streamId, sourceKind: "tab", withMic: st.withMic, withSystemAudio: st.withSystemAudio, videoFormat: st.videoFormat || "mp4", fps: st.videoFps || 30, maxHeight: st.videoMaxHeight || 2160 });
   return { ok: true };
+}
+
+// Get microphone access for the extension origin (shared by the offscreen document). An extension
+// popup can't reliably prompt — it closes when the prompt steals focus — so we open a small
+// extension page that prompts and reports back. Cached once granted so we only prompt the first time.
+async function ensureMicPermission() {
+  const { micPermissionGranted } = await chrome.storage.local.get("micPermissionGranted");
+  if (micPermissionGranted) return true;
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (granted) => {
+      if (settled) return;
+      settled = true;
+      chrome.runtime.onMessage.removeListener(onMsg);
+      if (granted) chrome.storage.local.set({ micPermissionGranted: true });
+      resolve(!!granted);
+    };
+    const onMsg = (m, sender) => {
+      if (sender.id === chrome.runtime.id && m && m.type === "mic-permission-result") finish(m.granted);
+    };
+    chrome.runtime.onMessage.addListener(onMsg);
+    chrome.windows.create({ url: chrome.runtime.getURL("src/permission/mic.html"), type: "popup", width: 460, height: 280, focused: true })
+      .catch(() => finish(false));
+    setTimeout(() => finish(false), 30000); // never hang the recording on a permission window
+  });
 }
 
 async function stopRecording(discard) {

@@ -3,7 +3,7 @@
   "name": "screensnap.",
   "version": "0.1.0",
   "description": "Free, local, watermark-free screenshots and screen recording. Records native MP4 entirely on your machine — no sign-up, no cloud, no upsell.",
-  "minimum_chrome_version": "116",
+  "minimum_chrome_version": "124",
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
@@ -31,5 +31,11 @@
     "offscreen",
     "downloads",
     "storage"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["src/editor/*", "src/vendor/*.mjs", "src/popup/fonts/*.woff2"],
+      "matches": ["<all_urls>"]
+    }
   ]
 }

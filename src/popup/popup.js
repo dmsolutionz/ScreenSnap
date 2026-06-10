@@ -205,6 +205,7 @@ function doneView() {
     <div style="font-family:${MONO};font-size:11px;color:${C.muted};margin-top:6px">${esc(shortName(doneInfo.filename))}</div>
     <div style="font-family:${MONO};font-size:11px;color:${C.faint};margin-top:3px">${clockStr(doneInfo.durationMs)} · ${shortName(doneInfo.filename).endsWith(".mp4") ? "H.264 + AAC" : "VP9 + Opus"}</div>${note}
     <button class="prim-b" data-act="done" style="margin-top:20px;padding:11px 30px;background:${C.green};border:none;border-radius:9px;color:#fff;font-size:13px;font-weight:600;cursor:pointer">Done</button>
+    ${doneInfo.clipId ? `<button class="ghost-b" data-act="edit-video" style="margin-top:10px;padding:9px 22px;background:#fff;border:1px solid ${C.boxLine};border-radius:9px;color:${C.fg};font-size:12px;font-weight:500;cursor:pointer;display:flex;align-items:center;gap:7px">${ico("video", { sz: 13, c: C.muted })}Edit video</button>` : ""}
   </div>`;
 }
 
@@ -260,6 +261,7 @@ app.addEventListener("click", async (e) => {
   if (act === "copy") return doCopy(node);
   if (act === "shot-discard") { await send({ type: MSG.SHOT_DISCARD }); captured = null; return render(); }
   if (act === "done") { doneInfo = null; localTab = "record"; return render(); }
+  if (act === "edit-video") { if (doneInfo && doneInfo.clipId) send({ type: MSG.EDITOR_OPEN_CLIP, clipId: doneInfo.clipId }); window.close(); return; }
 });
 
 async function doCapture(mode) {
@@ -274,22 +276,10 @@ async function doCapture(mode) {
   render();
 }
 async function doRecord(src) {
+  // Mic permission is handled by the service worker (it opens a dedicated page that can prompt — an
+  // extension popup can't reliably prompt, it closes when the prompt steals focus). The on-page
+  // control + countdown also live on the tab now, so the popup can close freely after this.
   const options = { recordSource: src, withMic: !!settings.withMic, withSystemAudio: !!settings.withSystemAudio };
-  // The offscreen document can't show a mic permission prompt, so grant it here (the popup can).
-  // Once granted to the extension origin, the offscreen's getUserMedia(mic) works. Only the first
-  // time prompts; after that the permission query reports "granted" and we skip straight through.
-  if (options.withMic) {
-    let state = "prompt";
-    try { state = (await navigator.permissions.query({ name: "microphone" })).state; } catch {}
-    if (state !== "granted") {
-      try {
-        const s = await navigator.mediaDevices.getUserMedia({ audio: true });
-        s.getTracks().forEach((t) => t.stop());
-      } catch {
-        options.withMic = false; // denied/unavailable — record without it rather than fail
-      }
-    }
-  }
   let res;
   try { res = await send({ type: MSG.START_RECORDING, options }); } catch (e) { return flashError(String((e && e.message) || e)); }
   if (res && res.ok === false) return flashError(res.error || "Couldn't start recording");
@@ -319,7 +309,7 @@ function onState(state) {
   if (phase === PHASE.RECORDING) captured = null;
   if (prevPhase && prevPhase !== PHASE.IDLE && phase === PHASE.IDLE) {
     if (next.error) flashError(next.error);
-    else if (next.lastSaved) doneInfo = { filename: next.lastSaved, durationMs: next.recordedDurationMs, note: next.note };
+    else if (next.lastSaved) doneInfo = { filename: next.lastSaved, durationMs: next.recordedDurationMs, note: next.note, clipId: next.clipId || null };
     if (next.lastSaved || next.error) localTab = "record";
   }
   rec = next;

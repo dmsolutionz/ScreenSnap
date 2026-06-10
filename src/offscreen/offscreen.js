@@ -2,6 +2,7 @@
 // (modern Chrome does); otherwise saves WebM directly. No transcoding — there is no ffmpeg.
 // Created on demand and torn down by the service worker after each recording.
 import { MSG, TARGET, PHASE, stamp } from "../lib/messages.js";
+import { putBlob } from "../editor/idb.js";
 
 let current = {}; // { recorder, stream, rawStreams, audioContext, chunks, opts, mime, discard }
 
@@ -34,7 +35,7 @@ async function startRecording(opts) {
   recorder.onstop = () => finalize().catch(fail);
   recorder.onerror = (e) => fail((e && e.error) || new Error("MediaRecorder error"));
 
-  current = { ...current, recorder, stream, chunks, opts, mime, discard: false };
+  current = { ...current, recorder, stream, chunks, opts, mime, discard: false, startedAt: Date.now() };
 
   stream.getVideoTracks()[0]?.addEventListener("ended", () => {
     if (recorder.state !== "inactive") recorder.stop();
@@ -83,7 +84,18 @@ async function buildStream(opts) {
   }
 
   const videoTrack = av.getVideoTracks()[0];
-  const streamAudioTracks = av.getAudioTracks();
+  const sysAudioTracks = av.getAudioTracks();
+
+  // Capturing tab audio via getUserMedia mutes it from the speakers. Play it back through an <audio>
+  // element so the user still hears the tab. We deliberately do NOT use an AudioContext for this:
+  // an AudioContext in an offscreen document starts suspended (no user gesture) and can emit a
+  // silent track, which previously killed audio even when only system audio was selected.
+  if (sysAudioTracks.length && sourceKind === "tab") {
+    const el = new Audio();
+    el.srcObject = new MediaStream(sysAudioTracks);
+    el.play().catch(() => {});
+    current.monitorEl = el;
+  }
 
   let micStream = null;
   if (withMic) {
@@ -93,20 +105,23 @@ async function buildStream(opts) {
       micStream = null;
     }
   }
+  const micTracks = micStream ? micStream.getAudioTracks() : [];
 
-  const audioTracks = [];
-  if (streamAudioTracks.length || micStream) {
+  // MediaRecorder records a single audio track. One source → use it directly (no mixer, so a
+  // suspended context can never silence it). Two sources → mix mic + system into one track.
+  let audioTracks = [];
+  if (sysAudioTracks.length && micTracks.length) {
     const ac = new AudioContext();
     await ac.resume().catch(() => {});
     const dest = ac.createMediaStreamDestination();
-    if (streamAudioTracks.length) {
-      const srcNode = ac.createMediaStreamSource(new MediaStream(streamAudioTracks));
-      srcNode.connect(dest);
-      if (sourceKind === "tab") srcNode.connect(ac.destination); // keep the tab audible while capturing it
-    }
-    if (micStream) ac.createMediaStreamSource(micStream).connect(dest);
-    audioTracks.push(...dest.stream.getAudioTracks());
+    ac.createMediaStreamSource(new MediaStream(sysAudioTracks)).connect(dest);
+    ac.createMediaStreamSource(new MediaStream(micTracks)).connect(dest);
+    audioTracks = dest.stream.getAudioTracks();
     current.audioContext = ac;
+  } else if (sysAudioTracks.length) {
+    audioTracks = sysAudioTracks;
+  } else if (micTracks.length) {
+    audioTracks = micTracks;
   }
 
   current.rawStreams = [av, micStream].filter(Boolean);
@@ -138,11 +153,26 @@ async function finalize() {
 
   send({ type: MSG.REC_PHASE, phase: PHASE.SAVING });
   const filename = `screensnap/recording-${stamp()}.${ext}`;
-  // Download BEFORE stopping the tracks: a USER_MEDIA offscreen document can be auto-closed by
-  // Chrome once its media ends, which would kill the in-flight download.
-  await downloadBlob(blob, filename);
+
+  // Stash the recording in IndexedDB and hand off to the video editor, which opens automatically and
+  // offers "Download" (save as-is) or editing — so we do NOT auto-download here. We stash BEFORE
+  // stopping the tracks: a USER_MEDIA offscreen document can be auto-closed by Chrome once its media
+  // ends, which would kill in-flight IO.
+  let clipId = null;
+  try {
+    clipId = crypto.randomUUID();
+    const durationMs = current.startedAt ? Date.now() - current.startedAt : null;
+    await putBlob(clipId, blob, { fileName: filename.split("/").pop(), isMp4, durationMs });
+  } catch {
+    clipId = null;
+  }
+
+  // Safety net: if stashing failed the editor would have nothing to open, so save directly instead —
+  // a recording must never be lost.
+  if (!clipId) await downloadBlob(blob, filename);
+
   cleanupTracks();
-  send({ type: MSG.REC_DONE, filename, note });
+  send({ type: MSG.REC_DONE, filename, note, clipId });
   resetCurrent();
 }
 
@@ -195,6 +225,10 @@ function cleanupTracks() {
   try {
     current.rawStreams?.forEach((s) => s.getTracks().forEach((t) => t.stop()));
   } catch {}
+  try {
+    if (current.monitorEl) { current.monitorEl.pause(); current.monitorEl.srcObject = null; }
+  } catch {}
+  current.monitorEl = null;
   // AudioContext.close() returns a promise; closing an already-closed one rejects (and a bare
   // try/catch won't catch that async rejection). Guard on state, catch, and null it out.
   try {

@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>screensnap — video editor</title>
+  <link rel="stylesheet" href="editor.css" />
+</head>
+<body>
+  <div id="empty" class="ss-empty">
+    <div class="ss-empty-card">
+      <div class="ss-wordmark">screensnap<span class="ss-dot">.</span></div>
+      <div class="ss-empty-sub">Video editor</div>
+      <p class="ss-empty-text" id="empty-text">Open a recording to trim, annotate, and export native MP4 — all on your machine.</p>
+      <button id="open-btn" class="ss-btn ss-btn-primary ss-btn-lg">Open MP4</button>
+    </div>
+  </div>
+  <div id="root" class="ss-root" style="display:none"></div>
+  <script type="module" src="editor.js"></script>
+</body>
+</html>
