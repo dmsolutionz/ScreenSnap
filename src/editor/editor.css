@@ -51,8 +51,23 @@ body {
   flex: 1; min-width: 0; min-height: 0; overflow: auto; background: var(--stage);
   display: flex; align-items: center; justify-content: center; padding: 24px;
 }
+.ss-stage-wrap { position: relative; display: inline-flex; max-width: 100%; max-height: 100%; line-height: 0; }
 .ss-canvas { max-width: 100%; max-height: 100%; box-shadow: 0 6px 28px rgba(0, 0, 0, 0.18); background: #fff; display: block; }
+.ss-play-overlay {
+  position: absolute; inset: 0; margin: auto; width: 72px; height: 72px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center; padding-left: 4px;
+  background: rgba(24, 24, 27, 0.55); color: #fff; border: none; cursor: pointer;
+  -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); transition: background 0.15s, transform 0.1s;
+}
+.ss-play-overlay:hover { background: rgba(24, 24, 27, 0.74); transform: scale(1.05); }
 .ss-sidebar { flex: 0 0 248px; background: var(--chrome-2); border-left: 1px solid var(--chrome-line); overflow-y: auto; }
+
+/* ── transport (prominent play/pause + time readout) ── */
+.ss-transport { flex: 0 0 auto; display: flex; align-items: center; gap: 14px; padding: 10px 16px; background: var(--chrome-2); border-top: 1px solid var(--chrome-line); }
+.ss-pp { width: 40px; height: 40px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--green); color: #06250f; border: none; cursor: pointer; }
+.ss-pp:hover { background: #1eb155; }
+.ss-pp.on { background: var(--chrome); color: var(--chrome-fg); border: 1px solid var(--chrome-line); }
+.ss-time { font-family: var(--mono); font-size: 12px; color: var(--chrome-muted); }
 
 .ss-timeline { flex: 0 0 auto; background: var(--chrome-2); border-top: 1px solid var(--chrome-line); padding: 12px 16px; }
 .ss-status {

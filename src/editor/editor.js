@@ -71,7 +71,14 @@ async function start(blob, fileName) {
   buildToolbar(shell.toolbarEl, transforms);
   setStatus(shell.statusEl, meta, transforms);
 
-  const preview = createPreview({ canvas: shell.stageCanvas, input, getTransforms: () => transforms, store });
+  const preview = createPreview({
+    canvas: shell.stageCanvas,
+    input,
+    getTransforms: () => transforms,
+    store,
+    onTime: (sec) => onPreviewTime(sec),
+    onStop: (err) => onPreviewStop(err),
+  });
   const annotator = createAnnotator({ canvas: shell.stageCanvas, store, getTool: () => tool, getColor: () => color, getTransforms: () => transforms });
 
   const timeline = createTimeline({
@@ -104,6 +111,13 @@ async function start(blob, fileName) {
 
   session = { input, meta, transforms, store, preview, timeline, annotator, layersPanel, shell, fileName, blob };
 
+  // Prominent transport: a play/pause button + time readout, plus a click-to-play overlay centred on
+  // the stage (hidden while playing and while a drawing tool is active so it never blocks annotation).
+  buildTransport(shell.transportEl, durationSec);
+  shell.playOverlay?.addEventListener("click", () => togglePlay());
+  shell.stageCanvas.addEventListener("dblclick", () => togglePlay());
+  updateTransport();
+
   // Render the first frame.
   preview.seekTo(0);
 }
@@ -115,9 +129,6 @@ function buildToolbar(el, transforms) {
     </div>
     <div class="ss-tb-group" id="ss-colors">
       ${COLORS.map((c) => `<button class="ss-sw ${c === color ? "on" : ""}" data-color="${c}" style="background:${c}"></button>`).join("")}
-    </div>
-    <div class="ss-tb-group">
-      <button class="ss-btn ss-btn-ghost" id="ss-play">Play / Pause</button>
     </div>
     <div class="ss-tb-group">
       <label class="ss-tb-label">Resolution
@@ -137,8 +148,9 @@ function buildToolbar(el, transforms) {
       </label>
     </div>
     <div class="ss-tb-group ss-tb-right">
-      <button class="ss-btn ss-btn-primary" id="ss-download">Download</button>
+      <button class="ss-btn ss-btn-primary" id="ss-download">Download original</button>
       <button class="ss-btn ss-btn-ghost" id="ss-export">Export edited MP4</button>
+      <button class="ss-btn ss-btn-ghost" id="ss-close">Close</button>
     </div>`;
 
   el.querySelector("#ss-tools").addEventListener("click", (e) => {
@@ -147,6 +159,7 @@ function buildToolbar(el, transforms) {
     tool = b.dataset.tool;
     session?.annotator.setTool(tool);
     el.querySelectorAll("[data-tool]").forEach((x) => x.classList.toggle("on", x.dataset.tool === tool));
+    updateTransport(); // hide the centre play overlay while a drawing tool is active
   });
   el.querySelector("#ss-colors").addEventListener("click", (e) => {
     const b = e.target.closest("[data-color]");
@@ -155,7 +168,6 @@ function buildToolbar(el, transforms) {
     session?.annotator.setColor(color);
     el.querySelectorAll("[data-color]").forEach((x) => x.classList.toggle("on", x.dataset.color === color));
   });
-  el.querySelector("#ss-play").addEventListener("click", () => togglePlay());
   el.querySelector("#ss-res").addEventListener("change", (e) => {
     const v = e.target.value;
     transforms.outScale = v ? { maxHeight: Number(v) } : null;
@@ -167,9 +179,68 @@ function buildToolbar(el, transforms) {
   el.querySelector("#ss-speed").addEventListener("change", (e) => {
     transforms.speed = Number(e.target.value) || 1;
     setStatus(session.shell.statusEl, session.meta, transforms);
+    // Re-anchor live playback so the new speed takes effect immediately, not at the next loop.
+    if (session.preview.isPlaying()) session.preview.seekTo(session.preview.currentTime());
   });
   el.querySelector("#ss-download").addEventListener("click", () => downloadOriginal());
   el.querySelector("#ss-export").addEventListener("click", () => doExport(el.querySelector("#ss-export")));
+  el.querySelector("#ss-close").addEventListener("click", () => closeEditor());
+}
+
+// Close the editor tab. The page was opened via chrome.tabs.create, so window.close() isn't reliable;
+// remove the current tab through the tabs API (needs no extra permission) and fall back to close().
+function closeEditor() {
+  if (session && session.preview) session.preview.pause();
+  try {
+    chrome.tabs.getCurrent((tab) => {
+      if (tab && tab.id != null) chrome.tabs.remove(tab.id);
+      else window.close();
+    });
+  } catch {
+    window.close();
+  }
+}
+
+const PLAY_SVG = '<svg viewBox="0 0 100 100" width="16" height="16" aria-hidden="true"><polygon points="30,20 30,80 82,50" fill="currentColor"/></svg>';
+const PAUSE_SVG = '<svg viewBox="0 0 100 100" width="16" height="16" aria-hidden="true"><rect x="28" y="22" width="16" height="56" fill="currentColor"/><rect x="56" y="22" width="16" height="56" fill="currentColor"/></svg>';
+
+function buildTransport(el, durationSec) {
+  if (!el) return;
+  el.innerHTML = `
+    <button class="ss-pp" id="ss-pp" type="button" aria-label="Play">${PLAY_SVG}</button>
+    <span class="ss-time" id="ss-time">00:00 / ${fmtTime(durationSec)}</span>`;
+  el.querySelector("#ss-pp").addEventListener("click", () => togglePlay());
+}
+
+// Reflect play state across the transport button + the centre stage overlay.
+function updateTransport() {
+  if (!session) return;
+  const playing = session.preview.isPlaying();
+  const pp = document.getElementById("ss-pp");
+  if (pp) {
+    pp.innerHTML = playing ? PAUSE_SVG : PLAY_SVG;
+    pp.setAttribute("aria-label", playing ? "Pause" : "Play");
+    pp.classList.toggle("on", playing);
+  }
+  const ov = session.shell.playOverlay;
+  if (ov) ov.style.display = !playing && tool === "select" ? "flex" : "none";
+}
+
+function onPreviewTime(sec) {
+  if (!session) return;
+  session.timeline.setPlayhead(sec);
+  const time = document.getElementById("ss-time");
+  if (time) time.textContent = `${fmtTime(sec)} / ${fmtTime(session.meta.durationSec)}`;
+}
+
+function onPreviewStop(err) {
+  updateTransport();
+  if (session) setStatus(session.shell.statusEl, session.meta, session.transforms, "Playback stopped — " + ((err && err.message) || "decode error"));
+}
+
+function fmtTime(sec) {
+  const s = Math.max(0, Math.floor(sec || 0));
+  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 }
 
 // Save the recording exactly as captured — no transcode, instant. This is the robust "just download
@@ -187,12 +258,11 @@ function downloadOriginal() {
   setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
-let playing = false;
 function togglePlay() {
   if (!session) return;
-  playing = !playing;
-  if (playing) session.preview.play();
-  else session.preview.pause();
+  if (session.preview.isPlaying()) session.preview.pause();
+  else session.preview.play();
+  updateTransport();
 }
 
 async function doExport(btn) {
@@ -200,7 +270,7 @@ async function doExport(btn) {
   const orig = btn.textContent;
   btn.disabled = true;
   session.preview.pause();
-  playing = false;
+  updateTransport();
   try {
     await runExport({
       input: session.input,
