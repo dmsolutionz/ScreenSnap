@@ -31,11 +31,5 @@
     "offscreen",
     "downloads",
     "storage"
-  ],
-  "web_accessible_resources": [
-    {
-      "resources": ["src/editor/*", "src/vendor/*.mjs", "src/popup/fonts/*.woff2"],
-      "matches": ["<all_urls>"]
-    }
   ]
 }
