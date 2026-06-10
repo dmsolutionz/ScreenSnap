@@ -116,7 +116,7 @@ function audioRow(icon, label, key) {
 function recordTab() {
   return `<div style="padding-top:13px;padding-bottom:5px">
     ${navRow(`data-act="rec" data-src="tab"`, "tab", "Current Tab", "No picker · tab audio", false)}
-    ${navRow(`data-act="rec" data-src="videocircle"`, "video", "Video Circle", "Webcam bubble · sys audio", false)}
+    ${navRow(`data-act="rec" data-src="videocircle"`, "video", "Screen + Cam", "Webcam bubble · sys audio", false)}
     <div style="padding:13px 16px;border-top:1px solid ${C.line};margin-top:5px">
       <div style="font-family:${MONO};font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:${C.faint};margin-bottom:11px">Audio</div>
       ${audioRow("vol", "System audio", "withSystemAudio")}
@@ -139,7 +139,7 @@ function capturedView() {
   </div>`;
 }
 const codecLabel = () => ((rec.mime || "").includes("mp4") ? "MP4 · H.264" : "WebM · VP9");
-const srcName = () => (rec.source === SOURCE.VIDEO_CIRCLE ? "Video circle" : "Current tab");
+const srcName = () => (rec.source === SOURCE.VIDEO_CIRCLE ? "Screen + Cam" : "Current tab");
 function audioChips() {
   const chip = (l) => `<span style="font-family:${MONO};font-size:10px;color:${C.green};background:${C.greenTint};border:1px solid ${C.greenLine};border-radius:5px;padding:3px 8px">${l}</span>`;
   const chips = [];
@@ -171,7 +171,7 @@ function recVideoCircle() {
       <div style="flex:1">
         <div id="timer" style="font-family:${MONO};font-size:34px;font-weight:500;letter-spacing:-0.035em;line-height:1;color:${rec.paused ? C.faint : C.fg}">${clockStr(elapsedMs(rec))}</div>
         <div style="display:flex;align-items:center;gap:6px;margin-top:8px">
-          ${rec.paused ? `<span style="font-family:${MONO};font-size:11px;text-transform:uppercase;letter-spacing:0.09em;color:${C.faint}">Paused</span>` : `${pingDot(7)}<span style="font-family:${MONO};font-size:11px;text-transform:uppercase;letter-spacing:0.09em;color:${C.muted}">Video circle · sys audio</span>`}
+          ${rec.paused ? `<span style="font-family:${MONO};font-size:11px;text-transform:uppercase;letter-spacing:0.09em;color:${C.faint}">Paused</span>` : `${pingDot(7)}<span style="font-family:${MONO};font-size:11px;text-transform:uppercase;letter-spacing:0.09em;color:${C.muted}">Screen + Cam · sys audio</span>`}
         </div>
       </div>
     </div>

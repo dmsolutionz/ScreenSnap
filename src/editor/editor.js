@@ -75,7 +75,7 @@ async function start(blob, fileName) {
 
   const preview = createPreview({
     canvas: shell.stageCanvas,
-    input,
+    blob,
     getTransforms: () => transforms,
     store,
     onTime: (sec) => onPreviewTime(sec),
@@ -181,8 +181,7 @@ function buildToolbar(el, transforms) {
   el.querySelector("#ss-speed").addEventListener("change", (e) => {
     transforms.speed = Number(e.target.value) || 1;
     setStatus(session.shell.statusEl, session.meta, transforms);
-    // Re-anchor live playback so the new speed takes effect immediately, not at the next loop.
-    if (session.preview.isPlaying()) session.preview.seekTo(session.preview.currentTime());
+    // The preview's <video> picks up playbackRate live on the next frame — no re-anchor needed.
   });
   el.querySelector("#ss-download").addEventListener("click", () => downloadOriginal());
   el.querySelector("#ss-export").addEventListener("click", () => doExport(el.querySelector("#ss-export")));
@@ -205,6 +204,8 @@ function closeEditor() {
 
 const PLAY_SVG = '<svg viewBox="0 0 100 100" width="16" height="16" aria-hidden="true"><polygon points="30,20 30,80 82,50" fill="currentColor"/></svg>';
 const PAUSE_SVG = '<svg viewBox="0 0 100 100" width="16" height="16" aria-hidden="true"><rect x="28" y="22" width="16" height="56" fill="currentColor"/><rect x="56" y="22" width="16" height="56" fill="currentColor"/></svg>';
+const OVERLAY_PLAY_SVG = '<svg viewBox="0 0 100 100" width="34" height="34" aria-hidden="true"><polygon points="36,24 36,76 80,50" fill="currentColor"/></svg>';
+const OVERLAY_PAUSE_SVG = '<svg viewBox="0 0 100 100" width="34" height="34" aria-hidden="true"><rect x="32" y="24" width="13" height="52" fill="currentColor"/><rect x="55" y="24" width="13" height="52" fill="currentColor"/></svg>';
 
 function buildTransport(el, durationSec) {
   if (!el) return;
@@ -225,7 +226,13 @@ function updateTransport() {
     pp.classList.toggle("on", playing);
   }
   const ov = session.shell.playOverlay;
-  if (ov) ov.style.display = !playing && tool === "select" ? "flex" : "none";
+  if (ov) {
+    // Stays on the stage in select mode and swaps play <-> pause; hidden only while a drawing tool is
+    // active so it never blocks annotation.
+    ov.innerHTML = playing ? OVERLAY_PAUSE_SVG : OVERLAY_PLAY_SVG;
+    ov.setAttribute("aria-label", playing ? "Pause" : "Play");
+    ov.style.display = tool === "select" ? "flex" : "none";
+  }
 }
 
 function onPreviewTime(sec) {
@@ -260,10 +267,10 @@ function downloadOriginal() {
   setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
-function togglePlay() {
+async function togglePlay() {
   if (!session) return;
   if (session.preview.isPlaying()) session.preview.pause();
-  else session.preview.play();
+  else await session.preview.play(); // play() is async (awaits the <video>); await so the icon flips
   updateTransport();
 }
 

@@ -1,4 +1,4 @@
-// Injected webcam bubble for Video Circle recording (self-contained). Loom-style: a large draggable
+// Injected webcam bubble for Screen + Cam recording (self-contained). Loom-style: a large draggable
 // circular webcam feed (default bottom-LEFT) with a 3-2-1 countdown, then a prominent Stop control.
 // The page (this tab) is what gets recorded, so the bubble appears in the capture.
 // Message strings mirror src/lib/messages.js.

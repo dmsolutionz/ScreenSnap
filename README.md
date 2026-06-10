@@ -22,7 +22,7 @@ Built because being nagged to log in just to save a screenshot is miserable.
 - **Current Tab** — instant, no picker; a draggable control pill sits on the page
 - **Screen / Window** — Chrome's native picker, driven from a separate **recorder window** so the
   control isn't baked into the capture
-- **Video Circle** — a Loom-style draggable **webcam bubble** on the page, recorded with the tab
+- **Screen + Cam** — a Loom-style draggable **webcam bubble** on the page, recorded with the tab
 - **System / tab audio** and/or **microphone** (mixed), **pause / resume**, and a red **REC** badge
 
 ## MP4, natively — no transcoding
@@ -51,7 +51,7 @@ overlays.
 | **Popup** | `src/popup/` | The screensnap UI — capture/record tabs, captured card, recording / saving / done. UI + dispatch only. |
 | **Offscreen document** | `src/offscreen/` | Hosts `MediaRecorder` (a service worker has no DOM; the popup closes on blur). Saves native MP4. |
 | **Recorder window** | `src/recorder-window/` | Separate floating window for screen/window recording (picker → live timer + stop). |
-| **On-page overlays** | `src/content/` | Injected via `executeScript`: `editor-overlay` (annotation editor), `area-select` (region picker), `recorder-control` (tab-recording pill), `webcam-bubble` (Video Circle). |
+| **On-page overlays** | `src/content/` | Injected via `executeScript`: `editor-overlay` (annotation editor), `area-select` (region picker), `recorder-control` (tab-recording pill), `webcam-bubble` (Screen + Cam). |
 
 State lives in `chrome.storage.session` so it survives the service worker being torn down
 mid-recording. The popup, recorder window, and overlays all reflect it live via `STATE_CHANGED`.
@@ -59,14 +59,14 @@ mid-recording. The popup, recorder window, and overlays all reflect it live via 
 ## Permissions (deliberately minimal)
 
 `activeTab` + `scripting` (only the tab you invoked it on — **no `<all_urls>`, no history scope**),
-`tabCapture`, `desktopCapture`, `offscreen`, `downloads`, `storage`. Video Circle requests camera
+`tabCapture`, `desktopCapture`, `offscreen`, `downloads`, `storage`. Screen + Cam requests camera
 access per-site via the standard browser prompt.
 
 ## Known limitations
 
 - **Full-page capture** uses `captureVisibleTab` (rate-limited ~2/sec), so long pages take a few
   seconds; lazy-loaded content and complex sticky layouts can still leave seams.
-- **Video Circle** records the current tab (the bubble lives in the page); it's not a full-desktop
+- **Screen + Cam** records the current tab (the bubble lives in the page); it's not a full-desktop
   composite. Camera permission is per-site.
 - Internal pages (`chrome://`, the Web Store, etc.) can't be captured — Chrome blocks it.
 

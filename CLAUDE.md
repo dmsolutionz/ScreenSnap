@@ -38,7 +38,7 @@ badge, downloads, and `chrome.storage.session` state. Recording happens in an **
 saves **native MP4** (no transcoding). The **popup** (`src/popup/`) is the screensnap UI. Recording controls live on
 the surface that fits: a **recorder window** (`src/recorder-window/`) for screen/window capture, and injected
 overlays (`src/content/`) for everything else — `editor-overlay` (annotation editor), `area-select` (region picker),
-`recorder-control` (tab-recording pill), and `webcam-bubble` (Video Circle). When a recording finishes it is stashed
+`recorder-control` (tab-recording pill), and `webcam-bubble` (Screen + Cam). When a recording finishes it is stashed
 in IndexedDB and the **video editor** (`src/editor/`) opens in a tab — a WebCodecs-based trim / resolution / speed /
 overlay-layer editor that exports MP4 (or Downloads the clip as-is). All surfaces reflect state live via
 `STATE_CHANGED`.

@@ -23,12 +23,10 @@ export function buildShell(rootEl) {
       <div class="ss-toolbar" id="ss-toolbar"></div>
       <div class="ss-main">
         <div class="ss-stage" id="ss-stage">
-          <div class="ss-stage-wrap">
-            <canvas id="ss-canvas" class="ss-canvas"></canvas>
-            <button class="ss-play-overlay" id="ss-play-overlay" type="button" aria-label="Play">
-              <svg viewBox="0 0 100 100" width="34" height="34" aria-hidden="true"><polygon points="32,22 32,78 80,50" fill="currentColor"/></svg>
-            </button>
-          </div>
+          <canvas id="ss-canvas" class="ss-canvas"></canvas>
+          <button class="ss-play-overlay" id="ss-play-overlay" type="button" aria-label="Play">
+            <svg viewBox="0 0 100 100" width="34" height="34" aria-hidden="true"><polygon points="32,22 32,78 80,50" fill="currentColor"/></svg>
+          </button>
         </div>
         <div class="ss-sidebar" id="ss-sidebar"></div>
       </div>
