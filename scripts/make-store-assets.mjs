@@ -119,7 +119,11 @@ function flatten(inFile, outFile) {
 
 // --- promo tiles: brand HTML rendered by headless Chrome ----------------------
 const FONTS = join(ROOT, "src", "popup", "fonts");
-const tileHTML = (variant) => `<!doctype html>
+// The tile is laid out inside a fixed-size .stage pinned to the top-left corner: headless
+// Chrome clamps the window to a 500px minimum width, so viewport-relative centering drifts
+// on small canvases (the screenshot is cropped from a wider layout). The stage matches the
+// screenshot crop exactly, so centering inside it is exact.
+const tileHTML = (variant, w, h) => `<!doctype html>
 <meta charset="utf-8">
 <style>
   @font-face { font-family: Geist; font-weight: 400; src: url("file://${FONTS}/geist-400.woff2") format("woff2"); }
@@ -127,9 +131,10 @@ const tileHTML = (variant) => `<!doctype html>
   @font-face { font-family: Geist; font-weight: 600; src: url("file://${FONTS}/geist-600.woff2") format("woff2"); }
   @font-face { font-family: "Geist Mono"; font-weight: 500; src: url("file://${FONTS}/geist-mono-500.woff2") format("woff2"); }
   * { margin: 0; box-sizing: border-box; }
-  html, body { width: 100%; height: 100%; overflow: hidden; }
-  body {
-    font-family: Geist, system-ui, sans-serif; color: #fafafa;
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0b0b0d; }
+  body { font-family: Geist, system-ui, sans-serif; color: #fafafa; }
+  .stage {
+    position: fixed; left: 0; top: 0; width: ${w}px; height: ${h}px;
     background: radial-gradient(120% 140% at 78% 18%, rgba(34,197,94,.13), transparent 55%), #0b0b0d;
     display: flex; align-items: center; justify-content: center;
   }
@@ -153,7 +158,7 @@ const tileHTML = (variant) => `<!doctype html>
   .ctl { color: #71717a; font-size: 13px; letter-spacing: 2px; }
 </style>
 ${variant === "small" ? `
-<body>
+<body><div class="stage">
   <div style="display:flex; flex-direction:column; align-items:center; gap:16px">
     <div style="display:flex; align-items:center; gap:13px">
       <div class="lens" style="width:50px;height:50px"><div class="ring" style="width:26px;height:26px;border-width:6px"><div class="pupil" style="width:11px;height:11px"></div></div></div>
@@ -161,8 +166,8 @@ ${variant === "small" ? `
     </div>
     <div class="tag" style="font-size:14.5px">Free screen recording. No watermark. No catch.</div>
   </div>
-</body>` : `
-<body style="justify-content:space-between; padding: 0 96px">
+</div></body>` : `
+<body><div class="stage" style="justify-content:space-between; padding: 0 96px">
   <div style="display:flex; flex-direction:column; gap:26px">
     <div class="word" style="font-size:84px">screensnap<span class="dot">.</span></div>
     <div class="tag" style="font-size:29px">Free, unlimited screen recording &amp; screenshots —<br>everything stays on your machine.</div>
@@ -179,7 +184,7 @@ ${variant === "small" ? `
       <div class="rec"></div><div class="time" style="font-size:21px">12:34</div><div class="ctl">❚❚&nbsp;&nbsp;■</div>
     </div>
   </div>
-</body>`}`;
+</div></body>`}`;
 
 mkdirSync(OUT, { recursive: true });
 const TILES = [
@@ -188,7 +193,7 @@ const TILES = [
 ];
 for (const t of TILES) {
   const htmlFile = join(OUT, `_${t.variant}.html`);
-  writeFileSync(htmlFile, tileHTML(t.variant));
+  writeFileSync(htmlFile, tileHTML(t.variant, t.w, t.h));
   const shot = join(OUT, `_${t.variant}-raw.png`);
   execFileSync(CHROME, [
     "--headless=new", `--screenshot=${shot}`, `--window-size=${t.w},${t.h}`,
