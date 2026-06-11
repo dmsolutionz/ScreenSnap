@@ -11,10 +11,13 @@ Everything needed to list screensnap. Build the upload with `node scripts/packag
 ## Listing
 
 - **Name:** screensnap
-- **Category:** Productivity
+- **Category:** Productivity → Tools
 - **Language:** English
-- **Summary (≤132 chars):**
-  `Free, unlimited screen & tab recording — no watermark, no sign-up, no cloud. Native MP4, webcam bubble, built-in editor.`
+- **Summary:** comes from the manifest `description` (≤132 chars, not editable in the
+  dashboard): `Free, local, watermark-free screenshots and screen recording. Native MP4,
+  all on your machine — no sign-up, no cloud, no upsell.`
+- **Homepage URL:** `https://github.com/dmsolutionz/ScreenSnap`
+- **Support URL / item support:** leave blank / off
 - **Detailed description:**
 
   ```
@@ -78,10 +81,14 @@ Everything needed to list screensnap. Build the upload with `node scripts/packag
 
 ## Assets checklist
 
-- [x] Icon 128×128 (`icons/icon-128.png`)
-- [ ] 1–5 screenshots, 1280×800 or 640×400 (popup + editor + a recording in progress)
-- [ ] Optional: small promo tile 440×280
-- [ ] Privacy policy hosted, URL pasted into the listing
+Run `node scripts/make-store-assets.mjs` → everything lands in `dist/store-assets/`
+(the store rejects PNGs with an alpha channel; the script flattens them to 24-bit RGB).
+
+- [x] Store icon (`dist/store-assets/store-icon-128.png` — 96px mark padded to 128 per guidelines)
+- [x] Screenshots, 1280×800 no-alpha (`dist/store-assets/screenshots/` — upload at most 5)
+- [x] Small promo tile 440×280 (`dist/store-assets/promo-small-440x280.png`)
+- [x] Marquee promo tile 1400×560 (`dist/store-assets/promo-marquee-1400x560.png`)
+- [x] Privacy policy hosted at `https://dmsolutionz.github.io/ScreenSnap/` (GitHub Pages, live)
 
 ## Pre-submission checklist
 
