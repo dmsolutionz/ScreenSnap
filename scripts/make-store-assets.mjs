@@ -154,12 +154,12 @@ const tileHTML = (variant) => `<!doctype html>
 </style>
 ${variant === "small" ? `
 <body>
-  <div style="display:flex; flex-direction:column; align-items:center; gap:18px">
-    <div style="display:flex; align-items:center; gap:18px">
-      <div class="lens" style="width:64px;height:64px"><div class="ring" style="width:34px;height:34px;border-width:7px"><div class="pupil" style="width:14px;height:14px"></div></div></div>
-      <div class="word" style="font-size:46px">screensnap<span class="dot">.</span></div>
+  <div style="display:flex; flex-direction:column; align-items:center; gap:16px">
+    <div style="display:flex; align-items:center; gap:13px">
+      <div class="lens" style="width:50px;height:50px"><div class="ring" style="width:26px;height:26px;border-width:6px"><div class="pupil" style="width:11px;height:11px"></div></div></div>
+      <div class="word" style="font-size:36px">screensnap<span class="dot">.</span></div>
     </div>
-    <div class="tag" style="font-size:16px">Free screen recording. No watermark. No catch.</div>
+    <div class="tag" style="font-size:14.5px">Free screen recording. No watermark. No catch.</div>
   </div>
 </body>` : `
 <body style="justify-content:space-between; padding: 0 96px">
