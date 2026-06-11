@@ -31,14 +31,15 @@ Product name is **screensnap.** (green-dot wordmark, dark theme, green `#22c55e`
 directory is still `clippy-but-good`; the shipped name everywhere is screensnap.
 
 ## Architecture (1-paragraph map)
-Service worker (`src/background/`) orchestrates everything: it coordinates screenshots (visible / full-page / area)
-using `chrome.tabs.captureVisibleTab` + injected page helpers + `OffscreenCanvas`, and owns the recording lifecycle,
-badge, downloads, and `chrome.storage.session` state. Recording happens in an **offscreen document**
+Service worker (`src/background/`) orchestrates everything: it coordinates screenshots (visible / full-page) using
+`chrome.tabs.captureVisibleTab` + injected page helpers + `OffscreenCanvas`, and owns the recording lifecycle,
+badge, downloads, and `chrome.storage.session` state. Recording captures the **current tab** via
+`chrome.tabCapture` in two modes — "Current tab" and "Screen + Cam" — and happens in an **offscreen document**
 (`src/offscreen/`) because a service worker has no DOM and the popup closes on blur — it runs `MediaRecorder` and
-saves **native MP4** (no transcoding). The **popup** (`src/popup/`) is the screensnap UI. Recording controls live on
-the surface that fits: a **recorder window** (`src/recorder-window/`) for screen/window capture, and injected
-overlays (`src/content/`) for everything else — `editor-overlay` (annotation editor), `area-select` (region picker),
-`recorder-control` (tab-recording pill), and `webcam-bubble` (Screen + Cam). When a recording finishes it is stashed
-in IndexedDB and the **video editor** (`src/editor/`) opens in a tab — a WebCodecs-based trim / resolution / speed /
-overlay-layer editor that exports MP4 (or Downloads the clip as-is). All surfaces reflect state live via
-`STATE_CHANGED`.
+saves **native MP4** (no transcoding). The **popup** (`src/popup/`) is the screensnap UI; on-page controls are
+injected overlays (`src/content/`) — `editor-overlay` (annotation editor), `recorder-control` (tab-recording pill
+with countdown / timer / pause / stop), and `webcam-bubble` (draggable Screen + Cam webcam circle). Mic permission
+is granted via a small dedicated window (`src/permission/`), since neither the popup nor the offscreen document can
+prompt. When a recording finishes it is stashed in IndexedDB and the **video editor** (`src/editor/`) opens in a
+tab — a WebCodecs-based trim / resolution / speed / overlay-layer editor that exports MP4 (or Downloads the clip
+as-is). All surfaces reflect state live via `STATE_CHANGED`.
