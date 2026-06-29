@@ -243,14 +243,28 @@ function fmtTime(sec) {
 // original blob. Editing + Export edited MP4 is the separate, value-add path.
 function downloadOriginal() {
   if (!session || !session.blob) return;
+  const name = session.fileName || "recording.mp4";
   const url = URL.createObjectURL(session.blob);
+  // Prefer the downloads API so the browser prompts for a save location (saveAs); fall back to an
+  // anchor click on builds that reject blob: URLs (it saves to the default folder without a prompt).
+  if (chrome && chrome.downloads && chrome.downloads.download) {
+    chrome.downloads.download({ url, filename: `screensnap/${name}`, saveAs: true }, () => {
+      if (chrome.runtime.lastError) anchorDownload(url, name);
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    });
+    return;
+  }
+  anchorDownload(url, name);
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+function anchorDownload(url, name) {
   const a = document.createElement("a");
   a.href = url;
-  a.download = session.fileName || "recording.mp4";
+  a.download = name;
   document.body.appendChild(a);
   a.click();
   a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
 async function togglePlay() {
@@ -293,16 +307,24 @@ function setStatus(el, meta, t, errMsg) {
   el.textContent = `${res} · ${t.speed}x · trim ${trim} · ${audio}`;
 }
 
+// Raster formats only — SVG is excluded deliberately (scriptable XML, and it has no intrinsic
+// pixel size for the bitmap pipeline). `accept` is only a hint, so the type is re-checked on change.
+const ALLOWED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif"];
+
 function pickImageFile() {
   return new Promise((resolve) => {
     const input = document.createElement("input");
     input.type = "file";
-    input.accept = "image/*";
+    input.accept = ALLOWED_IMAGE_TYPES.join(",");
     input.style.display = "none";
     document.body.appendChild(input);
     input.addEventListener("change", () => {
       const f = input.files && input.files[0];
       input.remove();
+      if (f && !ALLOWED_IMAGE_TYPES.includes(f.type)) {
+        alert("Unsupported image type. Please choose a PNG, JPEG, or GIF.");
+        return resolve(null);
+      }
       resolve(f || null);
     });
     window.addEventListener("focus", () => setTimeout(() => { input.remove(); resolve(null); }, 400), { once: true });

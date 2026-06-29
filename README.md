@@ -19,10 +19,13 @@ Built because being nagged to log in just to save a screenshot is miserable.
   stroke weights, undo/redo, copy-to-clipboard
 
 **Screen recording** → **native `.mp4`**
-- **Current Tab** — instant, no picker; a draggable control pill sits on the page
-- **Screen / Window** — Chrome's native picker, driven from a separate **recorder window** so the
-  control isn't baked into the capture
-- **Screen + Cam** — a Loom-style draggable **webcam bubble** on the page, recorded with the tab
+- **Current Tab** — instant, no picker; a Loom-style control bar sits on the page (auto-hidden during capture)
+- **Screen / Window** — Chrome's **native picker** (`getDisplayMedia`, run inside the offscreen document):
+  record a whole monitor or any app window, even outside Chrome
+- **Screen + Cam** — the picker plus your **webcam composited as a corner bubble** (circle/square, size,
+  corner, mirror — all adjustable live), drawn onto a canvas in the offscreen document and recorded as one MP4
+- Screen / Screen+Cam are controlled from the toolbar **REC** badge, the popup, and keyboard shortcuts
+  (no on-page bar off-tab, and no countdown — the picker is the "get ready" beat)
 - **System / tab audio** and/or **microphone** (mixed), **pause / resume**, and a red **REC** badge
 
 ## MP4, natively — no transcoding
@@ -49,9 +52,18 @@ overlays.
 | --- | --- | --- |
 | **Service worker** | `src/background/service-worker.js` | Orchestrates everything: screenshots (`captureVisibleTab` + injected scroll/crop helpers stitched with `OffscreenCanvas`), the recording lifecycle, downloads, badge, and persisted state. |
 | **Popup** | `src/popup/` | The screensnap UI — capture/record tabs, captured card, recording / saving / done. UI + dispatch only. |
-| **Offscreen document** | `src/offscreen/` | Hosts `MediaRecorder` (a service worker has no DOM; the popup closes on blur). Saves native MP4. |
-| **Recorder window** | `src/recorder-window/` | Separate floating window for screen/window recording (picker → live timer + stop). |
-| **On-page overlays** | `src/content/` | Injected via `executeScript`: `editor-overlay` (annotation editor), `area-select` (region picker), `recorder-control` (tab-recording pill), `webcam-bubble` (Screen + Cam). |
+| **Offscreen document** | `src/offscreen/` | Hosts `MediaRecorder` (a service worker has no DOM; the popup closes on blur). Opens the screen picker (`getDisplayMedia`), and for Screen + Cam composites the screen + webcam bubble onto a canvas (driven by `draw-worker.js`). Saves native MP4. |
+| **On-page overlays** | `src/content/` | Injected via `executeScript`: `editor-overlay` (annotation editor), `recorder-control` (the recording control bar: countdown → timer + pause + discard + stop) and `draw-overlay` (auto-fading pen). Re-injected on navigation so controls survive reloads / navigation. The Screen + Cam webcam is **not** an overlay — it's composited into the video in the offscreen document (`draw-worker.js` metronome + canvas), so it works over any screen/window. |
+
+`chrome.tabCapture` records the **entire tab**, and there is no API to exclude an on-page element — so a *visible*
+control would appear in the video. Like Loom, the control bar copies that constraint instead of fighting it: it's
+bottom-left and **collapsed / auto-hidden during recording** (move the pointer to the bottom-left corner to reveal
+it), and global shortcuts (`commands`: stop `Alt+Shift+S`, pause `Alt+Shift+P`) + the toolbar REC badge stop/pause it
+while hidden — so the recording stays clean. (Screen / Screen+Cam capture at the OS level via `getDisplayMedia`, so
+their controls are the badge / popup / shortcuts; the on-page bar there is a best-effort extra on the active tab.)
+Surviving a jump to a **different site** mid-recording needs the optional `<all_urls>` host permission, which the
+popup requests with the user's click when a Current Tab recording starts. The captured media stream keeps running
+across navigations regardless.
 
 State lives in `chrome.storage.session` so it survives the service worker being torn down
 mid-recording. The popup, recorder window, and overlays all reflect it live via `STATE_CHANGED`.
@@ -59,16 +71,24 @@ mid-recording. The popup, recorder window, and overlays all reflect it live via 
 ## Permissions (deliberately minimal)
 
 `activeTab` + `scripting` (only the tab you invoked it on — **no `<all_urls>`, no history scope**),
-`tabCapture`, `desktopCapture`, `offscreen`, `downloads`, `storage`. Screen + Cam requests camera
-access per-site via the standard browser prompt.
+`tabCapture` (record the current tab), `offscreen`, `downloads`, `storage`. Whole-screen / window capture
+uses the standard **`getDisplayMedia()`** Web API from the offscreen document — it needs **no extra
+permission** and shows nothing until you start a Screen / Window recording and pick a source (no background
+screen access). Screen + Cam additionally uses your webcam via standard `getUserMedia` (one-time browser
+prompt) — also no manifest permission.
 
 ## Known limitations
 
 - **Full-page capture** uses `captureVisibleTab` (rate-limited ~2/sec), so long pages take a few
   seconds; lazy-loaded content and complex sticky layouts can still leave seams.
-- **Screen + Cam** records the current tab (the bubble lives in the page); it's not a full-desktop
-  composite. Camera permission is per-site.
-- Internal pages (`chrome://`, the Web Store, etc.) can't be captured — Chrome blocks it.
+- **Screen + Cam** composites the webcam as a fixed corner bubble (pick corner/size/shape/mirror in the
+  popup, adjustable mid-recording) — it isn't a freely-draggable live overlay, because off-tab screen
+  capture has no web page to overlay.
+- **Screen / Window** capture has no on-page overlays when you're off the active browser tab (the camera
+  bubble and pen live in a web page), and on **macOS** system audio isn't captured (no OS loopback) —
+  the mic still records. The native picker / OS prompt governs screen access.
+- Internal pages (`chrome://`, the Web Store, etc.) can't be captured **as a tab** — Chrome blocks it.
+  (You can still capture them via **Screen / Window**, which records at the OS level.)
 
 ## Fonts
 
