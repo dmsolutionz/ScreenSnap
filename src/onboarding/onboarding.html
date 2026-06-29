@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Welcome to screensnap</title>
+    <style>
+      @font-face { font-family: 'Geist'; font-weight: 400; font-display: swap; src: url('../popup/fonts/geist-400.woff2') format('woff2'); }
+      @font-face { font-family: 'Geist'; font-weight: 500; font-display: swap; src: url('../popup/fonts/geist-500.woff2') format('woff2'); }
+      @font-face { font-family: 'Geist'; font-weight: 600; font-display: swap; src: url('../popup/fonts/geist-600.woff2') format('woff2'); }
+      @font-face { font-family: 'Geist Mono'; font-weight: 500; font-display: swap; src: url('../popup/fonts/geist-mono-500.woff2') format('woff2'); }
+      :root { --fg:#18181b; --muted:#6b7280; --line:#e4e6eb; --box:#f7f8fa; --green:#16a34a; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; }
+      body { font-family: 'Geist', system-ui, -apple-system, sans-serif; color: var(--fg); background: #fff;
+        display: flex; align-items: center; justify-content: center; padding: 32px; }
+      .card { width: 100%; max-width: 560px; }
+      .brand { display: flex; align-items: center; gap: 9px; font-size: 20px; font-weight: 600; letter-spacing: -0.01em; }
+      .brand .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--green); box-shadow: 0 0 10px rgba(22,163,74,0.5); }
+      h1 { font-size: 27px; font-weight: 600; letter-spacing: -0.02em; margin: 22px 0 8px; }
+      .lede { font-size: 15px; line-height: 1.6; color: var(--muted); margin: 0 0 26px; }
+      .panel { border: 1px solid var(--line); border-radius: 14px; padding: 20px; background: var(--box); }
+      .panel h2 { font-size: 15px; font-weight: 600; margin: 0 0 6px; }
+      .panel p { font-size: 13.5px; line-height: 1.55; color: var(--muted); margin: 0 0 16px; }
+      .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+      button { font-family: inherit; cursor: pointer; }
+      .primary { background: var(--green); color: #fff; border: none; border-radius: 10px; padding: 11px 18px; font-size: 14px; font-weight: 600; }
+      .primary:hover { background: #15803d; }
+      .primary:disabled { background: #86c9a1; cursor: default; }
+      .ghost { background: #fff; color: var(--fg); border: 1px solid var(--line); border-radius: 10px; padding: 11px 16px; font-size: 13.5px; font-weight: 500; }
+      .ghost:hover { background: #f3f4f6; }
+      #status { font-size: 13px; color: var(--green); font-weight: 500; min-height: 18px; display: none; }
+      .shortcuts { margin-top: 26px; font-size: 13px; color: var(--muted); line-height: 1.8; }
+      kbd { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; background: #f3f4f6; border: 1px solid var(--line); border-radius: 6px; padding: 2px 7px; color: var(--fg); }
+      .foot { margin-top: 28px; font-size: 12px; color: #9aa0ab; line-height: 1.6; }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <div class="brand"><span class="dot"></span> screensnap.</div>
+      <h1>Free screen recording &amp; screenshots — 100% on your machine.</h1>
+      <p class="lede">No account, no watermark, no cloud, no time limit. Everything you capture stays on your device.</p>
+
+      <section class="panel">
+        <h2>Keep the recording controls with you across sites</h2>
+        <p>Recordings show a small control bar (it auto-hides so it stays out of your video). To keep it working when you
+          navigate to a <b>different website</b> mid-recording, screensnap needs permission to run on all sites. It's optional
+          — skip it and we'll ask only if you need it. Either way, nothing is ever sent anywhere.</p>
+        <div class="row">
+          <button class="primary" id="allow">Allow on all sites</button>
+          <button class="ghost" id="later">Maybe later</button>
+          <span id="status">✓ Enabled — you're all set.</span>
+        </div>
+      </section>
+
+      <div class="shortcuts">
+        While recording, stop or pause from anywhere with <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> (stop) and
+        <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> (pause). Move your pointer to the bottom-left corner to reveal the controls.
+      </div>
+
+      <p class="foot">Open source · GPL-3.0 · No telemetry, no analytics, no network calls. You can change site access anytime
+        from the extension's details page.</p>
+    </main>
+    <script type="module" src="onboarding.js"></script>
+  </body>
+</html>

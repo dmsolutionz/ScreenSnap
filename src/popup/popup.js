@@ -84,7 +84,11 @@ function toggle(on, key) {
   return `<div class="tg" data-act="toggle" data-key="${key}" style="width:38px;height:21px;border-radius:11px;background:${on ? C.green : "#d4d4d8"};cursor:pointer;position:relative;flex-shrink:0;transition:background .2s">
     <div style="position:absolute;width:15px;height:15px;border-radius:50%;background:#fff;top:3px;left:${on ? "20px" : "3px"};transition:left .2s;box-shadow:0 1px 3px rgba(0,0,0,0.25)"></div></div>`;
 }
-function camCircle(size, paused) {
+function camCircle(size, paused, hidden) {
+  if (hidden) {
+    return `<div style="width:${size}px;height:${size}px;border-radius:50%;flex-shrink:0;position:relative;overflow:hidden;border:2px solid ${C.boxLine};background:${C.box};display:flex;align-items:center;justify-content:center" title="Camera hidden">
+      <svg width="${Math.round(size * 0.4)}" height="${Math.round(size * 0.4)}" viewBox="0 0 24 24" fill="none" stroke="${C.faint}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 16v2a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2"/><path d="M23 7l-7 5 7 5V7z"/><line x1="1" y1="1" x2="23" y2="23"/></svg></div>`;
+  }
   const overlay = paused
     ? `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.48)">${ico("pause", { sz: Math.round(size * 0.28), c: "rgba(255,255,255,0.75)" })}</div>`
     : `<div style="position:absolute;top:5px;right:5px;width:7px;height:7px;border-radius:50%;background:${C.red};animation:recPulse 1.2s ease-in-out infinite"></div>`;
@@ -113,14 +117,37 @@ function audioRow(icon, label, key) {
   return `<div style="display:flex;align-items:center;gap:11px;margin-bottom:${key === "withSystemAudio" ? "11px" : "0"}">
     ${ico(icon, { sz: 15, c: C.icon })}<span style="flex:1;font-size:14px;color:${C.fg2}">${label}</span>${toggle(!!settings[key], key)}</div>`;
 }
+const sectionLabel = (t) => `<div style="font-family:${MONO};font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:${C.faint};margin-bottom:11px">${t}</div>`;
+// Segmented control bound to a setting key. opts = [[value, label], …]; active = current setting value.
+function segmented(key, opts) {
+  return `<div style="display:flex;gap:6px">${opts
+    .map(([val, label]) => {
+      const on = String(settings[key]) === String(val);
+      return `<button data-act="set" data-key="${key}" data-val="${val}" style="flex:1;padding:7px 0;border-radius:8px;cursor:pointer;font-size:12px;font-weight:500;border:1px solid ${on ? C.greenLine : C.boxLine};background:${on ? C.greenTint : "#fff"};color:${on ? C.green : C.fg2}">${label}</button>`;
+    })
+    .join("")}</div>`;
+}
 function recordTab() {
   return `<div style="padding-top:13px;padding-bottom:5px">
     ${navRow(`data-act="rec" data-src="tab"`, "tab", "Current Tab", "No picker · tab audio", false)}
-    ${navRow(`data-act="rec" data-src="videocircle"`, "video", "Screen + Cam", "Webcam bubble · sys audio", false)}
+    ${navRow(`data-act="rec" data-src="screen"`, "monitor", "Screen / Window", "Whole screen or any app", false)}
+    ${navRow(`data-act="rec" data-src="videocircle"`, "video", "Screen + Cam", "Picker · webcam corner", false)}
     <div style="padding:13px 16px;border-top:1px solid ${C.line};margin-top:5px">
-      <div style="font-family:${MONO};font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:${C.faint};margin-bottom:11px">Audio</div>
+      ${sectionLabel("Audio")}
       ${audioRow("vol", "System audio", "withSystemAudio")}
       ${audioRow("mic", "Microphone", "withMic")}
+    </div>
+    <div style="padding:13px 16px;border-top:1px solid ${C.line}">
+      ${sectionLabel("Countdown")}
+      ${segmented("countdownSec", [[0, "Off"], [3, "3s"], [5, "5s"], [10, "10s"]])}
+    </div>
+    <div style="padding:13px 16px;border-top:1px solid ${C.line}">
+      ${sectionLabel("Camera bubble")}
+      <div style="margin-bottom:8px">${segmented("bubbleShape", [["circle", "● Circle"], ["square", "▢ Square"]])}</div>
+      ${segmented("bubbleSize", [["sm", "Small"], ["md", "Medium"], ["lg", "Large"]])}
+      <div style="display:flex;align-items:center;gap:11px;margin-top:11px">
+        <span style="flex:1;font-size:13px;color:${C.fg2}">Mirror camera</span>${toggle(!!settings.camMirror, "camMirror")}
+      </div>
     </div>
   </div>`;
 }
@@ -139,7 +166,7 @@ function capturedView() {
   </div>`;
 }
 const codecLabel = () => ((rec.mime || "").includes("mp4") ? "MP4 · H.264" : "WebM · VP9");
-const srcName = () => (rec.source === SOURCE.VIDEO_CIRCLE ? "Screen + Cam" : "Current tab");
+const srcName = () => (rec.source === SOURCE.VIDEO_CIRCLE ? "Screen + Cam" : rec.source === SOURCE.SCREEN ? "Screen" : "Current tab");
 function audioChips() {
   const chip = (l) => `<span style="font-family:${MONO};font-size:10px;color:${C.green};background:${C.greenTint};border:1px solid ${C.greenLine};border-radius:5px;padding:3px 8px">${l}</span>`;
   const chips = [];
@@ -165,20 +192,35 @@ function recVideoCircle() {
   const grid = [["tl", "↖"], ["tr", "↗"], ["bl", "↙"], ["br", "↘"]]
     .map(([pos, arrow]) => `<div data-act="bubble-pos" data-pos="${pos}" style="height:30px;border-radius:7px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:5px;background:${bubPos === pos ? C.greenTint : C.box};border:1px solid ${bubPos === pos ? C.greenLine : C.boxLine}"><span style="font-size:12px;color:${C.fg2}">${arrow}</span><div style="width:5px;height:5px;border-radius:50%;background:${bubPos === pos ? C.green : "#cbd0d8"}"></div></div>`)
     .join("");
+  const curSize = settings.bubbleSize || "md";
+  const sizes = [["sm", "S"], ["md", "M"], ["lg", "L"]]
+    .map(([sz, l]) => { const on = curSize === sz; return `<button data-act="bubble-size" data-size="${sz}" style="flex:1;padding:7px 0;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;border:1px solid ${on ? C.greenLine : C.boxLine};background:${on ? C.greenTint : "#fff"};color:${on ? C.green : C.fg2}">${l}</button>`; })
+    .join("");
   return `<div style="padding:18px 16px;display:flex;flex-direction:column;gap:15px">
     <div style="display:flex;align-items:center;gap:14px">
-      ${camCircle(66, rec.paused)}
+      ${camCircle(66, rec.paused, rec.camHidden)}
       <div style="flex:1">
         <div id="timer" style="font-family:${MONO};font-size:34px;font-weight:500;letter-spacing:-0.035em;line-height:1;color:${rec.paused ? C.faint : C.fg}">${clockStr(elapsedMs(rec))}</div>
         <div style="display:flex;align-items:center;gap:6px;margin-top:8px">
-          ${rec.paused ? `<span style="font-family:${MONO};font-size:11px;text-transform:uppercase;letter-spacing:0.09em;color:${C.faint}">Paused</span>` : `${pingDot(7)}<span style="font-family:${MONO};font-size:11px;text-transform:uppercase;letter-spacing:0.09em;color:${C.muted}">Screen + Cam · sys audio</span>`}
+          ${rec.paused ? `<span style="font-family:${MONO};font-size:11px;text-transform:uppercase;letter-spacing:0.09em;color:${C.faint}">Paused</span>` : `${pingDot(7)}<span style="font-family:${MONO};font-size:11px;text-transform:uppercase;letter-spacing:0.09em;color:${C.muted}">${srcName()} · ${codecLabel()}</span>`}
         </div>
+        ${audioChips()}
       </div>
     </div>
-    <div>
-      <div style="font-family:${MONO};font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:${C.faint};margin-bottom:8px">Bubble position</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;width:96px">${grid}</div>
-    </div>
+    ${rec.camIsPip
+      ? `<div style="display:flex;align-items:center;gap:9px;padding:11px 13px;border:1px solid ${C.boxLine};border-radius:10px;background:${C.box}">
+          ${ico("monitor", { sz: 15, c: C.muted })}<span style="font-size:12px;line-height:1.4;color:${C.muted}">Your camera is the floating window — drag &amp; resize it on screen to place it.</span>
+        </div>`
+      : `<div style="display:flex;gap:16px">
+      <div>
+        <div style="font-family:${MONO};font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:${C.faint};margin-bottom:8px">Position</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;width:88px">${grid}</div>
+      </div>
+      <div style="flex:1">
+        <div style="font-family:${MONO};font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:${C.faint};margin-bottom:8px">Size</div>
+        <div style="display:flex;gap:5px">${sizes}</div>
+      </div>
+    </div>`}
     <div style="display:flex;gap:9px">
       <button class="ghost-b" data-act="pause" style="flex:1;padding:11px;background:#fff;border:1px solid ${C.boxLine};border-radius:10px;color:${C.fg};font-size:13px;font-weight:500;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px">${rec.paused ? `${ico("play", { sz: 12, c: C.green })}Resume` : `${ico("pause", { sz: 12, c: "currentColor" })}Pause`}</button>
       <button class="stop-b" data-act="stop" style="flex:1;padding:11px;background:${C.redTint};border:1px solid ${C.redLine};border-radius:10px;color:${C.red};font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px">${ico("stop", { sz: 12, c: C.red })}Stop</button>
@@ -255,7 +297,9 @@ app.addEventListener("click", async (e) => {
   if (act === "stop") return void send({ type: MSG.STOP_RECORDING });
   if (act === "discard") return void send({ type: MSG.CANCEL_RECORDING });
   if (act === "pause") return void send({ type: rec.paused ? MSG.RESUME_RECORDING : MSG.PAUSE_RECORDING });
-  if (act === "bubble-pos") { bubPos = node.dataset.pos; send({ type: "bubble-pos", pos: bubPos }); return render(); }
+  if (act === "set") { const k = node.dataset.key; let v = node.dataset.val; if (v !== "" && !isNaN(v)) v = Number(v); settings = await setSettings({ [k]: v }); return render(); }
+  if (act === "bubble-pos") { bubPos = node.dataset.pos; send({ type: MSG.SET_BUBBLE, pos: bubPos }); return render(); }
+  if (act === "bubble-size") { settings.bubbleSize = node.dataset.size; send({ type: MSG.SET_BUBBLE, size: node.dataset.size }); return render(); }
   if (act === "annotate") { await send({ type: MSG.SHOT_ANNOTATE }); window.close(); return; }
   if (act === "save") { await send({ type: MSG.SHOT_SAVE }); captured = null; localTab = "capture"; return render(); }
   if (act === "copy") return doCopy(node);
@@ -278,8 +322,20 @@ async function doCapture(mode) {
 async function doRecord(src) {
   // Mic permission is handled by the service worker (it opens a dedicated page that can prompt — an
   // extension popup can't reliably prompt, it closes when the prompt steals focus). The on-page
-  // control + countdown also live on the tab now, so the popup can close freely after this.
+  // control + countdown also live on the tab, so the popup can close freely after this.
   const options = { recordSource: src, withMic: !!settings.withMic, withSystemAudio: !!settings.withSystemAudio };
+  // Only Current Tab capture relies on on-page overlays (control bar + pen) that need re-injecting after you
+  // navigate to a *different* website mid-recording — which requires all-sites access. Ask once here (this
+  // click's gesture); declining is fine (overlays then reappear on same-site reloads only, and the keyboard
+  // shortcuts / toolbar still stop the recording everywhere). Granted once, it persists. Screen / Screen+Cam
+  // are driven by Chrome's native picker and controlled from the toolbar / popup / shortcuts — no page access.
+  if (src === SOURCE.TAB) {
+    try {
+      if (!(await chrome.permissions.contains({ origins: ["<all_urls>"] }))) {
+        await chrome.permissions.request({ origins: ["<all_urls>"] });
+      }
+    } catch {}
+  }
   let res;
   try { res = await send({ type: MSG.START_RECORDING, options }); } catch (e) { return flashError(String((e && e.message) || e)); }
   if (res && res.ok === false) return flashError(res.error || "Couldn't start recording");
@@ -319,6 +375,7 @@ function onState(state) {
 
 async function init() {
   settings = await getSettings();
+  bubPos = settings.bubbleCorner || "br";
   chrome.runtime.onMessage.addListener((msg, sender) => { if (sender.id === chrome.runtime.id && msg && msg.type === MSG.STATE_CHANGED) onState(msg.state); });
   try {
     const res = await send({ type: MSG.GET_STATE });

@@ -35,7 +35,7 @@ async function downloadBlob(blob, filename) {
 function downloadViaApi(url, filename) {
   return new Promise((resolve, reject) => {
     if (!(chrome && chrome.downloads && chrome.downloads.download)) return reject(new Error("no downloads api"));
-    chrome.downloads.download({ url, filename, saveAs: false }, (id) => {
+    chrome.downloads.download({ url, filename, saveAs: true }, (id) => {
       const err = chrome.runtime.lastError;
       if (err || id == null) return reject(new Error(err ? err.message : "no download id"));
       const onChanged = (d) => {

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "screensnap.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Free, local, watermark-free screenshots and screen recording. Native MP4, all on your machine — no sign-up, no cloud, no upsell.",
   "minimum_chrome_version": "124",
   "icons": {
@@ -31,5 +31,25 @@
     "offscreen",
     "downloads",
     "storage"
-  ]
+  ],
+  "optional_host_permissions": [
+    "<all_urls>"
+  ],
+  "commands": {
+    "stop-recording": {
+      "suggested_key": { "default": "Alt+Shift+S" },
+      "description": "Stop the screensnap recording"
+    },
+    "pause-recording": {
+      "suggested_key": { "default": "Alt+Shift+P" },
+      "description": "Pause / resume the screensnap recording"
+    },
+    "restart-recording": {
+      "suggested_key": { "default": "Alt+Shift+R" },
+      "description": "Restart the screensnap recording (discard and re-record)"
+    },
+    "cancel-recording": {
+      "description": "Discard the screensnap recording (no save)"
+    }
+  }
 }
