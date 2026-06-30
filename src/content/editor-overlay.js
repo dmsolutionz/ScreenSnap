@@ -304,9 +304,14 @@
       // Tall full-page shots fit to WIDTH and scroll vertically (so they stay readable, not tiny);
       // normal/area shots are contained so they fit without scrolling.
       const tall = ch > cw * 2.2;
-      const scale = tall
+      let scale = tall
         ? Math.min((rect.width - pad) / cw, 1)
         : Math.min((rect.width - pad) / cw, (rect.height - pad) / ch, 1);
+      // Cropping must NOT magnify the content beyond how the full image was shown — otherwise cropping
+      // a downscaled screenshot suddenly zooms in. Cap at the uncropped image's fit scale so a crop
+      // keeps the same magnification (it just reframes).
+      const baseFit = Math.min((rect.width - pad) / this.iw, (rect.height - pad) / this.ih, 1);
+      scale = Math.min(scale, baseFit);
       this.scale = scale;
       this.canvas.style.width = Math.round(cw * scale) + "px";
       this.canvas.style.height = Math.round(ch * scale) + "px";
