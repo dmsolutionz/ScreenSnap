@@ -6,6 +6,7 @@
 // store change.
 import { newShapeLayer } from "./layers-model.js";
 import { hit, translate } from "./shapes.js";
+import { cropRect } from "./transforms.js";
 
 // { canvas, store, getTool, getColor, getTransforms }
 export function createAnnotator({ canvas, store, getTool, getColor, getTransforms }) {
@@ -24,28 +25,39 @@ export function createAnnotator({ canvas, store, getTool, getColor, getTransform
   let srcW = 0;
   let srcH = 0;
 
-  // Refresh the latched source dims when we can trust the canvas to be source-sized (Original res).
+  // Refresh the latched source dims when we can trust the canvas to be source-sized: Original res AND
+  // no crop. (Boot seeks at default transforms — no outScale, no crop — so this latches the true full
+  // source dims once before any crop/downscale is applied.) When a crop is active the canvas is sized
+  // to the crop, so we must NOT re-latch from it.
   function syncSrcDims() {
     const t = getTransforms ? getTransforms() : null;
     const downscaled = !!(t && t.outScale && t.outScale.maxHeight);
-    if (!downscaled && canvas.width > 0 && canvas.height > 0) {
+    const cropped = !!(t && t.crop);
+    if (!downscaled && !cropped && canvas.width > 0 && canvas.height > 0) {
       srcW = canvas.width;
       srcH = canvas.height;
     }
   }
 
-  // Map a pointer event to SOURCE-pixel coordinates. The source→output downscale is uniform and
-  // aspect-preserving (see outputDims), so the pointer's fraction across the displayed canvas equals
-  // the same fraction across the source frame: srcX = fractionX * srcW (independent of the chosen
-  // output resolution). Falls back to canvas.width/height only if source dims aren't latched yet.
+  // The base composition rect in SOURCE px that the displayed (un-zoomed) canvas represents — the crop
+  // rect, or the full frame when there is no crop. Annotations are placed relative to this so they pin
+  // to the cropped content (the compositor then maps them through crop+zoom like the base frame).
+  function baseRect() {
+    const t = getTransforms ? getTransforms() : null;
+    return cropRect(t, srcW || canvas.width || 1, srcH || canvas.height || 1);
+  }
+
+  // Map a pointer event to SOURCE-pixel coordinates. The source→output scale is uniform and aspect-
+  // preserving (see outputDims), so the pointer's fraction across the displayed canvas equals the same
+  // fraction across the base (crop) rect: srcX = cropX + fractionX * cropW — independent of the chosen
+  // output resolution. Without a crop this collapses to fractionX * srcW (the prior behavior).
   function toImg(e) {
     syncSrcDims();
     const r = canvas.getBoundingClientRect();
-    const w = srcW || canvas.width || r.width || 1;
-    const h = srcH || canvas.height || r.height || 1;
+    const br = baseRect();
     return {
-      x: ((e.clientX - r.left) / (r.width || 1)) * w,
-      y: ((e.clientY - r.top) / (r.height || 1)) * h,
+      x: br.x + ((e.clientX - r.left) / (r.width || 1)) * br.w,
+      y: br.y + ((e.clientY - r.top) / (r.height || 1)) * br.h,
     };
   }
   // Stroke weight + hit tolerance scale with the SOURCE resolution, mirroring preview.js's `unit`,
@@ -75,14 +87,16 @@ export function createAnnotator({ canvas, store, getTool, getColor, getTransform
     // size is stored in SOURCE px (compositor scales it by outW/srcW), so base it on source width.
     const size = Math.max(18, srcWidth() / 30);
     const r = canvas.getBoundingClientRect();
-    const sc = r.width / (srcWidth() || 1); // source px -> display px
+    const br = baseRect();
+    const sc = r.width / (br.w || 1);  // source px -> display px (x)
+    const scY = r.height / (br.h || 1); // source px -> display px (y)
     const input = document.createElement("input");
     input.type = "text";
     input.style.cssText =
       "position:fixed;z-index:2147483647;margin:0;padding:0;border:0;outline:0;background:transparent;" +
       `font:600 ${size * sc}px 'Geist',system-ui,-apple-system,'Segoe UI',sans-serif;line-height:1;`;
-    input.style.left = r.left + p.x * sc + "px";
-    input.style.top = r.top + p.y * sc + "px";
+    input.style.left = r.left + (p.x - br.x) * sc + "px";
+    input.style.top = r.top + (p.y - br.y) * scY + "px";
     input.style.color = c;
     document.body.appendChild(input);
     setTimeout(() => input.focus(), 0);
@@ -103,6 +117,7 @@ export function createAnnotator({ canvas, store, getTool, getColor, getTransform
   function down(e) {
     if (editingText) return;
     const t = (getTool && getTool()) || tool;
+    if (t === "zoom") return; // zoom isn't an annotation — the editor handles zoom clicks itself
     const p = toImg(e);
     if (t === "select") {
       canvas.setPointerCapture?.(e.pointerId);

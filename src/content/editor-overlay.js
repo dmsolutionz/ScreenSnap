@@ -18,6 +18,7 @@
     pencil: '<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/>',
     arrow: '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
     rect: '<rect x="3" y="5" width="18" height="14" rx="2"/>',
+    crop: '<path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/>',
     type: '<polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/>',
     highlight: '<path d="m9 11-6 6v3h9l3-3"/><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/>',
     blur: '<rect x="2" y="3" width="20" height="18" rx="2"/><line x1="2" y1="9" x2="22" y2="9"/><line x1="2" y1="15" x2="22" y2="15"/><line x1="8" y1="3" x2="8" y2="21"/><line x1="14" y1="3" x2="14" y2="21"/>',
@@ -40,6 +41,7 @@
     ["highlight", "highlight", "Highlight"],
     ["blur", "blur", "Blur / Redact"],
     ["eraser", "eraser", "Eraser"],
+    ["crop", "crop", "Crop"],
   ];
   const COLORS = ["#ef4444", "#f59e0b", "#22c55e", "#3b82f6", "#111111"];
   const WEIGHTS = [["sm", 2], ["md", 3.5], ["lg", 6]];
@@ -62,6 +64,8 @@
       this.selected = null;
       this.drag = null;
       this.editingText = false;
+      this.crop = null;        // applied, non-destructive crop region in source-image coords {x,y,w,h}
+      this.pendingCrop = null; // unconfirmed crop rect {x,y,w,h} awaiting Apply/Cancel
       this.unit = Math.max(1, this.iw / 900);
       this.buildBlur();
       this.buildDOM();
@@ -119,6 +123,16 @@
           canvas { display: inline-block; vertical-align: top; box-shadow: 0 4px 24px rgba(0,0,0,0.12); background: #fff; }
           .txtin { position: absolute; background: transparent; border: 1px dashed ${GREEN}; outline: none;
             padding: 0 2px; margin: 0; font-family: ${SANS}; font-weight: 600; line-height: 1.1; }
+          .cropbar { position: absolute; display: none; gap: 6px; z-index: 5; padding: 5px;
+            background: #1b1d21; border: 1px solid #2c2f36; border-radius: 10px;
+            box-shadow: 0 6px 22px rgba(0,0,0,0.28); }
+          .cropbar.show { display: flex; }
+          .cropbar button { display: flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 7px;
+            font-size: 13px; font-weight: 500; color: #e7e8ea; }
+          .cropbar .ok { background: ${GREEN}; color: #fff; }
+          .cropbar .ok:hover { background: #15803d; }
+          .cropbar .no { background: #2a2d33; }
+          .cropbar .no:hover { background: #34373e; }
           .status { height: 38px; flex: 0 0 auto; background: #f7f7f9; border-top: 1px solid #e6e7eb;
             display: flex; align-items: center; padding: 0 16px; gap: 11px; font-family: ${MONO}; font-size: 11px;
             color: #6b7280; text-transform: uppercase; letter-spacing: 0.06em; }
@@ -136,7 +150,7 @@
           </div>
           <div class="body">
             <div class="palette" id="palette"></div>
-            <div class="stage" id="stage"><canvas id="cv"></canvas></div>
+            <div class="stage" id="stage"><canvas id="cv"></canvas><div class="cropbar" id="cropbar"><button class="ok" id="cropOk">${ico("crop", "#fff", 14)}Apply crop</button><button class="no" id="cropNo">${ico("x", "#e7e8ea", 14)}Cancel</button></div></div>
           </div>
           <div class="status">
             <span class="dotc" id="st-dot"></span>
@@ -173,9 +187,17 @@
       root.getElementById("copy").onclick = () => this.copy();
       root.getElementById("save").onclick = () => this.save();
       root.getElementById("close").onclick = () => this.destroy(true);
+      this.cropbar = root.getElementById("cropbar");
+      root.getElementById("cropOk").onclick = () => this.applyCrop();
+      root.getElementById("cropNo").onclick = () => this.cancelCrop();
 
       this.onKey = (e) => {
         if (this.editingText) return; // let the text input handle its own keys
+        // A pending crop captures Enter (apply) / Escape (cancel) before global handlers.
+        if (this.pendingCrop) {
+          if (e.key === "Enter") { e.preventDefault(); return this.applyCrop(); }
+          if (e.key === "Escape") { e.preventDefault(); return this.cancelCrop(); }
+        }
         if (e.key === "Escape") { e.preventDefault(); this.destroy(true); }
         else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? this.redo() : this.undo(); }
         else if ((e.key === "Delete" || e.key === "Backspace") && this.selected != null) { e.preventDefault(); this.deleteSelected(); }
@@ -188,6 +210,8 @@
     }
 
     setTool(t) {
+      // Switching tools abandons any un-applied crop selection.
+      if (t !== "crop") { this.pendingCrop = null; this.clearCropUI(); }
       this.tool = t;
       if (t !== "select") this.selected = null;
       for (const b of this.root.querySelectorAll("[data-tool]")) {
@@ -209,22 +233,34 @@
       r.getElementById("st-color").textContent = this.color;
     }
 
+    // Effective drawing surface (the applied crop, or the full image when uncropped).
+    curW() { return this.crop ? this.crop.w : this.iw; }
+    curH() { return this.crop ? this.crop.h : this.ih; }
+    cropOx() { return this.crop ? this.crop.x : 0; }
+    cropOy() { return this.crop ? this.crop.y : 0; }
+
     fit() {
       const rect = this.stage.getBoundingClientRect();
       const pad = 48;
+      const cw = this.curW(), ch = this.curH();
       // Tall full-page shots fit to WIDTH and scroll vertically (so they stay readable, not tiny);
       // normal/area shots are contained so they fit without scrolling.
-      const tall = this.ih > this.iw * 2.2;
+      const tall = ch > cw * 2.2;
       const scale = tall
-        ? Math.min((rect.width - pad) / this.iw, 1)
-        : Math.min((rect.width - pad) / this.iw, (rect.height - pad) / this.ih, 1);
+        ? Math.min((rect.width - pad) / cw, 1)
+        : Math.min((rect.width - pad) / cw, (rect.height - pad) / ch, 1);
       this.scale = scale;
-      this.canvas.style.width = Math.round(this.iw * scale) + "px";
-      this.canvas.style.height = Math.round(this.ih * scale) + "px";
+      this.canvas.style.width = Math.round(cw * scale) + "px";
+      this.canvas.style.height = Math.round(ch * scale) + "px";
     }
     toImg(e) {
+      // Map pointer → cropped-canvas pixels, then offset back into full source-image coords
+      // so shapes are always stored in the original image's coordinate space.
       const r = this.canvas.getBoundingClientRect();
-      return { x: ((e.clientX - r.left) / r.width) * this.iw, y: ((e.clientY - r.top) / r.height) * this.ih };
+      return {
+        x: ((e.clientX - r.left) / r.width) * this.curW() + this.cropOx(),
+        y: ((e.clientY - r.top) / r.height) * this.curH() + this.cropOy(),
+      };
     }
 
     down(e) {
@@ -238,6 +274,14 @@
       }
       if (this.tool === "text") return this.placeText(p, e);
       if (this.tool === "eraser") return this.erase(p);
+      if (this.tool === "crop") {
+        // Starting a fresh crop drag discards any not-yet-applied selection.
+        this.pendingCrop = null;
+        this.clearCropUI();
+        this.selected = null;
+        this.drag = { tool: "crop", x1: p.x, y1: p.y, x2: p.x, y2: p.y };
+        return;
+      }
       const w = this.weightPx();
       this.selected = null;
       if (this.tool === "pencil" || this.tool === "highlight") this.drag = { tool: this.tool, color: this.color, width: w, points: [p] };
@@ -255,12 +299,70 @@
     }
     up() {
       if (!this.drag) return;
+      if (this.drag.tool === "crop") {
+        const rect = this.cropRect(this.drag);
+        this.drag = null;
+        // Too-small drags are ignored (no pending crop, no UI).
+        if (rect && rect.w >= 8 && rect.h >= 8) { this.pendingCrop = rect; this.showCropUI(); }
+        else { this.pendingCrop = null; this.clearCropUI(); }
+        return this.render();
+      }
       if (!this.drag.move) {
         const s = this.toShape(this.drag);
         if (s) { this.pushHistory(); this.shapes.push(s); this.selected = null; }
       }
       this.drag = null;
       this.redoStack = [];
+      this.render();
+    }
+
+    // Normalize a crop drag into {x,y,w,h}, clamped to the source image bounds.
+    cropRect(d) {
+      let x = Math.min(d.x1, d.x2), y = Math.min(d.y1, d.y2);
+      let w = Math.abs(d.x2 - d.x1), h = Math.abs(d.y2 - d.y1);
+      x = Math.max(0, Math.min(x, this.iw)); y = Math.max(0, Math.min(y, this.ih));
+      w = Math.min(w, this.iw - x); h = Math.min(h, this.ih - y);
+      return { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) };
+    }
+
+    showCropUI() { this.cropbar.classList.add("show"); this.positionCropUI(); }
+    clearCropUI() { if (this.cropbar) this.cropbar.classList.remove("show"); }
+    // Float the Apply/Cancel bar just below the selection's bottom-right (in stage coords),
+    // clamped so it never spills outside the visible canvas.
+    positionCropUI() {
+      const c = this.pendingCrop; if (!c || !this.cropbar) return;
+      const sc = this.scale, ox = this.cropOx(), oy = this.cropOy();
+      const left0 = this.canvas.offsetLeft, top0 = this.canvas.offsetTop;
+      const selRight = left0 + (c.x - ox + c.w) * sc;
+      const selBottom = top0 + (c.y - oy + c.h) * sc;
+      const barW = this.cropbar.offsetWidth || 200, barH = this.cropbar.offsetHeight || 36;
+      let bx = selRight - barW, by = selBottom + 8 * this.unit * sc;
+      // If it would fall below the canvas, tuck it inside the bottom of the selection instead.
+      const canvasBottom = top0 + this.curH() * sc;
+      if (by + barH > canvasBottom) by = selBottom - barH - 8;
+      bx = Math.max(left0 + 4, Math.min(bx, left0 + this.curW() * sc - barW - 4));
+      this.cropbar.style.left = Math.round(bx) + "px";
+      this.cropbar.style.top = Math.round(by) + "px";
+    }
+
+    // Apply the pending crop non-destructively: it becomes (or replaces) this.crop, which
+    // render()/save() honor. Pushed to history so undo restores the prior crop + shapes.
+    applyCrop() {
+      const c = this.pendingCrop; if (!c) return;
+      this.pushHistory();
+      // pendingCrop is already in absolute source-image coords (toImg adds the current crop
+      // origin), so a re-crop of an already-cropped view composes correctly with no extra math.
+      this.crop = { x: c.x, y: c.y, w: c.w, h: c.h };
+      this.pendingCrop = null;
+      this.clearCropUI();
+      this.redoStack = [];
+      this.selected = null;
+      this.render();
+      this.updateStatus();
+    }
+    cancelCrop() {
+      this.pendingCrop = null;
+      this.clearCropUI();
       this.render();
     }
 
@@ -298,9 +400,10 @@
       const sc = this.scale;
       const input = document.createElement("input");
       input.className = "txtin";
-      // position relative to the canvas within the (scrollable) stage — offset coords scroll with content
-      input.style.left = this.canvas.offsetLeft + p.x * sc + "px";
-      input.style.top = this.canvas.offsetTop + p.y * sc + "px";
+      // position relative to the canvas within the (scrollable) stage — offset coords scroll with content.
+      // p is in source-image space; subtract the crop origin to land in displayed-canvas space.
+      input.style.left = this.canvas.offsetLeft + (p.x - this.cropOx()) * sc + "px";
+      input.style.top = this.canvas.offsetTop + (p.y - this.cropOy()) * sc + "px";
       input.style.color = this.color;
       input.style.fontSize = size * sc + "px";
       this.stage.appendChild(input);
@@ -322,12 +425,50 @@
     render() {
       this.fit();
       const ctx = this.ctx;
-      this.canvas.width = this.iw;
-      this.canvas.height = this.ih;
+      // Canvas is sized to the effective (cropped) region; translating by the crop origin
+      // lets every shape keep its original source-image coordinates.
+      this.canvas.width = this.curW();
+      this.canvas.height = this.curH();
+      ctx.save();
+      ctx.translate(-this.cropOx(), -this.cropOy());
       ctx.drawImage(this.img, 0, 0);
       for (const s of this.shapes) drawShape(ctx, s, this.unit, this.blurCanvas);
-      if (this.drag && !this.drag.move) { const s = this.toShape(this.drag); if (s) drawShape(ctx, s, this.unit, this.blurCanvas); }
+      if (this.drag && !this.drag.move && this.drag.tool !== "crop") { const s = this.toShape(this.drag); if (s) drawShape(ctx, s, this.unit, this.blurCanvas); }
       if (this.selected != null && this.shapes[this.selected]) this.drawSelection(this.shapes[this.selected]);
+      // Live crop affordance: the in-progress drag rect, or the pending (awaiting-apply) rect.
+      const live = this.drag && this.drag.tool === "crop" ? this.cropRect(this.drag) : this.pendingCrop;
+      if (live && live.w > 0 && live.h > 0) this.drawCropOverlay(ctx, live);
+      ctx.restore();
+      // Keep the floating Apply/Cancel buttons glued to the selection as it (or the view) changes.
+      if (this.pendingCrop) this.positionCropUI();
+    }
+
+    // Dim everything outside the crop rect and draw a crisp border + rule-of-thirds guides.
+    // Drawn in source-image space (the ctx is already translated by the crop origin).
+    drawCropOverlay(ctx, c) {
+      const W = this.iw, H = this.ih, u = this.unit;
+      ctx.save();
+      ctx.fillStyle = "rgba(0,0,0,0.5)";
+      // four bands around the selection
+      ctx.fillRect(0, 0, W, c.y);                         // top
+      ctx.fillRect(0, c.y + c.h, W, H - (c.y + c.h));     // bottom
+      ctx.fillRect(0, c.y, c.x, c.h);                     // left
+      ctx.fillRect(c.x + c.w, c.y, W - (c.x + c.w), c.h); // right
+      // rule-of-thirds guides
+      ctx.strokeStyle = "rgba(255,255,255,0.45)";
+      ctx.lineWidth = Math.max(1, u * 0.75);
+      ctx.beginPath();
+      for (let i = 1; i < 3; i++) {
+        const gx = c.x + (c.w * i) / 3, gy = c.y + (c.h * i) / 3;
+        ctx.moveTo(gx, c.y); ctx.lineTo(gx, c.y + c.h);
+        ctx.moveTo(c.x, gy); ctx.lineTo(c.x + c.w, gy);
+      }
+      ctx.stroke();
+      // crisp 1px-ish border
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = Math.max(1, u);
+      ctx.strokeRect(c.x, c.y, c.w, c.h);
+      ctx.restore();
     }
     drawSelection(s) {
       const b = bbox(s, this.ctx);
@@ -341,19 +482,25 @@
       ctx.restore();
     }
 
-    snapshot() { return JSON.stringify(this.shapes); }
+    // History captures shapes + the applied crop together, so undo/redo restores the crop too.
+    snapshot() { return JSON.stringify({ shapes: this.shapes, crop: this.crop }); }
+    restore(json) { const s = JSON.parse(json); this.shapes = s.shapes; this.crop = s.crop || null; }
     pushHistory() { this.undoStack.push(this.snapshot()); if (this.undoStack.length > 80) this.undoStack.shift(); }
-    undo() { if (!this.undoStack.length) return; this.redoStack.push(this.snapshot()); this.shapes = JSON.parse(this.undoStack.pop()); this.selected = null; this.render(); }
-    redo() { if (!this.redoStack.length) return; this.undoStack.push(this.snapshot()); this.shapes = JSON.parse(this.redoStack.pop()); this.selected = null; this.render(); }
+    undo() { if (!this.undoStack.length) return; this.redoStack.push(this.snapshot()); this.restore(this.undoStack.pop()); this.selected = null; this.pendingCrop = null; this.clearCropUI(); this.render(); }
+    redo() { if (!this.redoStack.length) return; this.undoStack.push(this.snapshot()); this.restore(this.redoStack.pop()); this.selected = null; this.pendingCrop = null; this.clearCropUI(); this.render(); }
 
     async copy() {
       try {
+        // Drop any un-applied crop overlay so it isn't baked into the exported pixels.
+        this.pendingCrop = null; this.clearCropUI(); this.selected = null; this.render();
         const blob = await new Promise((r) => this.canvas.toBlob(r, "image/png"));
         await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
         this.flash("copy", "Copied ✓");
       } catch { this.flash("copy", "Blocked"); }
     }
     save() {
+      // Drop any un-applied crop overlay so the dim/guides aren't baked into the PNG.
+      this.pendingCrop = null; this.clearCropUI();
       this.selected = null;
       this.render();
       const dataUrl = this.canvas.toDataURL("image/png");

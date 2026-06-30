@@ -1,5 +1,8 @@
-// Timeline: a horizontal bar with draggable trim-in / trim-out handles and a playhead. Clicking the
-// track seeks; dragging a handle reports the new trim window. Pure DOM, no canvas.
+// Timeline: a horizontal bar with draggable trim-in / trim-out handles, a playhead, removable CUT
+// bands (the removed sub-intervals that make multi-segment trim), and small ZOOM keyframe marks.
+// Clicking the track seeks; dragging a handle reports the new trim window. In "cut mode" dragging the
+// track paints a new removed region instead of seeking. Cuts and zoom marks are read from getters the
+// controller owns, so the timeline only renders + reports edits. Pure DOM, no canvas.
 
 function fmt(sec) {
   const s = Math.max(0, Math.floor(sec));
@@ -7,18 +10,22 @@ function fmt(sec) {
   return `${String(m).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 }
 
-// { el, durationSec, onTrimChange, onSeek }
-export function createTimeline({ el, durationSec, onTrimChange, onSeek }) {
+// { el, durationSec, onTrimChange, onSeek, onAddCut, onRemoveCut, getCuts, getZoom }
+export function createTimeline({ el, durationSec, onTrimChange, onSeek, onAddCut, onRemoveCut, getCuts, getZoom }) {
   const dur = Math.max(0.001, durationSec || 0);
   let inSec = 0;
   let outSec = dur;
   let playSec = 0;
+  let cutMode = false;
+  let pendingCut = null; // { in, out } while dragging a new cut
 
   el.innerHTML = `
     <div class="ss-tl">
       <div class="ss-tl-times"><span class="ss-tl-in">00:00</span><span class="ss-tl-play">00:00</span><span class="ss-tl-out">${fmt(dur)}</span></div>
       <div class="ss-tl-track" id="ss-tl-track">
         <div class="ss-tl-trim" id="ss-tl-trim"></div>
+        <div class="ss-tl-cuts" id="ss-tl-cuts"></div>
+        <div class="ss-tl-zooms" id="ss-tl-zooms"></div>
         <div class="ss-tl-handle ss-tl-handle-in" id="ss-tl-in" title="Trim start"></div>
         <div class="ss-tl-handle ss-tl-handle-out" id="ss-tl-out" title="Trim end"></div>
         <div class="ss-tl-playhead" id="ss-tl-playhead"></div>
@@ -27,6 +34,8 @@ export function createTimeline({ el, durationSec, onTrimChange, onSeek }) {
 
   const track = el.querySelector("#ss-tl-track");
   const trimEl = el.querySelector("#ss-tl-trim");
+  const cutsEl = el.querySelector("#ss-tl-cuts");
+  const zoomsEl = el.querySelector("#ss-tl-zooms");
   const inEl = el.querySelector("#ss-tl-in");
   const outEl = el.querySelector("#ss-tl-out");
   const playEl = el.querySelector("#ss-tl-playhead");
@@ -35,6 +44,44 @@ export function createTimeline({ el, durationSec, onTrimChange, onSeek }) {
   const playLbl = el.querySelector(".ss-tl-play");
 
   const pct = (sec) => `${(sec / dur) * 100}%`;
+
+  function renderCuts() {
+    const cuts = (getCuts && getCuts()) || [];
+    cutsEl.textContent = "";
+    const all = pendingCut ? cuts.concat([pendingCut]) : cuts;
+    all.forEach((c, i) => {
+      const isPending = pendingCut && i === all.length - 1 && all.length > cuts.length;
+      const band = document.createElement("div");
+      band.className = "ss-tl-cut" + (isPending ? " ss-tl-cut-pending" : "");
+      const lo = Math.max(0, Math.min(c.in, c.out));
+      const hi = Math.min(dur, Math.max(c.in, c.out));
+      band.style.left = pct(lo);
+      band.style.width = `${((hi - lo) / dur) * 100}%`;
+      if (!isPending) {
+        const x = document.createElement("button");
+        x.className = "ss-tl-cut-x";
+        x.textContent = "×";
+        x.title = "Remove cut";
+        x.addEventListener("pointerdown", (e) => { e.stopPropagation(); e.preventDefault(); });
+        x.addEventListener("click", (e) => { e.stopPropagation(); if (onRemoveCut) onRemoveCut(i); });
+        band.appendChild(x);
+      }
+      cutsEl.appendChild(band);
+    });
+  }
+
+  function renderZooms() {
+    const kfs = (getZoom && getZoom()) || [];
+    zoomsEl.textContent = "";
+    for (const k of kfs) {
+      const m = document.createElement("div");
+      m.className = "ss-tl-zoom" + (k.scale > 1.01 ? " ss-tl-zoom-in" : "");
+      m.style.left = pct(Math.max(0, Math.min(dur, k.t)));
+      m.title = `Zoom ${k.scale > 1.01 ? k.scale.toFixed(1) + "x" : "out"} @ ${fmt(k.t)}`;
+      zoomsEl.appendChild(m);
+    }
+  }
+
   function paint() {
     inEl.style.left = pct(inSec);
     outEl.style.left = pct(outSec);
@@ -44,6 +91,8 @@ export function createTimeline({ el, durationSec, onTrimChange, onSeek }) {
     inLbl.textContent = fmt(inSec);
     outLbl.textContent = fmt(outSec);
     playLbl.textContent = fmt(playSec);
+    renderCuts();
+    renderZooms();
   }
 
   function secAt(clientX) {
@@ -55,7 +104,8 @@ export function createTimeline({ el, durationSec, onTrimChange, onSeek }) {
   // Keep at least a small gap so trimIn stays strictly below trimOut within [0, dur].
   const MIN_GAP = Math.min(0.05, dur);
 
-  let dragging = null; // 'in' | 'out' | 'scrub' | null
+  let dragging = null; // 'in' | 'out' | 'scrub' | 'cut' | null
+  let cutAnchor = 0;
 
   function applyDrag(clientX) {
     const sec = secAt(clientX);
@@ -68,6 +118,8 @@ export function createTimeline({ el, durationSec, onTrimChange, onSeek }) {
     } else if (dragging === "scrub") {
       playSec = sec;
       if (onSeek) onSeek(sec);
+    } else if (dragging === "cut") {
+      pendingCut = { in: Math.min(cutAnchor, sec), out: Math.max(cutAnchor, sec) };
     }
     paint();
   }
@@ -84,13 +136,20 @@ export function createTimeline({ el, durationSec, onTrimChange, onSeek }) {
   inEl.addEventListener("pointerdown", handleDown("in"));
   outEl.addEventListener("pointerdown", handleDown("out"));
 
-  // Clicking / scrubbing anywhere on the track (or the shaded trim region, which bubbles up) seeks.
+  // Track pointerdown: paint a cut in cut mode, otherwise scrub/seek.
   track.addEventListener("pointerdown", (e) => {
     if (dragging) return;
     e.preventDefault();
-    dragging = "scrub";
     track.setPointerCapture?.(e.pointerId);
-    applyDrag(e.clientX);
+    if (cutMode) {
+      dragging = "cut";
+      cutAnchor = secAt(e.clientX);
+      pendingCut = { in: cutAnchor, out: cutAnchor };
+      paint();
+    } else {
+      dragging = "scrub";
+      applyDrag(e.clientX);
+    }
   });
 
   function onMove(e) {
@@ -104,7 +163,13 @@ export function createTimeline({ el, durationSec, onTrimChange, onSeek }) {
   const endDrag = (e) => {
     if (!dragging) return;
     e.currentTarget?.releasePointerCapture?.(e.pointerId);
+    if (dragging === "cut" && pendingCut) {
+      const c = pendingCut;
+      pendingCut = null;
+      if (c.out - c.in > 0.08 && onAddCut) onAddCut(c.in, c.out);
+    }
     dragging = null;
+    paint();
   };
   inEl.addEventListener("pointerup", endDrag);
   outEl.addEventListener("pointerup", endDrag);
@@ -126,6 +191,9 @@ export function createTimeline({ el, durationSec, onTrimChange, onSeek }) {
       outSec = hi;
       paint();
     },
+    setCutMode(on) { cutMode = !!on; track.classList.toggle("ss-tl-cutmode", cutMode); },
+    isCutMode: () => cutMode,
+    refresh() { paint(); },
     destroy() { el.innerHTML = ""; },
   };
 }

@@ -1,11 +1,18 @@
-// Pure transform math: trim / resolution / speed. No DOM, no Mediabunny. The pipeline drives every
-// per-frame decision through these so the export stays a thin loop. v1 is identity/passthrough but
-// the maths is already correct for trim, scale, and speed remapping. Every fn is pure and total:
-// divides guard against zero/NaN speed, and trim is clamped within [0, duration].
+// Pure transform math: trim / resolution / speed / crop / zoom. No DOM, no Mediabunny. The pipeline
+// drives every per-frame decision through these so the export stays a thin loop. Every fn is pure and
+// total: divides guard against zero/NaN speed, trim is clamped within [0, duration], and crop/zoom
+// rects are clamped to source bounds.
+//
+// Time model: trimIn/trimOut are the outer kept window; `cuts` are removed sub-intervals inside it
+// (source seconds), so the kept output is a list of SEGMENTS (trim minus cuts). Multi-segment is
+// back-compatible — with no cuts there is exactly one segment [trimIn, trimOut] and every fn behaves
+// as it did before. crop is a fixed source sub-rect; zoom is a keyframed magnification WITHIN the
+// crop (or full frame). crop + zoom both resolve to a single source rect per frame via
+// effectiveSrcRect(), which the compositor draws to the whole output canvas.
 
 export function defaultTransforms(meta) {
   const dur = Math.max(0, (meta && meta.durationSec) || 0);
-  return { trimIn: 0, trimOut: dur, outScale: null, speed: 1 };
+  return { trimIn: 0, trimOut: dur, cuts: [], outScale: null, speed: 1, crop: null, zoom: [] };
 }
 
 // Round a value to the nearest EVEN integer (>= 2). H.264 chroma subsampling requires even dims.
@@ -16,22 +23,62 @@ function toEven(n) {
   return v;
 }
 
+function clamp(v, lo, hi) {
+  return v < lo ? lo : v > hi ? hi : v;
+}
+
 // outScale null => source dims unchanged. {maxHeight} => scale down to fit that height (never up),
-// preserving aspect. Both dims forced to nearest even int (H.264 needs even dimensions).
-export function outputDims(srcW, srcH, outScale) {
-  let w = srcW;
-  let h = srcH;
-  if (outScale && outScale.maxHeight && srcH > outScale.maxHeight) {
-    const scale = outScale.maxHeight / srcH;
+// preserving aspect. crop (optional {x,y,w,h} source px) sets the BASE dimensions before scaling, so
+// a cropped export is sized to the crop, not the source. Both dims forced to nearest even int.
+export function outputDims(srcW, srcH, outScale, crop) {
+  let w = crop && crop.w ? crop.w : srcW;
+  let h = crop && crop.h ? crop.h : srcH;
+  if (outScale && outScale.maxHeight && h > outScale.maxHeight) {
+    const scale = outScale.maxHeight / h;
     h = outScale.maxHeight;
-    w = srcW * scale;
+    w = w * scale;
   }
   return { w: toEven(w), h: toEven(h) };
 }
 
-// trimIn <= srcSec < trimOut. speed-independent: trim is in source time.
-export function keepFrame(srcSec, t) {
-  return srcSec >= t.trimIn && srcSec < t.trimOut;
+// The crop rect as a complete, clamped {x,y,w,h} in source pixels (full frame when crop is null).
+export function cropRect(t, srcW, srcH) {
+  const c = t && t.crop;
+  if (!c) return { x: 0, y: 0, w: srcW, h: srcH };
+  const w = clamp(c.w, 2, srcW);
+  const h = clamp(c.h, 2, srcH);
+  const x = clamp(c.x, 0, srcW - w);
+  const y = clamp(c.y, 0, srcH - h);
+  return { x, y, w, h };
+}
+
+// ── Segments (trim minus cuts) ──────────────────────────────────────────────────────────────────
+// Normalize cuts and subtract them from [trimIn, trimOut] to get the ordered list of kept segments.
+// Each segment is {in, out} in SOURCE seconds. Always returns at least one segment.
+export function segmentsOf(t) {
+  const lo = Math.max(0, t.trimIn || 0);
+  const hi = Math.max(lo, t.trimOut == null ? lo : t.trimOut);
+  const cuts = Array.isArray(t.cuts) ? t.cuts : [];
+  // Clip cuts to the trim window, drop empties, sort, then merge overlaps.
+  const norm = cuts
+    .map((c) => ({ in: Math.max(lo, Math.min(c.in, c.out)), out: Math.min(hi, Math.max(c.in, c.out)) }))
+    .filter((c) => c.out - c.in > 0.0005)
+    .sort((a, b) => a.in - b.in);
+  const merged = [];
+  for (const c of norm) {
+    const last = merged[merged.length - 1];
+    if (last && c.in <= last.out) last.out = Math.max(last.out, c.out);
+    else merged.push({ ...c });
+  }
+  // Kept segments = the gaps between merged cuts within [lo, hi].
+  const segs = [];
+  let cursor = lo;
+  for (const c of merged) {
+    if (c.in > cursor + 0.0005) segs.push({ in: cursor, out: c.in });
+    cursor = Math.max(cursor, c.out);
+  }
+  if (hi > cursor + 0.0005) segs.push({ in: cursor, out: hi });
+  return segs.length ? segs : [{ in: lo, out: Math.max(lo, hi) }];
 }
 
 // Guard speed against 0/NaN so output timestamps stay finite.
@@ -40,8 +87,26 @@ function safeSpeed(t) {
   return s && s > 0 ? s : 1;
 }
 
+// Keep a source-time frame if it falls inside any kept segment. (Half-open [in, out).)
+export function keepFrame(srcSec, t) {
+  const segs = segmentsOf(t);
+  for (const s of segs) if (srcSec >= s.in && srcSec < s.out) return true;
+  return false;
+}
+
+// Map a kept source time to its output time: sum the (speed-divided) durations of every segment
+// before the one containing srcSec, plus the offset within that segment. Frames in cut regions return
+// their nearest preceding boundary (they're filtered by keepFrame before this is called).
 export function outTimestamp(srcSec, t) {
-  return (srcSec - t.trimIn) / safeSpeed(t);
+  const segs = segmentsOf(t);
+  const sp = safeSpeed(t);
+  let acc = 0;
+  for (const s of segs) {
+    if (srcSec < s.in) break;
+    if (srcSec < s.out) return (acc + (srcSec - s.in)) / sp;
+    acc += s.out - s.in;
+  }
+  return acc / sp;
 }
 
 // Fall back to a 30fps frame duration when the source sample reports no duration.
@@ -49,12 +114,66 @@ export function outFrameDuration(srcDurSec, t) {
   return (srcDurSec || 1 / 30) / safeSpeed(t);
 }
 
+// Total output duration = summed segment durations / speed.
 export function outDuration(t) {
-  return (t.trimOut - t.trimIn) / safeSpeed(t);
+  const segs = segmentsOf(t);
+  let sum = 0;
+  for (const s of segs) sum += s.out - s.in;
+  return sum / safeSpeed(t);
 }
 
 // Audio is only carried straight through at 1x speed. Any speed change would require resampling /
-// pitch handling we don't do in v1, so we export video-only in that case (surfaced in the UI).
+// pitch handling we don't do, so we export video-only in that case (surfaced in the UI). Multi-segment
+// audio is concatenated in the pipeline by feeding only buffers inside a kept segment.
 export function audioEnabled(t) {
   return safeSpeed(t) === 1;
+}
+
+// ── Zoom (keyframed magnification within the crop) ───────────────────────────────────────────────
+// Keyframes: [{ t (SOURCE seconds), cx, cy, scale }] where cx/cy are the focus point in [0..1] of the
+// crop rect and scale >= 1 magnifies. Returns the interpolated {cx, cy, scale} at a source time, or
+// null when there is no effective zoom. Eased with smoothstep for a natural in/out.
+export function zoomAt(t, srcSec) {
+  const kfs = Array.isArray(t && t.zoom) ? t.zoom : [];
+  if (!kfs.length) return null;
+  const sorted = kfs.slice().sort((a, b) => a.t - b.t);
+  let lo = sorted[0];
+  let hi = sorted[sorted.length - 1];
+  if (srcSec <= lo.t) return pick(lo);
+  if (srcSec >= hi.t) return pick(hi);
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const a = sorted[i];
+    const b = sorted[i + 1];
+    if (srcSec >= a.t && srcSec <= b.t) {
+      const span = b.t - a.t || 1;
+      let f = (srcSec - a.t) / span;
+      f = f * f * (3 - 2 * f); // smoothstep
+      return {
+        cx: a.cx + (b.cx - a.cx) * f,
+        cy: a.cy + (b.cy - a.cy) * f,
+        scale: a.scale + (b.scale - a.scale) * f,
+      };
+    }
+  }
+  return pick(hi);
+}
+
+function pick(kf) {
+  return { cx: kf.cx, cy: kf.cy, scale: kf.scale };
+}
+
+// The source rect to sample for a given source time, combining crop (fixed) and zoom (animated). The
+// compositor draws this rect to the full output canvas; output dims stay constant (zoom magnifies,
+// it does not resize). Returns {x,y,w,h} in source pixels, clamped inside the crop rect.
+export function effectiveSrcRect(t, srcSec, srcW, srcH) {
+  const base = cropRect(t, srcW, srcH);
+  const z = zoomAt(t, srcSec);
+  if (!z || !(z.scale > 1.0001)) return base;
+  const w = base.w / z.scale;
+  const h = base.h / z.scale;
+  const focusX = base.x + clamp(z.cx, 0, 1) * base.w;
+  const focusY = base.y + clamp(z.cy, 0, 1) * base.h;
+  const x = clamp(focusX - w / 2, base.x, base.x + base.w - w);
+  const y = clamp(focusY - h / 2, base.y, base.y + base.h - h);
+  return { x, y, w, h };
 }

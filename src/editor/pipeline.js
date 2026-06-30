@@ -7,7 +7,7 @@ import {
   Input, ALL_FORMATS, BlobSource, VideoSampleSink, AudioBufferSink,
   Output, Mp4OutputFormat, BufferTarget, CanvasSource, AudioBufferSource, getEncodableCodecs,
 } from "../vendor/mediabunny.mjs";
-import { outputDims, keepFrame, outTimestamp, outFrameDuration, outDuration, audioEnabled } from "./transforms.js";
+import { outputDims, keepFrame, outTimestamp, outFrameDuration, outDuration, audioEnabled, effectiveSrcRect } from "./transforms.js";
 import { drawComposite } from "./compositor.js";
 
 // input: a Mediabunny Input (from source.toInput). transforms: see transforms.js. store: layer store
@@ -24,7 +24,7 @@ export async function transcode({ input, transforms, store, onProgress, signal }
 
   const srcW = await vTrack.getDisplayWidth();
   const srcH = await vTrack.getDisplayHeight();
-  const { w: outW, h: outH } = outputDims(srcW, srcH, transforms.outScale);
+  const { w: outW, h: outH } = outputDims(srcW, srcH, transforms.outScale, transforms.crop);
 
   const totalOut = Math.max(0.0001, outDuration(transforms));
 
@@ -66,7 +66,8 @@ export async function transcode({ input, transforms, store, onProgress, signal }
       if (signal && signal.aborted) { sample.close(); throw new DOMException("Export cancelled", "AbortError"); }
       const srcSec = sample.timestamp;
       if (keepFrame(srcSec, transforms)) {
-        drawComposite(ctx, sample, layers, { outW, outH, srcW, srcH, unit, blurCanvas: null });
+        const srcRect = effectiveSrcRect(transforms, srcSec, srcW, srcH);
+        drawComposite(ctx, sample, layers, { outW, outH, srcW, srcH, unit, blurCanvas: null, srcRect, timeSec: srcSec });
         const ts = outTimestamp(srcSec, transforms);
         const dur = outFrameDuration(sample.duration || 1 / 30, transforms);
         await vSrc.add(Math.max(0, ts), Math.max(1 / 1000, dur));
@@ -78,11 +79,11 @@ export async function transcode({ input, transforms, store, onProgress, signal }
     if (wantAudio) {
       const aSink = new AudioBufferSink(aTrack);
       // AudioBufferSource auto-sequences timestamps from 0 by accumulated buffer duration, so we feed
-      // buffers in order (skipping any that start before the trim-in boundary) and the first kept
-      // buffer lands at output time 0 — aligned with the trimmed video.
+      // buffers in order (skipping any in the pre-trim region or inside a removed cut) and the kept
+      // buffers concatenate — landing the first at output time 0, aligned with the trimmed video.
       for await (const { buffer, timestamp } of aSink.buffers(transforms.trimIn, transforms.trimOut)) {
         if (signal && signal.aborted) throw new DOMException("Export cancelled", "AbortError");
-        if (timestamp < transforms.trimIn) continue;
+        if (!keepFrame(timestamp, transforms)) continue;
         await aSrc.add(buffer);
       }
     }
