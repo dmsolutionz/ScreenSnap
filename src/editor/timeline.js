@@ -1,8 +1,9 @@
-// Timeline: a horizontal bar with draggable trim-in / trim-out handles, a playhead, removable CUT
-// bands (the removed sub-intervals that make multi-segment trim), and small ZOOM keyframe marks.
-// Clicking the track seeks; dragging a handle reports the new trim window. In "cut mode" dragging the
-// track paints a new removed region instead of seeking. Cuts and zoom marks are read from getters the
-// controller owns, so the timeline only renders + reports edits. Pure DOM, no canvas.
+// Timeline: a horizontal track with draggable trim-in / trim-out handles, a playhead, removable CUT
+// bands (the removed sub-intervals that make multi-segment trim), plus a ZOOM LANE below it holding
+// draggable / resizable zoom blocks. Clicking the track seeks; dragging a trim handle reports the new
+// window; "cut mode" paints a removed region instead of seeking. Zoom blocks are selected by click,
+// moved by dragging the body, and resized by dragging an edge — each edit reported to the controller,
+// which owns the data (the timeline only renders + reports). Pure DOM, no canvas.
 
 function fmt(sec) {
   const s = Math.max(0, Math.floor(sec));
@@ -10,8 +11,15 @@ function fmt(sec) {
   return `${String(m).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 }
 
-// { el, durationSec, onTrimChange, onSeek, onAddCut, onRemoveCut, getCuts, getZoom }
-export function createTimeline({ el, durationSec, onTrimChange, onSeek, onAddCut, onRemoveCut, getCuts, getZoom }) {
+// {
+//   el, durationSec, onTrimChange, onSeek, onAddCut, onRemoveCut, getCuts,
+//   getZoomBlocks, getSelectedZoom, onZoomSelect, onZoomChange
+// }
+export function createTimeline(opts) {
+  const {
+    el, durationSec, onTrimChange, onSeek, onAddCut, onRemoveCut, getCuts,
+    getZoomBlocks, getSelectedZoom, onZoomSelect, onZoomChange,
+  } = opts;
   const dur = Math.max(0.001, durationSec || 0);
   let inSec = 0;
   let outSec = dur;
@@ -25,23 +33,26 @@ export function createTimeline({ el, durationSec, onTrimChange, onSeek, onAddCut
       <div class="ss-tl-track" id="ss-tl-track">
         <div class="ss-tl-trim" id="ss-tl-trim"></div>
         <div class="ss-tl-cuts" id="ss-tl-cuts"></div>
-        <div class="ss-tl-zooms" id="ss-tl-zooms"></div>
         <div class="ss-tl-handle ss-tl-handle-in" id="ss-tl-in" title="Trim start"></div>
         <div class="ss-tl-handle ss-tl-handle-out" id="ss-tl-out" title="Trim end"></div>
         <div class="ss-tl-playhead" id="ss-tl-playhead"></div>
+      </div>
+      <div class="ss-tl-zoomlane" id="ss-tl-zoomlane">
+        <span class="ss-tl-zlabel">zoom</span>
+        <div class="ss-tl-zblocks" id="ss-tl-zblocks"></div>
       </div>
     </div>`;
 
   const track = el.querySelector("#ss-tl-track");
   const trimEl = el.querySelector("#ss-tl-trim");
   const cutsEl = el.querySelector("#ss-tl-cuts");
-  const zoomsEl = el.querySelector("#ss-tl-zooms");
   const inEl = el.querySelector("#ss-tl-in");
   const outEl = el.querySelector("#ss-tl-out");
   const playEl = el.querySelector("#ss-tl-playhead");
   const inLbl = el.querySelector(".ss-tl-in");
   const outLbl = el.querySelector(".ss-tl-out");
   const playLbl = el.querySelector(".ss-tl-play");
+  const zblocks = el.querySelector("#ss-tl-zblocks");
 
   const pct = (sec) => `${(sec / dur) * 100}%`;
 
@@ -70,15 +81,24 @@ export function createTimeline({ el, durationSec, onTrimChange, onSeek, onAddCut
     });
   }
 
-  function renderZooms() {
-    const kfs = (getZoom && getZoom()) || [];
-    zoomsEl.textContent = "";
-    for (const k of kfs) {
-      const m = document.createElement("div");
-      m.className = "ss-tl-zoom" + (k.scale > 1.01 ? " ss-tl-zoom-in" : "");
-      m.style.left = pct(Math.max(0, Math.min(dur, k.t)));
-      m.title = `Zoom ${k.scale > 1.01 ? k.scale.toFixed(1) + "x" : "out"} @ ${fmt(k.t)}`;
-      zoomsEl.appendChild(m);
+  function renderZoomBlocks() {
+    const blocks = (getZoomBlocks && getZoomBlocks()) || [];
+    const selId = getSelectedZoom && getSelectedZoom();
+    zblocks.textContent = "";
+    for (const b of blocks) {
+      const lo = Math.max(0, Math.min(dur, b.tIn));
+      const hi = Math.max(lo, Math.min(dur, b.tOut));
+      const el2 = document.createElement("div");
+      el2.className = "ss-tl-zblock" + (b.id === selId ? " on" : "");
+      el2.dataset.id = b.id;
+      el2.style.left = pct(lo);
+      el2.style.width = `${Math.max(0.6, ((hi - lo) / dur) * 100)}%`;
+      el2.title = `Zoom ${(b.scale || 1).toFixed(1)}x · ${fmt(lo)}–${fmt(hi)}`;
+      el2.innerHTML =
+        `<span class="ss-tl-zedge ss-tl-zedge-l" data-edge="in"></span>` +
+        `<span class="ss-tl-zname">${(b.scale || 1).toFixed(1)}x</span>` +
+        `<span class="ss-tl-zedge ss-tl-zedge-r" data-edge="out"></span>`;
+      zblocks.appendChild(el2);
     }
   }
 
@@ -92,7 +112,7 @@ export function createTimeline({ el, durationSec, onTrimChange, onSeek, onAddCut
     outLbl.textContent = fmt(outSec);
     playLbl.textContent = fmt(playSec);
     renderCuts();
-    renderZooms();
+    renderZoomBlocks();
   }
 
   function secAt(clientX) {
@@ -100,12 +120,19 @@ export function createTimeline({ el, durationSec, onTrimChange, onSeek, onAddCut
     const frac = r.width > 0 ? (clientX - r.left) / r.width : 0;
     return Math.max(0, Math.min(1, frac)) * dur;
   }
+  function zoneSecAt(clientX) {
+    const r = zblocks.getBoundingClientRect();
+    const frac = r.width > 0 ? (clientX - r.left) / r.width : 0;
+    return Math.max(0, Math.min(1, frac)) * dur;
+  }
 
   // Keep at least a small gap so trimIn stays strictly below trimOut within [0, dur].
   const MIN_GAP = Math.min(0.05, dur);
+  const MIN_ZOOM = Math.min(0.4, dur); // shortest zoom block
 
   let dragging = null; // 'in' | 'out' | 'scrub' | 'cut' | null
   let cutAnchor = 0;
+  let zoomDrag = null; // { id, mode:'move'|'in'|'out', startSec, orig:{tIn,tOut} }
 
   function applyDrag(clientX) {
     const sec = secAt(clientX);
@@ -177,6 +204,47 @@ export function createTimeline({ el, durationSec, onTrimChange, onSeek, onAddCut
   inEl.addEventListener("pointercancel", endDrag);
   outEl.addEventListener("pointercancel", endDrag);
   track.addEventListener("pointercancel", endDrag);
+
+  // ── Zoom lane: select / move / resize blocks ────────────────────────────────────────────────────
+  zblocks.addEventListener("pointerdown", (e) => {
+    const blockEl = e.target.closest(".ss-tl-zblock");
+    if (!blockEl) {
+      if (onZoomSelect) onZoomSelect(null); // click empty lane = deselect
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    const id = blockEl.dataset.id;
+    if (onZoomSelect) onZoomSelect(id);
+    const blocks = (getZoomBlocks && getZoomBlocks()) || [];
+    const b = blocks.find((x) => x.id === id);
+    if (!b) return;
+    const edge = e.target.dataset ? e.target.dataset.edge : null;
+    zoomDrag = { id, mode: edge || "move", startSec: zoneSecAt(e.clientX), orig: { tIn: b.tIn, tOut: b.tOut } };
+    zblocks.setPointerCapture?.(e.pointerId);
+  });
+  zblocks.addEventListener("pointermove", (e) => {
+    if (!zoomDrag) return;
+    const d = zoneSecAt(e.clientX) - zoomDrag.startSec;
+    let { tIn, tOut } = zoomDrag.orig;
+    if (zoomDrag.mode === "move") {
+      const len = tOut - tIn;
+      tIn = Math.max(0, Math.min(tIn + d, dur - len));
+      tOut = tIn + len;
+    } else if (zoomDrag.mode === "in") {
+      tIn = Math.max(0, Math.min(tIn + d, tOut - MIN_ZOOM));
+    } else if (zoomDrag.mode === "out") {
+      tOut = Math.min(dur, Math.max(tOut + d, tIn + MIN_ZOOM));
+    }
+    if (onZoomChange) onZoomChange(zoomDrag.id, { tIn, tOut });
+  });
+  const endZoom = (e) => {
+    if (!zoomDrag) return;
+    zblocks.releasePointerCapture?.(e.pointerId);
+    zoomDrag = null;
+  };
+  zblocks.addEventListener("pointerup", endZoom);
+  zblocks.addEventListener("pointercancel", endZoom);
 
   paint();
 

@@ -147,37 +147,27 @@ export function audioEnabled(t) {
   return safeSpeed(t) === 1;
 }
 
-// ── Zoom (keyframed magnification within the crop) ───────────────────────────────────────────────
-// Keyframes: [{ t (SOURCE seconds), cx, cy, scale }] where cx/cy are the focus point in [0..1] of the
-// crop rect and scale >= 1 magnifies. Returns the interpolated {cx, cy, scale} at a source time, or
-// null when there is no effective zoom. Eased with smoothstep for a natural in/out.
+// ── Zoom (blocks of magnification, each eased in/out) ────────────────────────────────────────────
+// Blocks: [{ id, tIn, tOut, cx, cy, scale }] where tIn/tOut are SOURCE seconds, cx/cy are the focus
+// point in [0..1] of the crop rect, and scale >= 1 magnifies. Within a block the magnification eases
+// 1 → scale (hold) → 1 with a short smoothstep ramp at each edge; outside every block there is no
+// zoom. Returns the effective { cx, cy, scale } at a source time, or null when none applies. Blocks
+// are expected non-overlapping; if they overlap, the first containing block wins.
 export function zoomAt(t, srcSec) {
-  const kfs = Array.isArray(t && t.zoom) ? t.zoom : [];
-  if (!kfs.length) return null;
-  const sorted = kfs.slice().sort((a, b) => a.t - b.t);
-  let lo = sorted[0];
-  let hi = sorted[sorted.length - 1];
-  if (srcSec <= lo.t) return pick(lo);
-  if (srcSec >= hi.t) return pick(hi);
-  for (let i = 0; i < sorted.length - 1; i++) {
-    const a = sorted[i];
-    const b = sorted[i + 1];
-    if (srcSec >= a.t && srcSec <= b.t) {
-      const span = b.t - a.t || 1;
-      let f = (srcSec - a.t) / span;
-      f = f * f * (3 - 2 * f); // smoothstep
-      return {
-        cx: a.cx + (b.cx - a.cx) * f,
-        cy: a.cy + (b.cy - a.cy) * f,
-        scale: a.scale + (b.scale - a.scale) * f,
-      };
-    }
+  const blocks = Array.isArray(t && t.zoom) ? t.zoom : [];
+  for (const b of blocks) {
+    if (!b || srcSec < b.tIn || srcSec >= b.tOut) continue;
+    const dur = Math.max(0.0001, b.tOut - b.tIn);
+    const ramp = Math.min(0.4, dur / 2); // ease-in / ease-out time (seconds)
+    let f = 1;
+    if (srcSec < b.tIn + ramp) f = (srcSec - b.tIn) / ramp;        // ease in
+    else if (srcSec > b.tOut - ramp) f = (b.tOut - srcSec) / ramp; // ease out
+    f = Math.max(0, Math.min(1, f));
+    f = f * f * (3 - 2 * f); // smoothstep
+    const scale = 1 + ((b.scale || 1) - 1) * f;
+    return { cx: b.cx, cy: b.cy, scale };
   }
-  return pick(hi);
-}
-
-function pick(kf) {
-  return { cx: kf.cx, cy: kf.cy, scale: kf.scale };
+  return null;
 }
 
 // The source rect to sample for a given source time, combining crop (fixed) and zoom (animated). The
