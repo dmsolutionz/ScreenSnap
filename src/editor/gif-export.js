@@ -3,7 +3,7 @@
 // a GIF-friendly frame rate + size, and hand the RGBA frames to the from-scratch encoder. No ffmpeg,
 // no WASM. GIF is inherently low-fps / low-res, so we cap both and the caller surfaces the options.
 import { VideoSampleSink } from "../vendor/mediabunny.mjs";
-import { outputDims, keepFrame, outTimestamp, outDuration, effectiveSrcRect } from "./transforms.js";
+import { composeDims, keepFrame, outTimestamp, outDuration, effectiveSrcRect } from "./transforms.js";
 import { drawComposite } from "./compositor.js";
 import { encodeGif } from "./gif-encode.js";
 
@@ -19,9 +19,10 @@ export async function transcodeGif({ input, transforms, store, fps = 12, maxHeig
   const srcW = await vTrack.getDisplayWidth();
   const srcH = await vTrack.getDisplayHeight();
 
-  // GIF dimensions: honor crop, then clamp height to maxHeight (never upscale).
+  // GIF dimensions: honor crop, clamp height to maxHeight (never upscale), and include the backdrop
+  // padding. We feed the maxHeight clamp through composeDims as outScale so crop + backdrop compose.
   const scale = { maxHeight: Math.min(maxHeight, transforms.crop ? transforms.crop.h : srcH) };
-  const { w: outW, h: outH } = outputDims(srcW, srcH, scale, transforms.crop);
+  const { outW, outH, dest, backdrop } = composeDims({ ...transforms, outScale: scale }, srcW, srcH);
 
   const total = Math.max(0.0001, outDuration(transforms));
   // Drop fps if needed so we never blow past MAX_FRAMES.
@@ -49,7 +50,7 @@ export async function transcodeGif({ input, transforms, store, fps = 12, maxHeig
       const outT = outTimestamp(srcSec, transforms);
       if (outT + 1e-6 >= nextCapture) {
         const srcRect = effectiveSrcRect(transforms, srcSec, srcW, srcH);
-        drawComposite(ctx, sample, layers, { outW, outH, srcW, srcH, unit, blurCanvas: null, srcRect, timeSec: srcSec });
+        drawComposite(ctx, sample, layers, { outW, outH, srcW, srcH, unit, blurCanvas: null, srcRect, timeSec: srcSec, dest, backdrop });
         const img = ctx.getImageData(0, 0, outW, outH);
         frames.push({ data: img.data, outT });
         do { nextCapture += frameStep; } while (nextCapture <= outT);

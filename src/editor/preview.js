@@ -4,7 +4,7 @@
 // uses (base frame + overlay layers, scaled to the chosen output resolution), so what you see matches
 // what you'll export. Mediabunny is used only for the export pipeline, not here.
 import { drawComposite } from "./compositor.js";
-import { outputDims, effectiveSrcRect, segmentsOf } from "./transforms.js";
+import { composeDims, effectiveSrcRect, segmentsOf } from "./transforms.js";
 
 // If ct sits inside a removed (cut) gap, return the next kept segment's start so playback can skip
 // over it; null when ct is already inside a kept segment.
@@ -79,13 +79,13 @@ export function createPreview({ canvas, blob, getTransforms, store, onTime, onSt
   function composite() {
     if (destroyed || !ctx) return;
     const t = getTransforms ? getTransforms() : null;
-    const dims = outputDims(srcW || 2, srcH || 2, t ? t.outScale : null, t ? t.crop : null);
-    if (canvas.width !== dims.w) canvas.width = dims.w;
-    if (canvas.height !== dims.h) canvas.height = dims.h;
+    const cd = composeDims(t || {}, srcW || 2, srcH || 2);
+    if (canvas.width !== cd.outW) canvas.width = cd.outW;
+    if (canvas.height !== cd.outH) canvas.height = cd.outH;
     const layers = store && typeof store.visibleOrdered === "function" ? store.visibleOrdered() : [];
     const srcSec = video.currentTime || 0;
     const srcRect = t ? effectiveSrcRect(t, srcSec, srcW || 2, srcH || 2) : null;
-    drawComposite(ctx, ready ? baseFrame : null, layers, { outW: dims.w, outH: dims.h, srcW, srcH, unit, blurCanvas: null, srcRect, timeSec: srcSec });
+    drawComposite(ctx, ready ? baseFrame : null, layers, { outW: cd.outW, outH: cd.outH, srcW, srcH, unit, blurCanvas: null, srcRect, timeSec: srcSec, dest: cd.dest, backdrop: cd.backdrop });
   }
 
   function loop() {

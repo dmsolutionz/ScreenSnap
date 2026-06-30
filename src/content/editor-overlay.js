@@ -45,6 +45,22 @@
   ];
   const COLORS = ["#ef4444", "#f59e0b", "#22c55e", "#3b82f6", "#111111"];
   const WEIGHTS = [["sm", 2], ["md", 3.5], ["lg", 6]];
+  // Crop aspect-ratio presets — [label, ratio]; ratio = width/height in image px, null = free.
+  const RATIOS = [["Free", null], ["16:9", 16 / 9], ["1:1", 1], ["9:16", 9 / 16], ["4:3", 4 / 3]];
+  // Backdrop background presets — gradients (top→bottom stops) and solids. Keyed by id.
+  const BACKDROPS = [
+    ["violet", "Violet", ["#8b5cf6", "#ec4899"]],
+    ["sky", "Sky", ["#38bdf8", "#2563eb"]],
+    ["amber", "Amber", ["#f59e0b", "#ef4444"]],
+    ["mint", "Mint", ["#34d399", "#16a34a"]],
+    ["slate", "Slate", ["#64748b", "#1e293b"]],
+    ["dark", "Dark", "#18181b"],
+    ["light", "Light", "#f3f4f6"],
+    ["white", "White", "#ffffff"],
+  ];
+  const DEFAULT_BACKDROP = { pad: 0.07, radius: 0.03, shadow: true, bg: "violet" };
+  // CSS background for a backdrop swatch chip: a CSS gradient for [a,b] stops, or the solid color.
+  const bdSwatchCss = (val) => Array.isArray(val) ? `linear-gradient(135deg, ${val[0]}, ${val[1]})` : val;
   const SANS = "'Geist',system-ui,-apple-system,'Segoe UI',sans-serif";
   const MONO = "'Geist Mono',ui-monospace,'SF Mono',Menlo,monospace";
   const GREEN = "#16a34a";
@@ -66,6 +82,8 @@
       this.editingText = false;
       this.crop = null;        // applied, non-destructive crop region in source-image coords {x,y,w,h}
       this.pendingCrop = null; // unconfirmed crop rect {x,y,w,h} awaiting Apply/Cancel
+      this.cropRatio = null;   // null = free; else a number (w/h), e.g. 16/9 — constrains crop drags & preset fits
+      this.backdrop = null;    // null = off; else { pad, radius, shadow, bg } — pad/radius are fractions of content width
       this.unit = Math.max(1, this.iw / 900);
       this.buildBlur();
       this.buildDOM();
@@ -133,6 +151,24 @@
           .cropbar .ok:hover { background: #15803d; }
           .cropbar .no { background: #2a2d33; }
           .cropbar .no:hover { background: #34373e; }
+          .cropbar .ratios { display: flex; gap: 4px; padding-right: 4px; margin-right: 2px; border-right: 1px solid #2c2f36; }
+          .chip { padding: 6px 9px; border-radius: 6px; font-size: 12px; font-weight: 500; color: #b6b8bd;
+            background: #2a2d33; border: 1px solid transparent; }
+          .chip:hover { background: #34373e; color: #e7e8ea; }
+          .chip.on { background: rgba(22,163,74,0.18); border-color: ${GREEN}; color: #fff; }
+          .bdrop { display: flex; align-items: center; gap: 8px; }
+          .bd-toggle { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-radius: 8px;
+            font-size: 13px; font-weight: 500; background: #f3f4f6; border: 1px solid #e4e6eb; color: #3f3f46; }
+          .bd-toggle:hover { background: #e9eaee; }
+          .bd-toggle.on { background: rgba(22,163,74,0.12); border-color: rgba(22,163,74,0.4); color: ${GREEN}; }
+          .bd-opts { display: none; align-items: center; gap: 7px; }
+          .bd-opts.show { display: flex; }
+          .bd-bgs { display: flex; gap: 5px; }
+          .bd-bg { width: 22px; height: 22px; border-radius: 6px; border: 2px solid #e4e6eb; padding: 0; }
+          .bd-bg.on { border-color: ${GREEN}; outline: 1px solid ${GREEN}; outline-offset: 1px; }
+          .bd-pad { display: flex; align-items: center; gap: 5px; font-size: 11px; color: #6b7280; font-family: ${MONO};
+            text-transform: uppercase; letter-spacing: 0.04em; }
+          .bd-pad input[type=range] { width: 78px; accent-color: ${GREEN}; cursor: pointer; }
           .status { height: 38px; flex: 0 0 auto; background: #f7f7f9; border-top: 1px solid #e6e7eb;
             display: flex; align-items: center; padding: 0 16px; gap: 11px; font-family: ${MONO}; font-size: 11px;
             color: #6b7280; text-transform: uppercase; letter-spacing: 0.06em; }
@@ -144,13 +180,20 @@
         <div class="ed">
           <div class="top">
             <span class="title">Annotate · ${escapeHtml(this.filename.split("/").pop())}</span>
+            <div class="bdrop">
+              <button class="bd-toggle" id="bdToggle" title="Backdrop">${ico("rect", "#3f3f46", 14)}Backdrop</button>
+              <div class="bd-opts" id="bdOpts">
+                <span class="bd-bgs" id="bdBgs">${BACKDROPS.map(([id, label, val]) => `<button class="bd-bg" data-bg="${id}" title="${escapeHtml(label)}" style="background:${bdSwatchCss(val)}"></button>`).join("")}</span>
+                <span class="bd-pad">Pad<input type="range" id="bdPad" min="2" max="16" step="1" value="7"></span>
+              </div>
+            </div>
             <button class="tb ghost" id="copy">${ico("copy", "#3f3f46", 14)}Copy</button>
             <button class="tb save" id="save">${ico("down", "#fff", 14)}Save PNG</button>
             <button class="xbtn" id="close">${ico("x", "#6b7280", 15)}</button>
           </div>
           <div class="body">
             <div class="palette" id="palette"></div>
-            <div class="stage" id="stage"><canvas id="cv"></canvas><div class="cropbar" id="cropbar"><button class="ok" id="cropOk">${ico("crop", "#fff", 14)}Apply crop</button><button class="no" id="cropNo">${ico("x", "#e7e8ea", 14)}Cancel</button></div></div>
+            <div class="stage" id="stage"><canvas id="cv"></canvas><div class="cropbar" id="cropbar"><span class="ratios" id="ratios">${RATIOS.map(([label]) => `<button class="chip" data-ratio="${label}">${escapeHtml(label)}</button>`).join("")}</span><button class="ok" id="cropOk">${ico("crop", "#fff", 14)}Apply crop</button><button class="no" id="cropNo">${ico("x", "#e7e8ea", 14)}Cancel</button></div></div>
           </div>
           <div class="status">
             <span class="dotc" id="st-dot"></span>
@@ -190,6 +233,20 @@
       this.cropbar = root.getElementById("cropbar");
       root.getElementById("cropOk").onclick = () => this.applyCrop();
       root.getElementById("cropNo").onclick = () => this.cancelCrop();
+      root.getElementById("ratios").addEventListener("click", (e) => {
+        const b = e.target.closest("[data-ratio]");
+        if (b) this.setCropRatio(b.dataset.ratio);
+      });
+      this.syncRatioChips();
+
+      // Backdrop controls
+      root.getElementById("bdToggle").onclick = () => this.toggleBackdrop();
+      root.getElementById("bdBgs").addEventListener("click", (e) => {
+        const b = e.target.closest("[data-bg]");
+        if (b) this.setBackdropBg(b.dataset.bg);
+      });
+      root.getElementById("bdPad").addEventListener("input", (e) => this.setBackdropPad(e.target.value));
+      this.syncBackdropUI();
 
       this.onKey = (e) => {
         if (this.editingText) return; // let the text input handle its own keys
@@ -242,7 +299,8 @@
     fit() {
       const rect = this.stage.getBoundingClientRect();
       const pad = 48;
-      const cw = this.curW(), ch = this.curH();
+      // Fit the whole canvas (content + backdrop padding) so the displayed scale stays uniform.
+      const cw = this.fullW(), ch = this.fullH();
       // Tall full-page shots fit to WIDTH and scroll vertically (so they stay readable, not tiny);
       // normal/area shots are contained so they fit without scrolling.
       const tall = ch > cw * 2.2;
@@ -254,12 +312,13 @@
       this.canvas.style.height = Math.round(ch * scale) + "px";
     }
     toImg(e) {
-      // Map pointer → cropped-canvas pixels, then offset back into full source-image coords
-      // so shapes are always stored in the original image's coordinate space.
+      // Map pointer → full-canvas pixels, drop the backdrop padding to reach content pixels, then
+      // offset by the crop origin into full source-image coords (where shapes are always stored).
       const r = this.canvas.getBoundingClientRect();
+      const pad = this.bdPadPx();
       return {
-        x: ((e.clientX - r.left) / r.width) * this.curW() + this.cropOx(),
-        y: ((e.clientY - r.top) / r.height) * this.curH() + this.cropOy(),
+        x: ((e.clientX - r.left) / r.width) * this.fullW() - pad + this.cropOx(),
+        y: ((e.clientY - r.top) / r.height) * this.fullH() - pad + this.cropOy(),
       };
     }
 
@@ -317,11 +376,30 @@
     }
 
     // Normalize a crop drag into {x,y,w,h}, clamped to the source image bounds.
+    // With a fixed cropRatio, the rect grows from the drag's anchor corner (x1,y1) toward the
+    // pointer (x2,y2): width is taken from the drag, height derived as w/ratio (or vice-versa,
+    // whichever stays in bounds), then clamped so the ratio-locked rect never leaves the image.
     cropRect(d) {
+      if (this.cropRatio) return this.cropRectRatio(d);
       let x = Math.min(d.x1, d.x2), y = Math.min(d.y1, d.y2);
       let w = Math.abs(d.x2 - d.x1), h = Math.abs(d.y2 - d.y1);
       x = Math.max(0, Math.min(x, this.iw)); y = Math.max(0, Math.min(y, this.ih));
       w = Math.min(w, this.iw - x); h = Math.min(h, this.ih - y);
+      return { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) };
+    }
+    cropRectRatio(d) {
+      const ratio = this.cropRatio;
+      const ax = d.x1, ay = d.y1;                 // fixed anchor corner
+      const dirX = d.x2 >= ax ? 1 : -1, dirY = d.y2 >= ay ? 1 : -1;
+      let w = Math.abs(d.x2 - ax);
+      let h = w / ratio;
+      // Cap the rect so it fits inside the image when grown in the current drag direction.
+      const maxW = dirX > 0 ? this.iw - ax : ax;
+      const maxH = dirY > 0 ? this.ih - ay : ay;
+      if (w > maxW) { w = maxW; h = w / ratio; }
+      if (h > maxH) { h = maxH; w = h * ratio; }
+      const x = dirX > 0 ? ax : ax - w;
+      const y = dirY > 0 ? ay : ay - h;
       return { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) };
     }
 
@@ -331,15 +409,16 @@
     // clamped so it never spills outside the visible canvas.
     positionCropUI() {
       const c = this.pendingCrop; if (!c || !this.cropbar) return;
-      const sc = this.scale, ox = this.cropOx(), oy = this.cropOy();
-      const left0 = this.canvas.offsetLeft, top0 = this.canvas.offsetTop;
+      const sc = this.scale, ox = this.cropOx(), oy = this.cropOy(), pad = this.bdPadPx();
+      // Canvas display now starts with the backdrop padding, so content px shift by (pad * sc).
+      const left0 = this.canvas.offsetLeft + pad * sc, top0 = this.canvas.offsetTop + pad * sc;
       const selRight = left0 + (c.x - ox + c.w) * sc;
       const selBottom = top0 + (c.y - oy + c.h) * sc;
       const barW = this.cropbar.offsetWidth || 200, barH = this.cropbar.offsetHeight || 36;
       let bx = selRight - barW, by = selBottom + 8 * this.unit * sc;
-      // If it would fall below the canvas, tuck it inside the bottom of the selection instead.
-      const canvasBottom = top0 + this.curH() * sc;
-      if (by + barH > canvasBottom) by = selBottom - barH - 8;
+      // If it would fall below the content, tuck it inside the bottom of the selection instead.
+      const contentBottom = top0 + this.curH() * sc;
+      if (by + barH > contentBottom) by = selBottom - barH - 8;
       bx = Math.max(left0 + 4, Math.min(bx, left0 + this.curW() * sc - barW - 4));
       this.cropbar.style.left = Math.round(bx) + "px";
       this.cropbar.style.top = Math.round(by) + "px";
@@ -365,6 +444,88 @@
       this.clearCropUI();
       this.render();
     }
+
+    // ── crop aspect-ratio presets ──
+    // Look up a ratio (number|null) by its preset label.
+    ratioFor(label) { const r = RATIOS.find((x) => x[0] === label); return r ? r[1] : null; }
+    syncRatioChips() {
+      const active = (RATIOS.find((r) => r[1] === this.cropRatio) || RATIOS[0])[0];
+      for (const b of this.root.querySelectorAll("[data-ratio]")) b.classList.toggle("on", b.dataset.ratio === active);
+    }
+    // Set the active aspect-ratio for cropping. The chips work whether or not the crop tool is
+    // active or a selection exists — picking a ratio refits any pending/applied crop, or creates a
+    // fresh centered selection over the current (cropped or full) image so the user can confirm it.
+    setCropRatio(label) {
+      this.cropRatio = this.ratioFor(label);
+      this.syncRatioChips();
+      // Switch to the crop tool so the affordance/Apply bar make sense.
+      if (this.tool !== "crop") this.setTool("crop");
+      if (this.cropRatio == null) { this.render(); return; } // Free: leave any selection as-is
+      // Refit an existing pending selection (or the applied crop) around its center; otherwise make one.
+      const base = this.pendingCrop || this.crop;
+      const cx = base ? base.x + base.w / 2 : this.cropOx() + this.curW() / 2;
+      const cy = base ? base.y + base.h / 2 : this.cropOy() + this.curH() / 2;
+      this.pendingCrop = this.ratioRectAround(cx, cy, base ? Math.max(base.w, base.h) : null);
+      this.showCropUI();
+      this.render();
+    }
+    // Build a ratio-locked rect centered on (cx,cy). `pref` biases the size (a prior selection's
+    // larger side) so a refit roughly preserves scale; falls back to a ~90% fit of the current
+    // (cropped or full) image. Always clamped to image bounds with the ratio preserved.
+    ratioRectAround(cx, cy, pref) {
+      const ratio = this.cropRatio;
+      const W = this.curW(), H = this.curH();
+      // Largest ratio-locked rect that fits the current image region.
+      let w = Math.min(W, H * ratio), h = w / ratio;
+      // 90% fit when creating fresh; honor a preferred long-side when refitting an existing crop.
+      if (pref != null) { const pw = ratio >= 1 ? pref : pref * ratio; w = Math.min(w, pw); h = w / ratio; }
+      else { w *= 0.9; h = w / ratio; }
+      let x = cx - w / 2, y = cy - h / 2;
+      // Clamp center so the whole rect stays inside the source image.
+      x = Math.max(0, Math.min(x, this.iw - w));
+      y = Math.max(0, Math.min(y, this.ih - h));
+      return { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) };
+    }
+
+    // ── backdrop (the pretty-screenshot wrap) ──
+    bdLookup(id) { return BACKDROPS.find((b) => b[0] === id); }
+    toggleBackdrop() {
+      this.pushHistory();
+      this.backdrop = this.backdrop ? null : { ...DEFAULT_BACKDROP };
+      this.redoStack = [];
+      this.syncBackdropUI();
+      this.render();
+    }
+    setBackdropBg(id) {
+      if (!this.bdLookup(id)) return;
+      this.pushHistory();
+      if (!this.backdrop) this.backdrop = { ...DEFAULT_BACKDROP };
+      this.backdrop.bg = id;
+      this.redoStack = [];
+      this.syncBackdropUI();
+      this.render();
+    }
+    setBackdropPad(pct) {
+      const pad = Math.max(0.01, Math.min(0.3, Number(pct) / 100));
+      if (!this.backdrop) { this.backdrop = { ...DEFAULT_BACKDROP }; this.redoStack = []; }
+      this.backdrop.pad = pad;
+      this.syncBackdropUI();
+      this.render();
+    }
+    // Reflect backdrop state into the toolbar (toggle highlight, options visibility, active bg, pad slider).
+    syncBackdropUI() {
+      const r = this.root, on = !!this.backdrop;
+      r.getElementById("bdToggle").classList.toggle("on", on);
+      r.getElementById("bdOpts").classList.toggle("show", on);
+      const bg = on ? this.backdrop.bg : null;
+      for (const b of r.querySelectorAll("[data-bg]")) b.classList.toggle("on", b.dataset.bg === bg);
+      if (on) r.getElementById("bdPad").value = Math.round(this.backdrop.pad * 100);
+    }
+    // Backdrop padding in source-image px (a fraction of the content width). Content = cropped region.
+    bdPadPx() { return this.backdrop ? Math.round(this.curW() * this.backdrop.pad) : 0; }
+    // Full canvas dimensions including the backdrop padding around the content.
+    fullW() { return this.curW() + 2 * this.bdPadPx(); }
+    fullH() { return this.curH() + 2 * this.bdPadPx(); }
 
     topAt(p) {
       const tol = 9 * this.unit;
@@ -401,9 +562,11 @@
       const input = document.createElement("input");
       input.className = "txtin";
       // position relative to the canvas within the (scrollable) stage — offset coords scroll with content.
-      // p is in source-image space; subtract the crop origin to land in displayed-canvas space.
-      input.style.left = this.canvas.offsetLeft + (p.x - this.cropOx()) * sc + "px";
-      input.style.top = this.canvas.offsetTop + (p.y - this.cropOy()) * sc + "px";
+      // p is in source-image space; subtract the crop origin and add the backdrop padding to land
+      // in displayed-canvas space (the canvas now includes the padding around the content).
+      const pad = this.bdPadPx();
+      input.style.left = this.canvas.offsetLeft + (pad + p.x - this.cropOx()) * sc + "px";
+      input.style.top = this.canvas.offsetTop + (pad + p.y - this.cropOy()) * sc + "px";
       input.style.color = this.color;
       input.style.fontSize = size * sc + "px";
       this.stage.appendChild(input);
@@ -425,12 +588,26 @@
     render() {
       this.fit();
       const ctx = this.ctx;
-      // Canvas is sized to the effective (cropped) region; translating by the crop origin
-      // lets every shape keep its original source-image coordinates.
-      this.canvas.width = this.curW();
-      this.canvas.height = this.curH();
+      const pad = this.bdPadPx();
+      // Canvas spans content + backdrop padding; the content's top-left in canvas px is (pad,pad).
+      this.canvas.width = this.fullW();
+      this.canvas.height = this.fullH();
+
+      // Paint the backdrop (background + shadowed rounded card) behind the content, if enabled.
+      if (this.backdrop) this.paintBackdrop(ctx, pad);
+
       ctx.save();
-      ctx.translate(-this.cropOx(), -this.cropOy());
+      // Content is clipped to a rounded-rect when a backdrop is on; the round corners read on the
+      // image edges only (annotations inside stay sharp, the crop dim/guides draw on top, unclipped).
+      if (this.backdrop) {
+        const r = Math.round(this.curW() * this.backdrop.radius);
+        ctx.beginPath();
+        roundRectPath(ctx, pad, pad, this.curW(), this.curH(), r);
+        ctx.clip();
+      }
+      // Translate so a source-image coordinate (x,y) lands at (pad + x - cropOx, pad + y - cropOy):
+      // pad shifts past the backdrop margin, the crop origin keeps shapes in original image space.
+      ctx.translate(pad - this.cropOx(), pad - this.cropOy());
       ctx.drawImage(this.img, 0, 0);
       for (const s of this.shapes) drawShape(ctx, s, this.unit, this.blurCanvas);
       if (this.drag && !this.drag.move && this.drag.tool !== "crop") { const s = this.toShape(this.drag); if (s) drawShape(ctx, s, this.unit, this.blurCanvas); }
@@ -441,6 +618,36 @@
       ctx.restore();
       // Keep the floating Apply/Cancel buttons glued to the selection as it (or the view) changes.
       if (this.pendingCrop) this.positionCropUI();
+    }
+
+    // Fill the canvas with the chosen background (gradient or solid), then drop a soft shadow under
+    // the content card by filling its rounded-rect once with a shadow set (then clearing the shadow,
+    // so the actual image draws crisply on top in render()).
+    paintBackdrop(ctx, pad) {
+      const bd = this.backdrop, entry = this.bdLookup(bd.bg) || BACKDROPS[0];
+      const val = entry[2];
+      const W = this.fullW(), H = this.fullH();
+      ctx.save();
+      if (Array.isArray(val)) {
+        const g = ctx.createLinearGradient(0, 0, 0, H);
+        g.addColorStop(0, val[0]); g.addColorStop(1, val[1]);
+        ctx.fillStyle = g;
+      } else ctx.fillStyle = val;
+      ctx.fillRect(0, 0, W, H);
+      ctx.restore();
+      if (bd.shadow) {
+        const r = Math.round(this.curW() * bd.radius);
+        ctx.save();
+        ctx.shadowColor = "rgba(0,0,0,0.35)";
+        ctx.shadowBlur = Math.max(12, pad * 0.7);
+        ctx.shadowOffsetY = Math.max(6, pad * 0.35);
+        // Fill the card footprint to cast the shadow; the image overpaints it in render().
+        ctx.fillStyle = "#000";
+        ctx.beginPath();
+        roundRectPath(ctx, pad, pad, this.curW(), this.curH(), r);
+        ctx.fill();
+        ctx.restore();
+      }
     }
 
     // Dim everything outside the crop rect and draw a crisp border + rule-of-thirds guides.
@@ -482,9 +689,10 @@
       ctx.restore();
     }
 
-    // History captures shapes + the applied crop together, so undo/redo restores the crop too.
-    snapshot() { return JSON.stringify({ shapes: this.shapes, crop: this.crop }); }
-    restore(json) { const s = JSON.parse(json); this.shapes = s.shapes; this.crop = s.crop || null; }
+    // History captures shapes + the applied crop + the backdrop together, so undo/redo restores all
+    // three. (cropRatio is a transient tool setting, not part of the document, so it's not tracked.)
+    snapshot() { return JSON.stringify({ shapes: this.shapes, crop: this.crop, backdrop: this.backdrop }); }
+    restore(json) { const s = JSON.parse(json); this.shapes = s.shapes; this.crop = s.crop || null; this.backdrop = s.backdrop || null; this.syncBackdropUI(); }
     pushHistory() { this.undoStack.push(this.snapshot()); if (this.undoStack.length > 80) this.undoStack.shift(); }
     undo() { if (!this.undoStack.length) return; this.redoStack.push(this.snapshot()); this.restore(this.undoStack.pop()); this.selected = null; this.pendingCrop = null; this.clearCropUI(); this.render(); }
     redo() { if (!this.redoStack.length) return; this.undoStack.push(this.snapshot()); this.restore(this.redoStack.pop()); this.selected = null; this.pendingCrop = null; this.clearCropUI(); this.render(); }
@@ -567,4 +775,16 @@
     return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
   }
   function escapeHtml(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+  // Add a rounded-rect sub-path to ctx's current path. Uses native ctx.roundRect (Chrome 124+) and
+  // falls back to a manual arc-cornered path so it still works if roundRect is unavailable.
+  function roundRectPath(ctx, x, y, w, h, r) {
+    r = Math.max(0, Math.min(r, w / 2, h / 2));
+    if (typeof ctx.roundRect === "function") { ctx.roundRect(x, y, w, h, r); return; }
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
 })();

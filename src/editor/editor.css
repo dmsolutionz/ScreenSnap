@@ -141,3 +141,10 @@ body {
 .ss-crop-bar .ss-btn-ghost { color: #fff; border-color: rgba(255,255,255,0.25); background: transparent; }
 .ss-crop-bar .ss-btn-ghost:hover { background: rgba(255,255,255,0.1); }
 .ss-crop-hint { color: #fff; font-size: 12px; opacity: 0.85; margin-right: 4px; }
+.ss-crop-presets { display: flex; gap: 5px; margin-right: 6px; }
+.ss-crop-preset { font-family: var(--mono); font-size: 11px; padding: 4px 9px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.22); background: transparent; color: #e7e8ea; cursor: pointer; }
+.ss-crop-preset:hover { background: rgba(255,255,255,0.1); }
+.ss-crop-preset.on { background: var(--green); border-color: var(--green); color: #fff; }
+
+/* backdrop padding slider in the toolbar */
+.ss-bd-range { width: 84px; accent-color: var(--green); cursor: pointer; vertical-align: middle; }

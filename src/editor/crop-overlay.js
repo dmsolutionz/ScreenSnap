@@ -11,6 +11,9 @@ export function createCropOverlay({ stageEl, canvas, getTransforms, srcW, srcH, 
   let sel = null;     // current selection in overlay-local px: { x, y, w, h }
   let drag = null;    // { x0, y0 }
   let active = false;
+  let ratio = 0;      // locked aspect ratio (w/h); 0 = free-form
+
+  const PRESETS = [["0", "Free"], ["1.7777778", "16:9"], ["1", "1:1"], ["0.5625", "9:16"], ["1.3333333", "4:3"]];
 
   function canvasBoxInStage() {
     // The canvas is centered inside the (position:relative, scrollable, padded) stage. Compute its box
@@ -38,6 +41,9 @@ export function createCropOverlay({ stageEl, canvas, getTransforms, srcW, srcH, 
         <span class="ss-crop-g ss-crop-gh1"></span><span class="ss-crop-g ss-crop-gh2"></span>
       </div>
       <div class="ss-crop-bar" id="ss-crop-bar">
+        <div class="ss-crop-presets" id="ss-crop-presets">
+          ${PRESETS.map(([r, label], i) => `<button class="ss-crop-preset ${i === 0 ? "on" : ""}" data-ratio="${r}" type="button">${label}</button>`).join("")}
+        </div>
         <span class="ss-crop-hint" id="ss-crop-hint">Drag to select a crop area</span>
         <button class="ss-btn ss-btn-ghost ss-crop-reset" id="ss-crop-reset" type="button">Reset</button>
         <button class="ss-btn ss-btn-ghost" id="ss-crop-cancel" type="button">Cancel</button>
@@ -51,6 +57,15 @@ export function createCropOverlay({ stageEl, canvas, getTransforms, srcW, srcH, 
     host.querySelector("#ss-crop-apply").addEventListener("click", apply);
     host.querySelector("#ss-crop-cancel").addEventListener("click", () => exit());
     host.querySelector("#ss-crop-reset").addEventListener("click", reset);
+    host.querySelector("#ss-crop-presets").addEventListener("pointerdown", (e) => e.stopPropagation());
+    host.querySelector("#ss-crop-presets").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-ratio]");
+      if (!b) return;
+      ratio = Number(b.dataset.ratio) || 0;
+      host.querySelectorAll(".ss-crop-preset").forEach((x) => x.classList.toggle("on", x === b));
+      applyRatioToSelection();
+      paint();
+    });
     // Start with the whole frame selected so Apply/Reset read naturally.
     sel = { x: 0, y: 0, w: box.width, h: box.height };
     paint();
@@ -66,25 +81,56 @@ export function createCropOverlay({ stageEl, canvas, getTransforms, srcW, srcH, 
     e.preventDefault();
     host.setPointerCapture?.(e.pointerId);
     const p = localPoint(e);
-    drag = { x0: p.x, y0: p.y };
+    drag = { x0: p.x, y0: p.y, box: canvasBoxInStage() }; // cache the box for the whole drag
     sel = { x: p.x, y: p.y, w: 0, h: 0 };
     paint();
   }
   function onMove(e) {
     if (!drag) return;
     const p = localPoint(e);
-    sel = { x: Math.min(drag.x0, p.x), y: Math.min(drag.y0, p.y), w: Math.abs(p.x - drag.x0), h: Math.abs(p.y - drag.y0) };
+    if (ratio) sel = ratioRect(drag.x0, drag.y0, p.x, p.y, ratio, drag.box);
+    else sel = { x: Math.min(drag.x0, p.x), y: Math.min(drag.y0, p.y), w: Math.abs(p.x - drag.x0), h: Math.abs(p.y - drag.y0) };
     paint();
   }
   function onUp(e) {
     if (!drag) return;
     drag = null;
     host.releasePointerCapture?.(e.pointerId);
-    if (sel && (sel.w < 8 || sel.h < 8)) { // treat a tiny drag as "select all"
-      const box = canvasBoxInStage();
-      sel = { x: 0, y: 0, w: box.width, h: box.height };
+    if (sel && (sel.w < 8 || sel.h < 8)) { // tiny drag → "select all" (at the locked ratio, if any)
+      if (ratio) applyRatioToSelection();
+      else { const box = canvasBoxInStage(); sel = { x: 0, y: 0, w: box.width, h: box.height }; }
     }
     paint();
+  }
+
+  // Constrain a drag to the locked aspect ratio, clamped to the available space in the drag direction.
+  function ratioRect(ax, ay, px, py, r, box) {
+    let w = Math.abs(px - ax);
+    let h = w / r;
+    const availX = px >= ax ? box.width - ax : ax;
+    const availY = py >= ay ? box.height - ay : ay;
+    if (w > availX) { w = availX; h = w / r; }
+    if (h > availY) { h = availY; w = h * r; }
+    const x = px >= ax ? ax : ax - w;
+    const y = py >= ay ? ay : ay - h;
+    return { x, y, w, h };
+  }
+
+  // Reshape the current selection to the locked ratio, centered on its center (or the canvas center),
+  // fitting within ~90% of the canvas. No-op in free mode.
+  function applyRatioToSelection() {
+    if (!ratio) return;
+    const box = canvasBoxInStage();
+    const cx = sel ? sel.x + sel.w / 2 : box.width / 2;
+    const cy = sel ? sel.y + sel.h / 2 : box.height / 2;
+    let w = box.width * 0.9;
+    let h = w / ratio;
+    if (h > box.height * 0.9) { h = box.height * 0.9; w = h * ratio; }
+    let x = cx - w / 2;
+    let y = cy - h / 2;
+    x = Math.max(0, Math.min(x, box.width - w));
+    y = Math.max(0, Math.min(y, box.height - h));
+    sel = { x, y, w, h };
   }
 
   function paint() {
@@ -120,7 +166,10 @@ export function createCropOverlay({ stageEl, canvas, getTransforms, srcW, srcH, 
     let h = Math.round(base.h * fh);
     let x = Math.round(base.x + base.w * fx);
     let y = Math.round(base.y + base.h * fy);
-    w = clamp(w, 2, srcW); h = clamp(h, 2, srcH);
+    w = clamp(w, 2, srcW);
+    // With a locked ratio, derive height from width so the crop lands at the nominal aspect (the
+    // independent rounding above could otherwise drift it by a pixel).
+    h = clamp(ratio ? Math.round(w / ratio) : h, 2, srcH);
     x = clamp(x, 0, srcW - w); y = clamp(y, 0, srcH - h);
     return { x, y, w, h };
   }

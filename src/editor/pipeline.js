@@ -7,7 +7,7 @@ import {
   Input, ALL_FORMATS, BlobSource, VideoSampleSink, AudioBufferSink,
   Output, Mp4OutputFormat, BufferTarget, CanvasSource, AudioBufferSource, getEncodableCodecs,
 } from "../vendor/mediabunny.mjs";
-import { outputDims, keepFrame, outTimestamp, outFrameDuration, outDuration, audioEnabled, effectiveSrcRect } from "./transforms.js";
+import { composeDims, keepFrame, outTimestamp, outFrameDuration, outDuration, audioEnabled, effectiveSrcRect } from "./transforms.js";
 import { drawComposite } from "./compositor.js";
 
 // input: a Mediabunny Input (from source.toInput). transforms: see transforms.js. store: layer store
@@ -24,7 +24,7 @@ export async function transcode({ input, transforms, store, onProgress, signal }
 
   const srcW = await vTrack.getDisplayWidth();
   const srcH = await vTrack.getDisplayHeight();
-  const { w: outW, h: outH } = outputDims(srcW, srcH, transforms.outScale, transforms.crop);
+  const { outW, outH, dest, backdrop } = composeDims(transforms, srcW, srcH);
 
   const totalOut = Math.max(0.0001, outDuration(transforms));
 
@@ -67,7 +67,7 @@ export async function transcode({ input, transforms, store, onProgress, signal }
       const srcSec = sample.timestamp;
       if (keepFrame(srcSec, transforms)) {
         const srcRect = effectiveSrcRect(transforms, srcSec, srcW, srcH);
-        drawComposite(ctx, sample, layers, { outW, outH, srcW, srcH, unit, blurCanvas: null, srcRect, timeSec: srcSec });
+        drawComposite(ctx, sample, layers, { outW, outH, srcW, srcH, unit, blurCanvas: null, srcRect, timeSec: srcSec, dest, backdrop });
         const ts = outTimestamp(srcSec, transforms);
         const dur = outFrameDuration(sample.duration || 1 / 30, transforms);
         await vSrc.add(Math.max(0, ts), Math.max(1 / 1000, dur));

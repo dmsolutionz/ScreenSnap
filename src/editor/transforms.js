@@ -12,7 +12,7 @@
 
 export function defaultTransforms(meta) {
   const dur = Math.max(0, (meta && meta.durationSec) || 0);
-  return { trimIn: 0, trimOut: dur, cuts: [], outScale: null, speed: 1, crop: null, zoom: [] };
+  return { trimIn: 0, trimOut: dur, cuts: [], outScale: null, speed: 1, crop: null, zoom: [], backdrop: null };
 }
 
 // Round a value to the nearest EVEN integer (>= 2). H.264 chroma subsampling requires even dims.
@@ -50,6 +50,24 @@ export function cropRect(t, srcW, srcH) {
   const x = clamp(c.x, 0, srcW - w);
   const y = clamp(c.y, 0, srcH - h);
   return { x, y, w, h };
+}
+
+// ── Backdrop (beautify: padded background around the content) ─────────────────────────────────────
+// composeDims() returns the FINAL output canvas size plus the dest rect where the (cropped) content is
+// drawn within it. With no backdrop the content fills the whole output (dest = full, identical to the
+// prior behavior). With a backdrop the output grows by `pad` (a fraction of the content width) on
+// every side and the content is centered, leaving room for the background / shadow / rounded card.
+// backdrop = { pad, radius, shadow, bg } where pad/radius are fractions of the content width.
+export function composeDims(t, srcW, srcH) {
+  const c = outputDims(srcW, srcH, t && t.outScale, t && t.crop); // content (frame) dims, even
+  const bd = t && t.backdrop;
+  const pad = bd && bd.pad ? clamp(bd.pad, 0, 0.4) : 0;
+  if (!pad) return { outW: c.w, outH: c.h, dest: { x: 0, y: 0, w: c.w, h: c.h }, backdrop: null };
+  const p = Math.round(pad * c.w);
+  const outW = toEven(c.w + p * 2);
+  const outH = toEven(c.h + p * 2);
+  const dest = { x: Math.round((outW - c.w) / 2), y: Math.round((outH - c.h) / 2), w: c.w, h: c.h };
+  return { outW, outH, dest, backdrop: bd };
 }
 
 // ── Segments (trim minus cuts) ──────────────────────────────────────────────────────────────────

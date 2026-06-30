@@ -3,7 +3,7 @@
 // FOUNDATION-OWNED and final — feature work happens inside the modules this orchestrates.
 import { loadClip, pickFile, toInput } from "./source.js";
 import { listIds } from "./idb.js";
-import { defaultTransforms, outputDims, outDuration } from "./transforms.js";
+import { defaultTransforms, composeDims, outDuration } from "./transforms.js";
 import { createLayerStore, newImageLayer } from "./layers-model.js";
 import { buildShell } from "./ui-shell.js";
 import { createPreview } from "./preview.js";
@@ -192,6 +192,22 @@ function buildToolbar(el, transforms) {
       <button class="ss-tool" id="ss-zoom-clear" title="Remove all zoom keyframes">Clear zoom</button>
     </div>
     <div class="ss-tb-group">
+      <button class="ss-tool" id="ss-bd-btn" title="Wrap the video in a padded background">Backdrop</button>
+      <select id="ss-bd-bg" class="ss-select" title="Backdrop background">
+        <option value="grad-violet">Violet</option>
+        <option value="grad-ocean">Ocean</option>
+        <option value="grad-sunset">Sunset</option>
+        <option value="grad-mint">Mint</option>
+        <option value="grad-slate">Slate</option>
+        <option value="dark">Dark</option>
+        <option value="light">Light</option>
+        <option value="white">White</option>
+      </select>
+      <label class="ss-tb-label">Pad
+        <input type="range" id="ss-bd-pad" class="ss-bd-range" min="0" max="0.2" step="0.01" value="0.07" />
+      </label>
+    </div>
+    <div class="ss-tb-group">
       <label class="ss-tb-label">Resolution
         <select id="ss-res" class="ss-select">
           <option value="">Original</option>
@@ -241,6 +257,24 @@ function buildToolbar(el, transforms) {
     transforms.zoom = [];
     setStatus(session.shell.statusEl, session.meta, transforms);
     session.timeline.refresh();
+    session.preview.redraw();
+  });
+  el.querySelector("#ss-bd-btn").addEventListener("click", (e) => {
+    if (!session) return;
+    if (transforms.backdrop) transforms.backdrop = null;
+    else transforms.backdrop = { pad: Number(el.querySelector("#ss-bd-pad").value) || 0.07, radius: 0.03, shadow: true, bg: el.querySelector("#ss-bd-bg").value || "grad-violet" };
+    e.currentTarget.classList.toggle("on", !!transforms.backdrop);
+    setStatus(session.shell.statusEl, session.meta, transforms);
+    session.preview.redraw();
+  });
+  el.querySelector("#ss-bd-bg").addEventListener("change", (e) => {
+    if (!session || !transforms.backdrop) return;
+    transforms.backdrop.bg = e.target.value;
+    session.preview.redraw();
+  });
+  el.querySelector("#ss-bd-pad").addEventListener("input", (e) => {
+    if (!session || !transforms.backdrop) return;
+    transforms.backdrop.pad = Number(e.target.value) || 0;
     session.preview.redraw();
   });
   el.querySelector("#ss-colors").addEventListener("click", (e) => {
@@ -442,12 +476,13 @@ function setStatus(el, meta, t, errMsg) {
   if (!el) return;
   if (errMsg) { el.textContent = errMsg; el.classList.add("ss-status-err"); return; }
   el.classList.remove("ss-status-err");
-  const d = outputDims(meta.width || 2, meta.height || 2, t.outScale, t.crop);
-  const res = `${d.w}×${d.h}${t.crop ? " cropped" : ""}`;
+  const d = composeDims(t, meta.width || 2, meta.height || 2);
+  const res = `${d.outW}×${d.outH}${t.crop ? " cropped" : ""}`;
   const cuts = Array.isArray(t.cuts) && t.cuts.length ? ` · ${t.cuts.length} cut${t.cuts.length > 1 ? "s" : ""}` : "";
   const zoom = Array.isArray(t.zoom) && t.zoom.length ? " · zoom" : "";
+  const bd = t.backdrop ? " · backdrop" : "";
   const audio = (t.speed || 1) === 1 ? "audio on" : "audio off (speed ≠ 1x)";
-  el.textContent = `${res} · ${t.speed}x · ${outDuration(t).toFixed(1)}s out${cuts}${zoom} · ${audio}`;
+  el.textContent = `${res} · ${t.speed}x · ${outDuration(t).toFixed(1)}s out${cuts}${zoom}${bd} · ${audio}`;
 }
 
 // Raster formats only — SVG is excluded deliberately (scriptable XML, and it has no intrinsic

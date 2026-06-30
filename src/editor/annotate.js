@@ -6,7 +6,7 @@
 // store change.
 import { newShapeLayer } from "./layers-model.js";
 import { hit, translate } from "./shapes.js";
-import { cropRect } from "./transforms.js";
+import { cropRect, composeDims } from "./transforms.js";
 
 // { canvas, store, getTool, getColor, getTransforms }
 export function createAnnotator({ canvas, store, getTool, getColor, getTransforms }) {
@@ -33,7 +33,9 @@ export function createAnnotator({ canvas, store, getTool, getColor, getTransform
     const t = getTransforms ? getTransforms() : null;
     const downscaled = !!(t && t.outScale && t.outScale.maxHeight);
     const cropped = !!(t && t.crop);
-    if (!downscaled && !cropped && canvas.width > 0 && canvas.height > 0) {
+    const padded = !!(t && t.backdrop && t.backdrop.pad);
+    // Only the un-downscaled, un-cropped, un-padded canvas equals the source frame — latch then.
+    if (!downscaled && !cropped && !padded && canvas.width > 0 && canvas.height > 0) {
       srcW = canvas.width;
       srcH = canvas.height;
     }
@@ -47,18 +49,22 @@ export function createAnnotator({ canvas, store, getTool, getColor, getTransform
     return cropRect(t, srcW || canvas.width || 1, srcH || canvas.height || 1);
   }
 
-  // Map a pointer event to SOURCE-pixel coordinates. The source→output scale is uniform and aspect-
-  // preserving (see outputDims), so the pointer's fraction across the displayed canvas equals the same
-  // fraction across the base (crop) rect: srcX = cropX + fractionX * cropW — independent of the chosen
-  // output resolution. Without a crop this collapses to fractionX * srcW (the prior behavior).
+  // Map a pointer event to SOURCE-pixel coordinates. The displayed canvas is the full COMPOSED output
+  // (which may include backdrop padding), within which the content occupies `dest`. So we convert the
+  // pointer to a fraction of the output, subtract the content's offset to get a fraction of the content
+  // (= the crop rect), then map that into source px. With no backdrop, dest = the whole output and this
+  // collapses to fractionX * cropW (and to fractionX * srcW with no crop) — the prior behavior.
   function toImg(e) {
     syncSrcDims();
     const r = canvas.getBoundingClientRect();
     const br = baseRect();
-    return {
-      x: br.x + ((e.clientX - r.left) / (r.width || 1)) * br.w,
-      y: br.y + ((e.clientY - r.top) / (r.height || 1)) * br.h,
-    };
+    const t = getTransforms ? getTransforms() : null;
+    const cd = composeDims(t || {}, srcW || canvas.width || 1, srcH || canvas.height || 1);
+    const fxOut = (e.clientX - r.left) / (r.width || 1);
+    const fyOut = (e.clientY - r.top) / (r.height || 1);
+    const fx = (fxOut * cd.outW - cd.dest.x) / (cd.dest.w || 1);
+    const fy = (fyOut * cd.outH - cd.dest.y) / (cd.dest.h || 1);
+    return { x: br.x + fx * br.w, y: br.y + fy * br.h };
   }
   // Stroke weight + hit tolerance scale with the SOURCE resolution, mirroring preview.js's `unit`,
   // so they stay correct regardless of the selected output resolution (stored coords are source px).
@@ -88,15 +94,22 @@ export function createAnnotator({ canvas, store, getTool, getColor, getTransform
     const size = Math.max(18, srcWidth() / 30);
     const r = canvas.getBoundingClientRect();
     const br = baseRect();
-    const sc = r.width / (br.w || 1);  // source px -> display px (x)
-    const scY = r.height / (br.h || 1); // source px -> display px (y)
+    // The content occupies `dest` within the displayed (possibly padded) output; convert source px to
+    // display px through the content's on-screen box, and offset by the content's display origin.
+    const cd = composeDims((getTransforms && getTransforms()) || {}, srcWidth(), srcH || canvas.height || 1);
+    const contentW = r.width * cd.dest.w / (cd.outW || 1);
+    const contentH = r.height * cd.dest.h / (cd.outH || 1);
+    const originX = r.left + r.width * cd.dest.x / (cd.outW || 1);
+    const originY = r.top + r.height * cd.dest.y / (cd.outH || 1);
+    const sc = contentW / (br.w || 1);  // source px -> display px (x)
+    const scY = contentH / (br.h || 1); // source px -> display px (y)
     const input = document.createElement("input");
     input.type = "text";
     input.style.cssText =
       "position:fixed;z-index:2147483647;margin:0;padding:0;border:0;outline:0;background:transparent;" +
       `font:600 ${size * sc}px 'Geist',system-ui,-apple-system,'Segoe UI',sans-serif;line-height:1;`;
-    input.style.left = r.left + (p.x - br.x) * sc + "px";
-    input.style.top = r.top + (p.y - br.y) * scY + "px";
+    input.style.left = originX + (p.x - br.x) * sc + "px";
+    input.style.top = originY + (p.y - br.y) * scY + "px";
     input.style.color = c;
     document.body.appendChild(input);
     setTimeout(() => input.focus(), 0);
