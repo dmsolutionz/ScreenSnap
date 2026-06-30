@@ -7,8 +7,11 @@
   "license": "GPL-3.0-or-later",
   "scripts": {
     "make:icons": "node scripts/make-icons.mjs",
+    "lint": "eslint src",
     "test": "node --test"
   },
-  "dependencies": {},
-  "devDependencies": {}
+  "devDependencies": {
+    "eslint": "10.6.0",
+    "globals": "17.7.0"
+  }
 }
