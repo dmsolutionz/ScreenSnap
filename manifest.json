@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "screensnap.",
-  "version": "1.1.0",
-  "description": "Free, local, watermark-free screenshots and screen recording. Native MP4, all on your machine — no sign-up, no cloud, no upsell.",
+  "version": "1.2.0",
+  "description": "Free, local, watermark-free screen recorder & screenshots. Edit, crop, zoom, beautify, export native MP4 or GIF — no sign-up.",
   "minimum_chrome_version": "124",
   "icons": {
     "16": "icons/icon-16.png",

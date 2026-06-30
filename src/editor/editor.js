@@ -3,14 +3,17 @@
 // FOUNDATION-OWNED and final — feature work happens inside the modules this orchestrates.
 import { loadClip, pickFile, toInput } from "./source.js";
 import { listIds } from "./idb.js";
-import { defaultTransforms } from "./transforms.js";
+import { defaultTransforms, composeDims, outDuration } from "./transforms.js";
 import { createLayerStore, newImageLayer } from "./layers-model.js";
 import { buildShell } from "./ui-shell.js";
 import { createPreview } from "./preview.js";
 import { createTimeline } from "./timeline.js";
 import { createLayersPanel } from "./layers-ui.js";
 import { createAnnotator } from "./annotate.js";
-import { runExport } from "./export.js";
+import { runExport, runGifExport } from "./export.js";
+import { createCropOverlay } from "./crop-overlay.js";
+import { createZoomOverlay } from "./zoom-overlay.js";
+import { decodeGif } from "./gif-decode.js";
 
 const COLORS = ["#ef4444", "#f59e0b", "#22c55e", "#3b82f6", "#111111"];
 const TOOLS = [
@@ -28,6 +31,9 @@ const openBtn = document.getElementById("open-btn");
 let session = null; // { input, meta, transforms, store, preview, timeline, annotator, layersPanel, shell, fileName }
 let tool = "select";
 let color = "#22c55e";
+let lastTime = 0;        // latest preview playhead (source seconds) — anchor for a new zoom block
+let selectedZoomId = null; // id of the zoom block currently being edited (focus box shown)
+const NEW_ZOOM_SCALE = 2;  // default magnification for a freshly-added zoom block
 
 async function boot() {
   const params = new URLSearchParams(location.search);
@@ -92,6 +98,23 @@ async function start(blob, fileName) {
       setStatus(shell.statusEl, meta, transforms);
     },
     onSeek: (sec) => preview.seekTo(sec),
+    onAddCut: (i, o) => {
+      transforms.cuts = (transforms.cuts || []).concat([{ in: i, out: o }]);
+      setStatus(shell.statusEl, meta, transforms);
+      timeline.refresh();
+      preview.redraw();
+    },
+    onRemoveCut: (idx) => {
+      transforms.cuts = (transforms.cuts || []).filter((_, k) => k !== idx);
+      setStatus(shell.statusEl, meta, transforms);
+      timeline.refresh();
+      preview.redraw();
+    },
+    getCuts: () => transforms.cuts || [],
+    getZoomBlocks: () => transforms.zoom || [],
+    getSelectedZoom: () => selectedZoomId,
+    onZoomSelect: (id) => selectZoom(id),
+    onZoomChange: (id, patch) => changeZoom(id, patch),
   });
 
   const layersPanel = createLayersPanel({
@@ -100,10 +123,45 @@ async function start(blob, fileName) {
     onAddImage: async () => {
       const file = await pickImageFile();
       if (!file) return;
-      const bitmap = await createImageBitmap(file);
-      const maxW = Math.min(bitmap.width, width * 0.4 || bitmap.width);
-      const scale = maxW / bitmap.width;
-      store.add(newImageLayer({ bitmap, x: 24, y: 24, w: bitmap.width * scale, h: bitmap.height * scale }));
+      await addImageLayer(file, store, width);
+    },
+  });
+
+  // Crop overlay: a "Crop" toolbar toggle enters it; Apply sets transforms.crop (source px) and the
+  // preview/export recompute from there. The annotator's canvas is covered while it's active.
+  const cropOverlay = createCropOverlay({
+    stageEl: shell.stageCanvas.parentElement,
+    canvas: shell.stageCanvas,
+    getTransforms: () => transforms,
+    srcW: width,
+    srcH: height,
+    onApply: (crop) => {
+      transforms.crop = crop; // null clears
+      setStatus(shell.statusEl, meta, transforms);
+      preview.redraw();
+      zoomOverlay.refresh(); // crop changes the content rect — re-place the focus box if shown
+      markCropBtn(false);
+    },
+    onExit: () => markCropBtn(false),
+  });
+
+  // Zoom focus overlay: shown over the stage while a zoom block is selected. Drag the box to move the
+  // focus point; drag its corner to change the magnification. The host is pointer-transparent except
+  // for the box, so annotation still works around it.
+  const zoomOverlay = createZoomOverlay({
+    stageEl: shell.stageCanvas.parentElement,
+    canvas: shell.stageCanvas,
+    getTransforms: () => transforms,
+    srcW: width,
+    srcH: height,
+    getBlock: () => (transforms.zoom || []).find((b) => b.id === selectedZoomId) || null,
+    onChange: ({ cx, cy, scale }) => {
+      const b = (transforms.zoom || []).find((x) => x.id === selectedZoomId);
+      if (!b) return;
+      b.cx = cx; b.cy = cy; b.scale = scale;
+      timeline.refresh();
+      zoomOverlay.refresh();
+      preview.redraw();
     },
   });
 
@@ -111,7 +169,7 @@ async function start(blob, fileName) {
   // (add/remove/move/opacity/visibility), so annotations show live without a second subscription
   // here — adding one would double-composite each edit.
 
-  session = { input, meta, transforms, store, preview, timeline, annotator, layersPanel, shell, fileName, blob };
+  session = { input, meta, transforms, store, preview, timeline, annotator, layersPanel, cropOverlay, zoomOverlay, shell, fileName, blob };
 
   // Prominent transport: a play/pause button + time readout, plus a click-to-play overlay centred on
   // the stage (hidden while playing and while a drawing tool is active so it never blocks annotation).
@@ -129,6 +187,28 @@ function buildToolbar(el, transforms) {
     </div>
     <div class="ss-tb-group" id="ss-colors">
       ${COLORS.map((c) => `<button class="ss-sw ${c === color ? "on" : ""}" data-color="${c}" style="background:${c}"></button>`).join("")}
+    </div>
+    <div class="ss-tb-group">
+      <button class="ss-tool" id="ss-crop-btn" title="Crop the frame">Crop</button>
+      <button class="ss-tool" id="ss-cut-btn" title="Cut mode: drag on the timeline to remove a section">Cut</button>
+      <button class="ss-tool" id="ss-zoom-add" title="Add a zoom at the playhead — then drag the box on the video to aim it, and its edges on the timeline to set duration">+ Zoom</button>
+      <button class="ss-tool" id="ss-zoom-remove" title="Remove the selected zoom" disabled>Remove zoom</button>
+    </div>
+    <div class="ss-tb-group">
+      <button class="ss-tool" id="ss-bd-btn" title="Wrap the video in a padded background">Backdrop</button>
+      <select id="ss-bd-bg" class="ss-select" title="Backdrop background">
+        <option value="grad-violet">Violet</option>
+        <option value="grad-ocean">Ocean</option>
+        <option value="grad-sunset">Sunset</option>
+        <option value="grad-mint">Mint</option>
+        <option value="grad-slate">Slate</option>
+        <option value="dark">Dark</option>
+        <option value="light">Light</option>
+        <option value="white">White</option>
+      </select>
+      <label class="ss-tb-label">Pad
+        <input type="range" id="ss-bd-pad" class="ss-bd-range" min="0" max="0.2" step="0.01" value="0.07" />
+      </label>
     </div>
     <div class="ss-tb-group">
       <label class="ss-tb-label">Resolution
@@ -149,7 +229,8 @@ function buildToolbar(el, transforms) {
     </div>
     <div class="ss-tb-group ss-tb-right">
       <button class="ss-btn ss-btn-primary" id="ss-download">Download original</button>
-      <button class="ss-btn ss-btn-ghost" id="ss-export">Export edited MP4</button>
+      <button class="ss-btn ss-btn-ghost" id="ss-export">Export MP4</button>
+      <button class="ss-btn ss-btn-ghost" id="ss-export-gif">Export GIF</button>
       <button class="ss-btn ss-btn-ghost" id="ss-close">Close</button>
     </div>`;
 
@@ -158,7 +239,43 @@ function buildToolbar(el, transforms) {
     if (!b) return;
     tool = b.dataset.tool;
     session?.annotator.setTool(tool);
+    if (session?.cropOverlay?.isActive()) session.cropOverlay.exit(); // leave crop when picking a tool
+    selectZoom(null); // hide the zoom focus box so it never blocks drawing
     el.querySelectorAll("[data-tool]").forEach((x) => x.classList.toggle("on", x.dataset.tool === tool));
+  });
+
+  el.querySelector("#ss-crop-btn").addEventListener("click", () => {
+    if (!session?.cropOverlay) return;
+    if (session.cropOverlay.isActive()) { session.cropOverlay.exit(); markCropBtn(false); }
+    else { session.preview.pause(); updateTransport(); session.cropOverlay.enter(); markCropBtn(true); }
+  });
+  el.querySelector("#ss-cut-btn").addEventListener("click", (e) => {
+    if (!session?.timeline) return;
+    const on = !session.timeline.isCutMode();
+    session.timeline.setCutMode(on);
+    e.currentTarget.classList.toggle("on", on);
+  });
+  el.querySelector("#ss-zoom-add").addEventListener("click", () => addZoom());
+  el.querySelector("#ss-zoom-remove").addEventListener("click", () => removeSelectedZoom());
+  el.querySelector("#ss-bd-btn").addEventListener("click", (e) => {
+    if (!session) return;
+    if (transforms.backdrop) transforms.backdrop = null;
+    else transforms.backdrop = { pad: Number(el.querySelector("#ss-bd-pad").value) || 0.07, radius: 0.03, shadow: true, bg: el.querySelector("#ss-bd-bg").value || "grad-violet" };
+    e.currentTarget.classList.toggle("on", !!transforms.backdrop);
+    setStatus(session.shell.statusEl, session.meta, transforms);
+    session.preview.redraw();
+    session.zoomOverlay.refresh(); // canvas size changed — re-place the focus box if shown
+  });
+  el.querySelector("#ss-bd-bg").addEventListener("change", (e) => {
+    if (!session || !transforms.backdrop) return;
+    transforms.backdrop.bg = e.target.value;
+    session.preview.redraw();
+  });
+  el.querySelector("#ss-bd-pad").addEventListener("input", (e) => {
+    if (!session || !transforms.backdrop) return;
+    transforms.backdrop.pad = Number(e.target.value) || 0;
+    session.preview.redraw();
+    session.zoomOverlay.refresh();
   });
   el.querySelector("#ss-colors").addEventListener("click", (e) => {
     const b = e.target.closest("[data-color]");
@@ -174,6 +291,7 @@ function buildToolbar(el, transforms) {
     // Resolution drives the preview canvas size (preview.composite reads getTransforms().outScale),
     // so re-composite the cached frame at the new output dims immediately.
     session?.preview.redraw();
+    session?.zoomOverlay?.refresh();
   });
   el.querySelector("#ss-speed").addEventListener("change", (e) => {
     transforms.speed = Number(e.target.value) || 1;
@@ -182,6 +300,7 @@ function buildToolbar(el, transforms) {
   });
   el.querySelector("#ss-download").addEventListener("click", () => downloadOriginal());
   el.querySelector("#ss-export").addEventListener("click", () => doExport(el.querySelector("#ss-export")));
+  el.querySelector("#ss-export-gif").addEventListener("click", () => doExport(el.querySelector("#ss-export-gif"), "gif"));
   el.querySelector("#ss-close").addEventListener("click", () => closeEditor());
 }
 
@@ -222,10 +341,97 @@ function updateTransport() {
 }
 
 function onPreviewTime(sec) {
+  lastTime = sec || 0;
   if (!session) return;
   session.timeline.setPlayhead(sec);
   const time = document.getElementById("ss-time");
   if (time) time.textContent = `${fmtTime(sec)} / ${fmtTime(session.meta.durationSec)}`;
+}
+
+// Scale a source image so it spans at most ~40% of the video width, never upscaling. Defensive against
+// zero/NaN dimensions (a broken decode or audio-only source) — always returns a finite positive scale.
+function fitScale(imgW, videoW) {
+  if (!(imgW > 0)) return 1;
+  const target = videoW > 0 ? videoW * 0.4 : imgW;
+  return Math.min(1, target / imgW) || 1;
+}
+
+// Add an image (or animated GIF) as an overlay layer. GIFs are decoded to frames so they animate;
+// if decode fails we fall back to the first frame as a static image.
+async function addImageLayer(file, store, width) {
+  try {
+    if (file.type === "image/gif") {
+      try {
+        const g = await decodeGif(file);
+        const scale = fitScale(g.width, width);
+        store.add(newImageLayer({
+          bitmap: g.frames[0].bitmap, x: 24, y: 24, w: g.width * scale, h: g.height * scale,
+          frames: g.frames, totalMs: g.totalMs,
+        }));
+        return;
+      } catch (err) {
+        console.warn("[screensnap] GIF decode failed — adding first frame as static image:", err);
+      }
+    }
+    const bitmap = await createImageBitmap(file);
+    const scale = fitScale(bitmap.width, width);
+    store.add(newImageLayer({ bitmap, x: 24, y: 24, w: bitmap.width * scale, h: bitmap.height * scale }));
+  } catch (err) {
+    console.warn("[screensnap] couldn't add image layer:", err);
+    alert("Sorry — that image couldn't be added.");
+  }
+}
+
+// ── Zoom blocks ────────────────────────────────────────────────────────────────────────────────
+// Add a ~2s zoom block at the current playhead, centered at 2x, and select it so the focus box shows.
+function addZoom() {
+  if (!session) return;
+  const dur = session.meta.durationSec || 0;
+  const tIn = Math.max(0, Math.min(lastTime, Math.max(0, dur - 0.5)));
+  const tOut = Math.min(dur, tIn + 2);
+  const id = (crypto.randomUUID ? crypto.randomUUID() : `z${session.transforms.zoom.length}-${Math.round(lastTime * 1000)}`).slice(0, 8);
+  const block = { id, tIn, tOut: Math.max(tOut, tIn + 0.5), cx: 0.5, cy: 0.5, scale: NEW_ZOOM_SCALE };
+  session.transforms.zoom = (session.transforms.zoom || []).concat([block]);
+  setStatus(session.shell.statusEl, session.meta, session.transforms);
+  selectZoom(id);          // shows the focus overlay + refreshes the timeline
+  session.preview.redraw();
+}
+
+function removeSelectedZoom() {
+  if (!session || !selectedZoomId) return;
+  session.transforms.zoom = (session.transforms.zoom || []).filter((b) => b.id !== selectedZoomId);
+  selectZoom(null);
+  setStatus(session.shell.statusEl, session.meta, session.transforms);
+  session.preview.redraw();
+}
+
+// Select (or deselect with null) a zoom block: toggles the focus overlay + the Remove button + the
+// timeline highlight.
+function selectZoom(id) {
+  if (!session) return;
+  selectedZoomId = id || null;
+  session.timeline.refresh();
+  if (selectedZoomId) session.zoomOverlay.show();
+  else session.zoomOverlay.hide();
+  const rm = document.getElementById("ss-zoom-remove");
+  if (rm) rm.disabled = !selectedZoomId;
+}
+
+// Persist a timeline edit to a block's time range, then refresh the overlay + preview.
+function changeZoom(id, patch) {
+  if (!session) return;
+  const b = (session.transforms.zoom || []).find((x) => x.id === id);
+  if (!b) return;
+  if (patch.tIn != null) b.tIn = patch.tIn;
+  if (patch.tOut != null) b.tOut = patch.tOut;
+  session.timeline.refresh();
+  session.zoomOverlay.refresh();
+  session.preview.redraw();
+}
+
+function markCropBtn(on) {
+  const b = document.getElementById("ss-crop-btn");
+  if (b) b.classList.toggle("on", !!on);
 }
 
 function onPreviewStop(err) {
@@ -274,20 +480,22 @@ async function togglePlay() {
   updateTransport();
 }
 
-async function doExport(btn) {
+async function doExport(btn, format) {
   if (!session) return;
   const orig = btn.textContent;
   btn.disabled = true;
   session.preview.pause();
   updateTransport();
+  const args = {
+    input: session.input,
+    transforms: session.transforms,
+    store: session.store,
+    fileName: session.fileName,
+    onProgress: (frac) => { btn.textContent = `Exporting ${Math.round(frac * 100)}%`; },
+  };
   try {
-    await runExport({
-      input: session.input,
-      transforms: session.transforms,
-      store: session.store,
-      fileName: session.fileName,
-      onProgress: (frac) => { btn.textContent = `Exporting ${Math.round(frac * 100)}%`; },
-    });
+    if (format === "gif") await runGifExport(args);
+    else await runExport(args);
     btn.textContent = "Saved ✓";
     setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 1800);
   } catch (err) {
@@ -301,10 +509,13 @@ function setStatus(el, meta, t, errMsg) {
   if (!el) return;
   if (errMsg) { el.textContent = errMsg; el.classList.add("ss-status-err"); return; }
   el.classList.remove("ss-status-err");
-  const trim = `${t.trimIn.toFixed(1)}s – ${t.trimOut.toFixed(1)}s`;
-  const res = t.outScale ? `${t.outScale.maxHeight}p` : `${meta.width}×${meta.height}`;
+  const d = composeDims(t, meta.width || 2, meta.height || 2);
+  const res = `${d.outW}×${d.outH}${t.crop ? " cropped" : ""}`;
+  const cuts = Array.isArray(t.cuts) && t.cuts.length ? ` · ${t.cuts.length} cut${t.cuts.length > 1 ? "s" : ""}` : "";
+  const zoom = Array.isArray(t.zoom) && t.zoom.length ? ` · ${t.zoom.length} zoom` : "";
+  const bd = t.backdrop ? " · backdrop" : "";
   const audio = (t.speed || 1) === 1 ? "audio on" : "audio off (speed ≠ 1x)";
-  el.textContent = `${res} · ${t.speed}x · trim ${trim} · ${audio}`;
+  el.textContent = `${res} · ${t.speed}x · ${outDuration(t).toFixed(1)}s out${cuts}${zoom}${bd} · ${audio}`;
 }
 
 // Raster formats only — SVG is excluded deliberately (scriptable XML, and it has no intrinsic

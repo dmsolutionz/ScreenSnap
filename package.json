@@ -1,14 +1,18 @@
 {
   "name": "screensnap",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "description": "Free, local, watermark-free screenshot + screen recording Chrome extension (MV3). Records native MP4 entirely on-device.",
   "license": "GPL-3.0-or-later",
   "scripts": {
     "make:icons": "node scripts/make-icons.mjs",
+    "lint": "eslint src",
+    "smoke": "node scripts/smoke-extension.mjs",
     "test": "node --test"
   },
-  "dependencies": {},
-  "devDependencies": {}
+  "devDependencies": {
+    "eslint": "10.6.0",
+    "globals": "17.7.0"
+  }
 }

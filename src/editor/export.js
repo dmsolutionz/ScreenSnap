@@ -2,20 +2,29 @@
 // try chrome.downloads.download with a blob: URL, fall back to an anchor-click download (rock-solid
 // for blobs in a document), and always revoke the object URL.
 import { transcode } from "./pipeline.js";
+import { transcodeGif } from "./gif-export.js";
 
 // input: Mediabunny Input. transforms: see transforms.js. store: layer store. fileName: suggested
-// name. onProgress(0..1).
-export async function runExport({ input, transforms, store, fileName, onProgress }) {
-  const blob = await transcode({ input, transforms, store, onProgress });
-  const name = toMp4Name(fileName);
+// name. onProgress(0..1). signal: optional AbortSignal.
+export async function runExport({ input, transforms, store, fileName, onProgress, signal }) {
+  const blob = await transcode({ input, transforms, store, onProgress, signal });
+  const name = toEditedName(fileName, "mp4");
   await downloadBlob(blob, `screensnap/${name}`);
   return { blob, fileName: name };
 }
 
-function toMp4Name(fileName) {
+// Export the edited clip as an animated GIF instead of MP4. gifOpts: { fps, maxHeight }.
+export async function runGifExport({ input, transforms, store, fileName, onProgress, signal, gifOpts }) {
+  const blob = await transcodeGif({ input, transforms, store, onProgress, signal, ...(gifOpts || {}) });
+  const name = toEditedName(fileName, "gif");
+  await downloadBlob(blob, `screensnap/${name}`);
+  return { blob, fileName: name };
+}
+
+function toEditedName(fileName, ext) {
   const base = (fileName || "edited").split("/").pop().replace(/\.[^.]+$/, "");
   const safe = base.replace(/[^\w.-]+/g, "-") || "edited";
-  return `${safe}-edited.mp4`;
+  return `${safe}-edited.${ext}`;
 }
 
 // Save the MP4. chrome.downloads.download can reject a blob: URL on some Chrome builds, so on any

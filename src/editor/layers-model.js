@@ -54,8 +54,11 @@ export function createLayerStore() {
   };
 }
 
-export function newImageLayer({ bitmap, x, y, w, h }) {
-  return { id: uid(), kind: "image", visible: true, opacity: 1, range: null, image: { bitmap, x, y, w, h } };
+// A static image layer; or, when `frames`/`totalMs` are supplied, an animated GIF layer. For GIFs,
+// `bitmap` is the poster (first frame) used when no time is available, and `frames`
+// (= [{ bitmap, delayMs }]) + `totalMs` (loop period) drive the compositor's per-frame selection.
+export function newImageLayer({ bitmap, x, y, w, h, frames = null, totalMs = 0 }) {
+  return { id: uid(), kind: "image", visible: true, opacity: 1, range: null, image: { bitmap, x, y, w, h, frames, totalMs } };
 }
 
 export function newShapeLayer(shape) {

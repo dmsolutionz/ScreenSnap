@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>screensnap — free, local screen recorder &amp; editor</title>
+  <meta name="description" content="Free, private, watermark-free screen recording and screenshots. Native MP4, on-device editing — trim, crop, zoom, beautify, export MP4/GIF. No sign-up, no cloud, no telemetry." />
+  <meta property="og:title" content="screensnap — free, local screen recorder &amp; editor" />
+  <meta property="og:description" content="Record, screenshot, annotate and edit — entirely on your machine. No sign-up, no cloud, no watermark." />
+  <meta property="og:image" content="media/poster.png" />
+  <style>
+    @font-face { font-family: 'Geist'; font-weight: 400; font-display: swap; src: url('fonts/geist-400.woff2') format('woff2'); }
+    @font-face { font-family: 'Geist'; font-weight: 500; font-display: swap; src: url('fonts/geist-500.woff2') format('woff2'); }
+    @font-face { font-family: 'Geist'; font-weight: 600; font-display: swap; src: url('fonts/geist-600.woff2') format('woff2'); }
+    @font-face { font-family: 'Geist Mono'; font-weight: 400; font-display: swap; src: url('fonts/geist-mono-400.woff2') format('woff2'); }
+
+    :root {
+      --green: #16a34a; --green-bright: #22c55e;
+      --bg: #ffffff; --panel: #f6f7f9; --line: #e4e6eb;
+      --fg: #18181b; --muted: #6b7280;
+      --sans: 'Geist', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      --mono: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
+    body { background: var(--bg); color: var(--fg); font-family: var(--sans); -webkit-font-smoothing: antialiased; line-height: 1.6; }
+    a { color: var(--green); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* nav */
+    .nav { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: 16px; padding: 14px 22px; background: rgba(255,255,255,0.86); backdrop-filter: saturate(140%) blur(8px); border-bottom: 1px solid var(--line); }
+    .brand { display: flex; align-items: center; gap: 10px; }
+    .logo { width: 30px; height: 30px; border-radius: 8px; background: #fff; border: 1px solid var(--line); display: flex; align-items: center; justify-content: center; }
+    .name { font-size: 19px; font-weight: 600; letter-spacing: -0.02em; }
+    .dot { color: var(--green-bright); }
+    .nav .spacer { flex: 1; }
+    .nav a { color: var(--muted); font-size: 14px; }
+    .nav a:hover { color: var(--fg); text-decoration: none; }
+    .btn { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; padding: 9px 16px; border-radius: 9px; }
+    .btn-primary { background: var(--green); color: #fff; border: 1px solid var(--green); }
+    .btn-primary:hover { background: #15803d; text-decoration: none; }
+
+    .wrap { max-width: 1040px; margin: 0 auto; padding: 0 22px; }
+
+    /* hero */
+    .hero { text-align: center; padding: 64px 0 26px; }
+    .badges { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-bottom: 22px; }
+    .badge { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--green); background: rgba(34,197,94,0.10); border: 1px solid rgba(34,197,94,0.28); border-radius: 999px; padding: 5px 11px; }
+    h1 { font-size: 46px; line-height: 1.08; letter-spacing: -0.03em; margin: 0 0 14px; }
+    h1 .hl { color: var(--green); }
+    .lede { font-size: 19px; color: #3f3f46; max-width: 680px; margin: 0 auto 26px; }
+    .cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+    .btn-ghost { background: var(--panel); color: var(--fg); border: 1px solid var(--line); }
+    .btn-ghost:hover { background: #eef0f3; text-decoration: none; }
+
+    /* video */
+    .stage { margin: 34px auto 0; max-width: 980px; }
+    .demo { width: 100%; display: block; border-radius: 14px; border: 1px solid var(--line); box-shadow: 0 24px 60px rgba(0,0,0,0.14); background: #000; }
+    .cap { text-align: center; font-family: var(--mono); font-size: 12px; color: var(--muted); margin-top: 12px; }
+
+    /* sections */
+    section { padding: 56px 0; }
+    .eyebrow { font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--green); text-align: center; }
+    h2 { font-size: 30px; letter-spacing: -0.02em; text-align: center; margin: 8px 0 8px; }
+    .sub { text-align: center; color: var(--muted); max-width: 620px; margin: 0 auto 36px; }
+
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px; }
+    .card .ic { width: 38px; height: 38px; border-radius: 10px; background: rgba(34,197,94,0.12); display: flex; align-items: center; justify-content: center; margin-bottom: 14px; }
+    .card h3 { font-size: 16px; margin: 0 0 6px; }
+    .card p { color: #3f3f46; font-size: 14px; margin: 0; }
+
+    /* split */
+    .split { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: center; }
+    .split img { width: 100%; border-radius: 12px; border: 1px solid var(--line); box-shadow: 0 14px 36px rgba(0,0,0,0.10); }
+    .steps { list-style: none; padding: 0; margin: 18px 0 0; }
+    .steps li { display: flex; gap: 14px; margin: 0 0 18px; }
+    .steps .n { flex: 0 0 28px; height: 28px; border-radius: 50%; background: var(--green); color: #fff; font-weight: 600; font-size: 13px; display: flex; align-items: center; justify-content: center; }
+    .steps b { display: block; }
+    .steps span { color: var(--muted); font-size: 14px; }
+
+    /* privacy strip */
+    .privacy { background: rgba(34,197,94,0.06); border: 1px solid rgba(34,197,94,0.24); border-radius: 16px; padding: 30px; text-align: center; }
+    .privacy h2 { margin-top: 0; }
+
+    footer { border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; padding: 28px 22px 60px; text-align: center; }
+    footer a { color: var(--muted); text-decoration: underline; }
+
+    @media (max-width: 820px) {
+      h1 { font-size: 34px; }
+      .grid { grid-template-columns: 1fr; }
+      .split { grid-template-columns: 1fr; gap: 22px; }
+    }
+  </style>
+</head>
+<body>
+  <nav class="nav">
+    <div class="brand">
+      <span class="logo"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="1" y="3" width="20" height="13" rx="2" stroke="#3f3f46" stroke-width="1.6"/><circle cx="18.5" cy="6.5" r="3.5" fill="#22c55e"/><circle cx="18.5" cy="6.5" r="1.5" fill="#fff"/></svg></span>
+      <span class="name">screensnap<span class="dot">.</span></span>
+    </div>
+    <span class="spacer"></span>
+    <a href="#features">Features</a>
+    <a href="index.html">Privacy</a>
+    <a class="btn btn-primary" href="https://github.com/dmsolutionz/ScreenSnap">GitHub</a>
+  </nav>
+
+  <header class="hero wrap">
+    <div class="badges">
+      <span class="badge">Free forever</span>
+      <span class="badge">100% on-device</span>
+      <span class="badge">No watermark</span>
+      <span class="badge">Native MP4</span>
+      <span class="badge">Open source</span>
+    </div>
+    <h1>Record your screen.<br /><span class="hl">Edit it. Keep it.</span></h1>
+    <p class="lede">A free, private screen recorder and screenshot tool for Chrome. Capture, annotate, and edit — trim, crop, zoom, beautify, export to MP4 or GIF — <strong>entirely on your own machine</strong>. No sign-up, no cloud, no telemetry.</p>
+    <div class="cta">
+      <a class="btn btn-primary" href="https://github.com/dmsolutionz/ScreenSnap">Get it on GitHub</a>
+      <a class="btn btn-ghost" href="#features">See what it does</a>
+    </div>
+
+    <div class="stage">
+      <video class="demo" autoplay loop muted playsinline controls preload="metadata" poster="media/poster.png">
+        <source src="media/screensnap-demo.mp4" type="video/mp4" />
+        <img src="media/screensnap-demo.gif" alt="screensnap editor walkthrough" style="width:100%" />
+      </video>
+      <p class="cap">A walk through the editor — backdrop · zoom · crop · cut · export. Recorded on-device.</p>
+    </div>
+  </header>
+
+  <section id="features" class="wrap">
+    <div class="eyebrow">What it does</div>
+    <h2>Everything you need, nothing you don't</h2>
+    <p class="sub">Capture and edit in one place — and it never phones home.</p>
+    <div class="grid">
+      <div class="card">
+        <div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.5"/><path d="M3 8a2 2 0 0 1 2-2h2l1.5-2h7L19 6h0a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg></div>
+        <h3>Record anything</h3>
+        <p>Current tab, a whole screen, or any app window. Add a floating camera + controls bubble (Screen + Cam), or record just the webcam.</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15l4-4 4 4 3-3 7 7"/></svg></div>
+        <h3>Screenshots + annotate</h3>
+        <p>Visible area or full-page capture, then arrows, text, highlight, blur/redact, crop, layers and a beautify backdrop — saved as a clean PNG.</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16M4 12h16M4 19h16"/><rect x="7" y="9" width="10" height="6" rx="1" fill="rgba(34,197,94,0.18)"/></svg></div>
+        <h3>A real video editor</h3>
+        <p>Trim, cut out mistakes (multi-segment), free-form or ratio crop, keyframed zoom blocks, animated GIF &amp; image overlays — live preview, WYSIWYG.</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/><circle cx="12" cy="10.5" r="2.5"/></svg></div>
+        <h3>Beautify &amp; zoom</h3>
+        <p>Wrap a clip in a gradient backdrop with rounded corners and a soft shadow, and zoom into the action with draggable, resizable focus blocks.</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg></div>
+        <h3>Export, your way</h3>
+        <p>Save the original instantly, or export an edited <strong>native MP4</strong> (no transcode) or an animated <strong>GIF</strong> — all encoded on your device.</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6Z"/><path d="m9 12 2 2 4-4"/></svg></div>
+        <h3>Private by design</h3>
+        <p>No servers, no telemetry, no analytics, no runtime network calls. Captures stay on your machine. Free and open source (GPL-3.0).</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap">
+    <div class="split">
+      <div>
+        <div class="eyebrow" style="text-align:left">How it works</div>
+        <h2 style="text-align:left">Capture → edit → export</h2>
+        <ol class="steps">
+          <li><span class="n">1</span><div><b>Capture</b><span>Pick a screenshot or a recording source. A finished recording opens straight in the editor.</span></div></li>
+          <li><span class="n">2</span><div><b>Edit</b><span>Trim and cut, crop, add zoom and a backdrop, drop in annotations, logos or a looping GIF.</span></div></li>
+          <li><span class="n">3</span><div><b>Export</b><span>Download the native MP4 or an animated GIF — encoded locally, watermark-free.</span></div></li>
+        </ol>
+      </div>
+      <img src="media/shot-image-editor.png" alt="screensnap screenshot editor with the layers panel" />
+    </div>
+  </section>
+
+  <section class="wrap">
+    <div class="privacy">
+      <div class="eyebrow">Privacy-first</div>
+      <h2>Your screen never leaves your screen</h2>
+      <p class="sub" style="margin-bottom:18px">Everything — capture, the webcam bubble, annotation, trimming, encoding and saving — happens entirely in your browser, on your machine.</p>
+      <a class="btn btn-ghost" href="index.html">Read the privacy policy</a>
+    </div>
+  </section>
+
+  <footer>
+    screensnap<span class="dot" style="color:var(--green-bright)">.</span> — free &amp; open source (<a href="https://github.com/dmsolutionz/ScreenSnap">GitHub</a>, GPL-3.0) ·
+    <a href="index.html">Privacy</a> ·
+    <a href="mailto:help@dmsolutions.io">help@dmsolutions.io</a>
+  </footer>
+</body>
+</html>
