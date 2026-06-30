@@ -28,9 +28,21 @@
     undo: '<path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/>',
     redo: '<path d="M21 7v6h-6"/><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13"/>',
     x: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+    image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>',
+    eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>',
+    eyeoff: '<path d="M9.9 4.2A10.9 10.9 0 0 1 12 4c6.5 0 10 7 10 7a17.6 17.6 0 0 1-3.3 4.1"/><path d="M6.6 6.6A17.6 17.6 0 0 0 2 11s3.5 7 10 7a10.9 10.9 0 0 0 4.1-.8"/><path d="m10 10a3 3 0 0 0 4 4"/><line x1="2" y1="2" x2="22" y2="22"/>',
+    chevup: '<polyline points="18 15 12 9 6 15"/>',
+    chevdown: '<polyline points="6 9 12 15 18 9"/>',
   };
   const ico = (n, c = "#71717a", sz = 17, sw = 1.7) =>
     `<svg width="${sz}" height="${sz}" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round">${PATH[n]}</svg>`;
+
+  // Layer-row glyph per shape type (a PATH key). Falls back to "rect" for anything unmapped.
+  const LAYER_ICON = { text: "type", arrow: "arrow", rect: "rect", highlight: "highlight", blur: "blur", pencil: "pencil", image: "image" };
+  // Stable id for image assets. Prefer crypto.randomUUID; fall back to a monotonic counter.
+  let assetCounter = 0;
+  const newAssetId = () =>
+    (crypto && crypto.randomUUID) ? crypto.randomUUID() : `asset-${Date.now()}-${assetCounter++}`;
 
   const TOOLS = [
     ["select", "move", "Move"],
@@ -72,6 +84,10 @@
       this.iw = img.naturalWidth;
       this.ih = img.naturalHeight;
       this.shapes = [];
+      // Side store of decoded image bitmaps, keyed by a stable assetId. NOT cleared by undo/redo
+      // (snapshots only serialize the assetId + geometry, never pixels), so image layers survive
+      // history while staying JSON-serializable.
+      this.assets = new Map();
       this.undoStack = [];
       this.redoStack = [];
       this.tool = "rect";
@@ -176,6 +192,35 @@
           .sb { margin-left: auto; display: flex; gap: 7px; }
           .sbtn { display: flex; align-items: center; gap: 5px; padding: 5px 11px; border: 1px solid #e4e6eb; border-radius: 7px; color: #6b7280; font-size: 11px; background: #fff; }
           .sbtn:hover { background: #eef0f3; color: #18181b; }
+          /* ── Layers side panel ── */
+          .layers { width: 232px; flex: 0 0 auto; background: #f7f7f9; border-left: 1px solid #e6e7eb;
+            display: flex; flex-direction: column; min-height: 0; }
+          .ly-head { flex: 0 0 auto; height: 44px; display: flex; align-items: center; gap: 8px;
+            padding: 0 12px; border-bottom: 1px solid #e6e7eb; font-family: ${MONO}; font-size: 11px;
+            color: #6b7280; text-transform: uppercase; letter-spacing: 0.06em; }
+          .ly-head .ttl { flex: 1; }
+          .ly-add { display: flex; align-items: center; gap: 5px; padding: 5px 9px; border-radius: 7px;
+            font-size: 12px; font-weight: 500; background: #f3f4f6; border: 1px solid #e4e6eb; color: #3f3f46;
+            font-family: ${SANS}; letter-spacing: 0; text-transform: none; }
+          .ly-add:hover { background: #e9eaee; }
+          .ly-list { flex: 1; min-height: 0; overflow-y: auto; padding: 6px; display: flex; flex-direction: column; gap: 4px; }
+          .ly-empty { padding: 18px 12px; text-align: center; font-size: 12px; color: #9aa0ab; line-height: 1.5; }
+          .ly-row { display: flex; align-items: center; gap: 6px; padding: 6px 7px; border-radius: 8px;
+            border: 1px solid #e6e7eb; background: #fff; cursor: pointer; }
+          .ly-row:hover { background: #eef0f3; }
+          .ly-row.on { border-color: ${GREEN}; background: rgba(22,163,74,0.08); }
+          .ly-row.hid .ly-name, .ly-row.hid .ly-glyph { opacity: 0.4; }
+          .ly-glyph { flex: 0 0 auto; width: 22px; height: 22px; border-radius: 6px; background: #f1f2f4;
+            display: flex; align-items: center; justify-content: center; }
+          .ly-name { flex: 1; min-width: 0; font-size: 12.5px; color: #18181b; overflow: hidden;
+            white-space: nowrap; text-overflow: ellipsis; }
+          .ly-name .sub { color: #9aa0ab; }
+          .ly-act { display: flex; align-items: center; gap: 1px; flex: 0 0 auto; }
+          .ly-ib { width: 23px; height: 23px; border-radius: 6px; display: flex; align-items: center;
+            justify-content: center; color: #9aa0ab; }
+          .ly-ib:hover { background: rgba(0,0,0,0.06); color: #18181b; }
+          .ly-ib:disabled { opacity: 0.3; cursor: default; }
+          .ly-ib.del:hover { background: rgba(220,38,38,0.12); }
         </style>
         <div class="ed">
           <div class="top">
@@ -194,7 +239,13 @@
           <div class="body">
             <div class="palette" id="palette"></div>
             <div class="stage" id="stage"><canvas id="cv"></canvas><div class="cropbar" id="cropbar"><span class="ratios" id="ratios">${RATIOS.map(([label]) => `<button class="chip" data-ratio="${label}">${escapeHtml(label)}</button>`).join("")}</span><button class="ok" id="cropOk">${ico("crop", "#fff", 14)}Apply crop</button><button class="no" id="cropNo">${ico("x", "#e7e8ea", 14)}Cancel</button></div></div>
+            <div class="layers" id="layers">
+              <div class="ly-head"><span class="ttl">Layers</span><button class="ly-add" id="addImage" title="Add an image layer">${ico("image", "#3f3f46", 14)}Image</button></div>
+              <div class="ly-list" id="lyList"></div>
+            </div>
           </div>
+          <input type="file" id="imgFile" accept="image/png,image/jpeg,image/gif,image/webp" style="display:none">
+
           <div class="status">
             <span class="dotc" id="st-dot"></span>
             <span id="st-tool"></span><span style="color:#cbd0d8">·</span>
@@ -248,6 +299,20 @@
       root.getElementById("bdPad").addEventListener("input", (e) => this.setBackdropPad(e.target.value));
       this.syncBackdropUI();
 
+      // Layers panel: row clicks (select / toggle / reorder / delete) are delegated.
+      this.lyList = root.getElementById("lyList");
+      this.lyList.addEventListener("click", (e) => this.onLayerClick(e));
+      this.lyList.addEventListener("dblclick", (e) => this.onLayerDblClick(e));
+      // Add-image affordance → hidden file input → load + place a new image layer.
+      this.imgFile = root.getElementById("imgFile");
+      root.getElementById("addImage").onclick = () => this.imgFile.click();
+      this.imgFile.addEventListener("change", () => {
+        const f = this.imgFile.files && this.imgFile.files[0];
+        this.imgFile.value = ""; // reset so picking the same file again still fires `change`
+        if (f) this.addImageFile(f);
+      });
+      this.renderLayers();
+
       this.onKey = (e) => {
         if (this.editingText) return; // let the text input handle its own keys
         // A pending crop captures Enter (apply) / Escape (cancel) before global handlers.
@@ -263,6 +328,8 @@
       this.canvas.addEventListener("pointerdown", (e) => this.down(e));
       this.canvas.addEventListener("pointermove", (e) => this.move(e));
       this.canvas.addEventListener("pointerup", () => this.up());
+      // Double-click a text item to re-open its inline editor (any tool — it's an edit gesture).
+      this.canvas.addEventListener("dblclick", (e) => this.onCanvasDblClick(e));
       window.addEventListener("resize", () => this.render());
     }
 
@@ -333,7 +400,7 @@
       if (this.tool === "select") {
         const idx = this.topAt(p);
         this.selected = idx;
-        if (idx != null) { this.pushHistory(); this.drag = { move: true, idx, start: p, orig: JSON.parse(JSON.stringify(this.shapes[idx])) }; }
+        if (idx != null) { this.drag = { move: true, idx, start: p, orig: JSON.parse(JSON.stringify(this.shapes[idx])) }; }
         return this.render();
       }
       if (this.tool === "text") return this.placeText(p, e);
@@ -355,6 +422,9 @@
       if (!this.drag) return;
       const p = this.toImg(e);
       if (this.drag.move) {
+        // Snapshot the pre-move state on the FIRST actual movement (not a bare click), so a plain
+        // click-to-select neither adds a no-op undo entry nor wipes the redo stack.
+        if (!this.drag.moved) { this.drag.moved = true; this.pushHistory(); }
         const dx = p.x - this.drag.start.x, dy = p.y - this.drag.start.y;
         this.shapes[this.drag.idx] = translate(this.drag.orig, dx, dy);
       } else if (this.drag.points) this.drag.points.push(p);
@@ -373,11 +443,25 @@
       }
       if (!this.drag.move) {
         const s = this.toShape(this.drag);
-        if (s) { this.pushHistory(); this.shapes.push(s); this.selected = null; }
+        if (s) { this.pushHistory(); this.shapes.push(s); this.selected = null; this.redoStack = []; }
+      } else if (this.drag.moved) {
+        this.redoStack = []; // a real drag-move happened (history already pushed in move())
       }
       this.drag = null;
-      this.redoStack = [];
       this.render();
+    }
+
+    // Top-most text item under the pointer → re-open its inline editor. Other shape types are ignored
+    // (a double-click on them does nothing special).
+    onCanvasDblClick(e) {
+      if (this.editingText) return;
+      const p = this.toImg(e);
+      const tol = 9 * this.unit;
+      for (let i = this.shapes.length - 1; i >= 0; i--) {
+        const s = this.shapes[i];
+        if (s.hidden) continue;
+        if (s.type === "text" && hit(s, p, tol)) { this.selected = i; this.editText(i); return; }
+      }
     }
 
     // Normalize a crop drag into {x,y,w,h}, clamped to the source image bounds.
@@ -534,7 +618,8 @@
 
     topAt(p) {
       const tol = 9 * this.unit;
-      for (let i = this.shapes.length - 1; i >= 0; i--) if (hit(this.shapes[i], p, tol)) return i;
+      // Hidden layers aren't pickable on-canvas (they're invisible); use the panel to select them.
+      for (let i = this.shapes.length - 1; i >= 0; i--) if (!this.shapes[i].hidden && hit(this.shapes[i], p, tol)) return i;
       return null;
     }
     erase(p) {
@@ -547,6 +632,176 @@
       this.shapes.splice(this.selected, 1);
       this.selected = null;
       this.redoStack = [];
+      this.render();
+    }
+
+    // ── layers panel ──
+    // Human label + (for text) a content snippet, used both in the panel and as a row title.
+    layerLabel(s) {
+      const NAMES = { text: "Text", arrow: "Arrow", rect: "Rectangle", highlight: "Highlight", blur: "Blur", pencil: "Pencil", image: "Image" };
+      return NAMES[s.type] || s.type;
+    }
+    layerSnippet(s) {
+      if (s.type !== "text") return "";
+      const t = (s.text || "").replace(/\s+/g, " ").trim();
+      return t.length > 22 ? t.slice(0, 22) + "…" : t;
+    }
+    // Re-paint the list from this.shapes, TOP-of-stack first (reverse array order). Each row carries
+    // its array index in data-i; the eye/up/down/× controls carry data-act.
+    renderLayers() {
+      const list = this.lyList;
+      if (!list) return;
+      if (!this.shapes.length) { list.innerHTML = `<div class="ly-empty">No layers yet.<br>Draw something or add an image.</div>`; return; }
+      const last = this.shapes.length - 1;
+      let html = "";
+      for (let i = last; i >= 0; i--) {
+        const s = this.shapes[i];
+        const sel = i === this.selected;
+        const snip = this.layerSnippet(s);
+        const name = s.type === "text"
+          ? `${escapeHtml(snip || "(empty)")}<span class="sub"> · Text</span>`
+          : escapeHtml(this.layerLabel(s));
+        const glyph = LAYER_ICON[s.type] || "rect";
+        html += `<div class="ly-row ${sel ? "on" : ""} ${s.hidden ? "hid" : ""}" data-i="${i}" title="${escapeHtml(this.layerLabel(s) + (snip ? ": " + snip : ""))}">
+          <span class="ly-glyph">${ico(glyph, sel ? GREEN : "#71717a", 13, 1.8)}</span>
+          <span class="ly-name">${name}</span>
+          <span class="ly-act">
+            <button class="ly-ib" data-act="vis" title="${s.hidden ? "Show" : "Hide"}">${ico(s.hidden ? "eyeoff" : "eye", "#9aa0ab", 14)}</button>
+            <button class="ly-ib" data-act="up" title="Bring forward" ${i === last ? "disabled" : ""}>${ico("chevup", "#9aa0ab", 14)}</button>
+            <button class="ly-ib" data-act="down" title="Send backward" ${i === 0 ? "disabled" : ""}>${ico("chevdown", "#9aa0ab", 14)}</button>
+            <button class="ly-ib del" data-act="del" title="Delete">${ico("x", "#9aa0ab", 14)}</button>
+          </span></div>`;
+      }
+      list.innerHTML = html;
+    }
+    // Resolve the clicked row's shape index; act on the specific control or select the row.
+    onLayerClick(e) {
+      const row = e.target.closest(".ly-row"); if (!row) return;
+      const i = Number(row.dataset.i);
+      if (Number.isNaN(i) || !this.shapes[i]) return;
+      const btn = e.target.closest("[data-act]");
+      if (!btn) { this.selectLayer(i); return; }
+      const act = btn.dataset.act;
+      if (act === "vis") this.toggleLayerHidden(i);
+      else if (act === "up") this.moveLayer(i, +1);
+      else if (act === "down") this.moveLayer(i, -1);
+      else if (act === "del") this.deleteLayer(i);
+    }
+    // Double-clicking a text row re-opens its inline editor (mirrors the on-canvas dbl-click path).
+    onLayerDblClick(e) {
+      const row = e.target.closest(".ly-row"); if (!row) return;
+      if (e.target.closest("[data-act]")) return; // ignore dbl-clicks on the action buttons
+      const i = Number(row.dataset.i);
+      if (this.shapes[i] && this.shapes[i].type === "text") { this.selectLayer(i); this.editText(i); }
+    }
+    // Selecting from the panel switches to the Move tool so the highlighted item is draggable, and
+    // syncs this.selected so the canvas selection box matches the highlighted row.
+    selectLayer(i) {
+      if (this.tool !== "select") this.setTool("select");
+      this.selected = i;
+      this.render();
+    }
+    toggleLayerHidden(i) {
+      const s = this.shapes[i]; if (!s) return;
+      this.pushHistory();
+      s.hidden = !s.hidden;
+      this.redoStack = [];
+      this.render();
+    }
+    // Reorder by ±1 in the z-stack (array order). +1 = toward the top (later in array), −1 = down.
+    // Keeps this.selected pinned to the moved item so it stays highlighted after the swap.
+    moveLayer(i, dir) {
+      const j = i + dir;
+      if (j < 0 || j >= this.shapes.length) return;
+      this.pushHistory();
+      const [s] = this.shapes.splice(i, 1);
+      this.shapes.splice(j, 0, s);
+      if (this.selected === i) this.selected = j;
+      else if (this.selected === j) this.selected = i;
+      this.redoStack = [];
+      this.render();
+    }
+    deleteLayer(i) {
+      if (!this.shapes[i]) return;
+      this.pushHistory();
+      this.shapes.splice(i, 1);
+      // Keep this.selected valid relative to the removed index.
+      if (this.selected === i) this.selected = null;
+      else if (this.selected != null && this.selected > i) this.selected -= 1;
+      this.redoStack = [];
+      this.render();
+    }
+
+    // ── re-editable text ──
+    // Re-open the inline editor over an existing text shape, pre-filled with its content. Commits the
+    // edited text back into the SAME shape (position/color/size preserved). Empty → the shape is left
+    // unchanged (we don't delete on clear here; the × / Delete handle removal). Escape cancels.
+    editText(i) {
+      const s = this.shapes[i];
+      if (!s || s.type !== "text") return;
+      this.editingText = true;
+      this.selected = i;
+      const sc = this.scale;
+      const pad = this.bdPadPx();
+      const input = document.createElement("input");
+      input.className = "txtin";
+      input.value = s.text || "";
+      input.style.left = this.canvas.offsetLeft + (pad + s.x - this.cropOx()) * sc + "px";
+      input.style.top = this.canvas.offsetTop + (pad + s.y - this.cropOy()) * sc + "px";
+      input.style.color = s.color;
+      input.style.fontSize = s.size * sc + "px";
+      // Hide the original while editing so the live <input> doesn't double up with the painted glyphs.
+      s.hidden = true;
+      this.render();
+      this.stage.appendChild(input);
+      setTimeout(() => { input.focus(); input.select(); }, 0);
+      let done = false;
+      const finish = (commit) => {
+        if (done) return; done = true;
+        const text = input.value.trim();
+        input.remove();
+        this.editingText = false;
+        s.hidden = false; // restore visibility regardless of outcome
+        if (commit && text && text !== s.text) {
+          this.pushHistory();
+          s.text = text;
+          this.redoStack = [];
+        }
+        this.render();
+      };
+      input.addEventListener("blur", () => finish(true));
+      input.addEventListener("keydown", (ev) => {
+        ev.stopPropagation();
+        if (ev.key === "Enter") { ev.preventDefault(); finish(true); }
+        else if (ev.key === "Escape") { ev.preventDefault(); finish(false); }
+      });
+    }
+
+    // ── image layers ──
+    // Decode a picked file into an ImageBitmap, register it in the asset map under a fresh id, and
+    // push a new image shape sized to ~40% of the natural width (never upscaled), centered-ish.
+    async addImageFile(file) {
+      let bm;
+      try {
+        bm = await createImageBitmap(file); // GIFs decode to their first frame — fine for a static PNG export
+      } catch { return; }
+      const nw = bm.width, nh = bm.height;
+      if (!nw || !nh) return;
+      // Target ~40% of the image's natural width, but never wider than the content (and never upscaled).
+      let w = nw * 0.4;
+      w = Math.min(w, nw, this.curW() * 0.9);
+      const scale = w / nw;
+      const h = nh * scale;
+      // Center over the current (cropped) content region, in absolute source-image coords.
+      const x = this.cropOx() + (this.curW() - w) / 2;
+      const y = this.cropOy() + (this.curH() - h) / 2;
+      const assetId = newAssetId();
+      this.assets.set(assetId, bm);
+      this.pushHistory();
+      this.shapes.push({ type: "image", assetId, x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) });
+      this.selected = this.shapes.length - 1;
+      this.redoStack = [];
+      if (this.tool !== "select") this.setTool("select");
       this.render();
     }
 
@@ -614,8 +869,9 @@
       // pad shifts past the backdrop margin, the crop origin keeps shapes in original image space.
       ctx.translate(pad - this.cropOx(), pad - this.cropOy());
       ctx.drawImage(this.img, 0, 0);
-      for (const s of this.shapes) drawShape(ctx, s, this.unit, this.blurCanvas);
-      if (this.drag && !this.drag.move && this.drag.tool !== "crop") { const s = this.toShape(this.drag); if (s) drawShape(ctx, s, this.unit, this.blurCanvas); }
+      // Hidden layers are skipped both on-canvas and (since save()/copy() re-render first) in export.
+      for (const s of this.shapes) { if (!s.hidden) drawShape(ctx, s, this.unit, this.blurCanvas, this.assets); }
+      if (this.drag && !this.drag.move && this.drag.tool !== "crop") { const s = this.toShape(this.drag); if (s) drawShape(ctx, s, this.unit, this.blurCanvas, this.assets); }
       if (this.selected != null && this.shapes[this.selected]) this.drawSelection(this.shapes[this.selected]);
       // Live crop affordance: the in-progress drag rect, or the pending (awaiting-apply) rect.
       const live = this.drag && this.drag.tool === "crop" ? this.cropRect(this.drag) : this.pendingCrop;
@@ -623,6 +879,8 @@
       ctx.restore();
       // Keep the floating Apply/Cancel buttons glued to the selection as it (or the view) changes.
       if (this.pendingCrop) this.positionCropUI();
+      // Re-paint the layers list to mirror the current stack / selection / visibility.
+      this.renderLayers();
     }
 
     // Fill the canvas with the chosen background (gradient or solid), then drop a soft shadow under
@@ -696,6 +954,10 @@
 
     // History captures shapes + the applied crop + the backdrop together, so undo/redo restores all
     // three. (cropRatio is a transient tool setting, not part of the document, so it's not tracked.)
+    // Image shapes serialize as { type:"image", assetId, x,y,w,h, hidden } — a string id + geometry,
+    // never pixels — so JSON round-trips cleanly; drawShape re-resolves assetId → bitmap from
+    // this.assets (which undo/redo never touch, so the bitmap survives across history). The per-shape
+    // `hidden` flag is plain data and round-trips automatically.
     snapshot() { return JSON.stringify({ shapes: this.shapes, crop: this.crop, backdrop: this.backdrop }); }
     restore(json) { const s = JSON.parse(json); this.shapes = s.shapes; this.crop = s.crop || null; this.backdrop = s.backdrop || null; this.syncBackdropUI(); }
     pushHistory() { this.undoStack.push(this.snapshot()); if (this.undoStack.length > 80) this.undoStack.shift(); }
@@ -733,7 +995,7 @@
   }
 
   // ── pure geometry/drawing (operate on image coords) ──
-  function drawShape(ctx, s, unit, blurCanvas) {
+  function drawShape(ctx, s, unit, blurCanvas, assets) {
     ctx.save();
     ctx.strokeStyle = s.color; ctx.fillStyle = s.color; ctx.lineWidth = s.width || 6; ctx.lineCap = "round"; ctx.lineJoin = "round";
     if (s.type === "rect") ctx.strokeRect(s.x, s.y, s.w, s.h);
@@ -742,6 +1004,9 @@
     else if (s.type === "highlight") { ctx.globalAlpha = 0.35; ctx.lineWidth = (s.width || 6) * 2.4; drawPath(ctx, s); }
     else if (s.type === "text") { ctx.font = `600 ${s.size}px ${SANS}`; ctx.textBaseline = "top"; ctx.fillText(s.text, s.x, s.y); }
     else if (s.type === "blur") ctx.drawImage(blurCanvas, s.x, s.y, s.w, s.h, s.x, s.y, s.w, s.h);
+    // Image layers: look the decoded bitmap up by assetId (geometry/z-order live in the shape, pixels
+    // live in the un-serialized assets map). If the bitmap is missing, skip silently.
+    else if (s.type === "image") { const bm = assets && assets.get(s.assetId); if (bm) ctx.drawImage(bm, s.x, s.y, s.w, s.h); }
     ctx.restore();
   }
   function drawPath(ctx, s) { ctx.beginPath(); ctx.moveTo(s.points[0].x, s.points[0].y); for (let i = 1; i < s.points.length; i++) ctx.lineTo(s.points[i].x, s.points[i].y); ctx.stroke(); }
@@ -754,14 +1019,14 @@
     ctx.closePath(); ctx.fill();
   }
   function bbox(s, ctx) {
-    if (s.type === "rect" || s.type === "blur") return { x: s.x, y: s.y, w: s.w, h: s.h };
+    if (s.type === "rect" || s.type === "blur" || s.type === "image") return { x: s.x, y: s.y, w: s.w, h: s.h };
     if (s.type === "arrow") return { x: Math.min(s.x1, s.x2), y: Math.min(s.y1, s.y2), w: Math.abs(s.x2 - s.x1), h: Math.abs(s.y2 - s.y1) };
     if (s.type === "text") { let w = s.size * s.text.length * 0.6; try { ctx.save(); ctx.font = `600 ${s.size}px ${SANS}`; w = ctx.measureText(s.text).width; ctx.restore(); } catch {} return { x: s.x, y: s.y, w, h: s.size }; }
     const xs = s.points.map((p) => p.x), ys = s.points.map((p) => p.y);
     return { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
   }
   function hit(s, p, tol) {
-    if (s.type === "rect" || s.type === "blur") return p.x >= s.x - tol && p.x <= s.x + s.w + tol && p.y >= s.y - tol && p.y <= s.y + s.h + tol;
+    if (s.type === "rect" || s.type === "blur" || s.type === "image") return p.x >= s.x - tol && p.x <= s.x + s.w + tol && p.y >= s.y - tol && p.y <= s.y + s.h + tol;
     if (s.type === "text") { const b = bbox(s); return p.x >= b.x - tol && p.x <= b.x + b.w + tol && p.y >= b.y - tol && p.y <= b.y + b.h + tol; }
     if (s.type === "arrow") return distToSeg(p, { x: s.x1, y: s.y1 }, { x: s.x2, y: s.y2 }) < (s.width || 6) + tol;
     if (s.points) return s.points.some((pt) => Math.hypot(pt.x - p.x, pt.y - p.y) < (s.width || 6) + tol);
