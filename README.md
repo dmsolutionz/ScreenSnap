@@ -15,8 +15,10 @@ Built because being nagged to log in just to save a screenshot is miserable.
 - **Visible Tab** · **Full Page** (auto-scroll + stitch, de-dupes sticky headers) · **Select Area**
   (on-page green marquee with live dimensions, Enter to capture)
 - After capture you get a **captured card**: **Annotate & save**, **Save PNG directly**, **Copy**, or Discard
-- **Annotation editor** — Draw, Arrow, Rectangle, Text, Highlight, Blur/Redact, Eraser, colours,
-  stroke weights, undo/redo, copy-to-clipboard
+- **Annotation editor** — Draw, Arrow, Rectangle, Text, Highlight, Blur/Redact, Eraser, **Crop**
+  (free-form or 16:9 / 1:1 / 9:16 / 4:3), a **Layers panel** (select, reorder, show/hide, delete,
+  **re-edit text**, add **image/logo layers**), a **Beautify backdrop** (gradient/solid + rounded
+  corners + shadow), colours, stroke weights, undo/redo, copy-to-clipboard
 
 **Screen recording** → **native `.mp4`**
 - **Current Tab** — instant, no picker; a Loom-style control bar sits on the page (auto-hidden during capture)
@@ -27,6 +29,14 @@ Built because being nagged to log in just to save a screenshot is miserable.
 - Screen / Screen+Cam are controlled from the toolbar **REC** badge, the popup, and keyboard shortcuts
   (no on-page bar off-tab, and no countdown — the picker is the "get ready" beat)
 - **System / tab audio** and/or **microphone** (mixed), **pause / resume**, and a red **REC** badge
+
+**Video editor** (opens after a recording; WebCodecs, no ffmpeg/WASM)
+- **Trim** the ends and **cut** mistakes out of the middle (multi-segment), **resolution** and **speed**
+- **Crop** free-form or to a ratio (16:9 / 1:1 / 9:16 / 4:3); **Zoom** with draggable, resizable focus
+  blocks that ease in/out; **Beautify backdrop** (gradient/solid + rounded corners + shadow)
+- **Layers** — annotations (text, arrows, shapes, blur), **image/logo** overlays, and **animated GIF**
+  overlays, composited live (WYSIWYG preview = export)
+- **Export** a native **MP4** or an animated **GIF** — or download the original clip untouched
 
 ## MP4, natively — no transcoding
 
