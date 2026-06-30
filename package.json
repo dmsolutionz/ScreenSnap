@@ -8,6 +8,7 @@
   "scripts": {
     "make:icons": "node scripts/make-icons.mjs",
     "lint": "eslint src",
+    "smoke": "node scripts/smoke-extension.mjs",
     "test": "node --test"
   },
   "devDependencies": {
