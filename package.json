@@ -7,6 +7,7 @@
   "license": "GPL-3.0-or-later",
   "scripts": {
     "make:icons": "node scripts/make-icons.mjs",
+    "package": "node scripts/package.mjs",
     "lint": "eslint src",
     "smoke": "node scripts/smoke-extension.mjs",
     "test": "node --test"
