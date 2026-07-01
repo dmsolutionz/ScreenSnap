@@ -6,47 +6,62 @@
   <title>screensnap — Privacy Policy</title>
   <meta name="description" content="screensnap collects no data. All capture, processing, and storage stay on your machine." />
   <style>
-    :root { --green:#16a34a; --bg:#ffffff; --panel:#f6f7f9; --line:#e4e6eb; --fg:#18181b; --muted:#6b7280; }
+    @font-face{font-family:'Archivo';font-weight:400;font-display:swap;src:url('fonts/archivo-400.woff2') format('woff2')}
+    @font-face{font-family:'Archivo';font-weight:500;font-display:swap;src:url('fonts/archivo-500.woff2') format('woff2')}
+    @font-face{font-family:'Archivo';font-weight:600;font-display:swap;src:url('fonts/archivo-600.woff2') format('woff2')}
+    @font-face{font-family:'Archivo';font-weight:700;font-display:swap;src:url('fonts/archivo-700.woff2') format('woff2')}
+    @font-face{font-family:'Archivo';font-weight:800;font-display:swap;src:url('fonts/archivo-800.woff2') format('woff2')}
+    @font-face{font-family:'JetBrains Mono';font-weight:400;font-display:swap;src:url('fonts/jetbrains-mono-400.woff2') format('woff2')}
+    @font-face{font-family:'JetBrains Mono';font-weight:500;font-display:swap;src:url('fonts/jetbrains-mono-500.woff2') format('woff2')}
+    :root { --green:#1B8E51; --bg:#FBFBF9; --ink:#17181A; --body:#494c51; --muted:#8a8d92; --line:rgba(23,24,26,0.10); }
     * { box-sizing: border-box; }
     html, body { margin: 0; }
-    body {
-      background: var(--bg); color: var(--fg);
-      font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-      -webkit-font-smoothing: antialiased; line-height: 1.6;
-    }
-    .wrap { max-width: 720px; margin: 0 auto; padding: 56px 22px 80px; }
-    .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
-    .logo { width: 30px; height: 30px; border-radius: 8px; background: #fff; border: 1px solid var(--line); display: flex; align-items: center; justify-content: center; }
-    .name { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; }
-    .dot { color: var(--green); }
-    h1 { font-size: 30px; letter-spacing: -0.02em; margin: 26px 0 6px; }
-    .updated { color: var(--muted); font-size: 13px; margin: 0 0 28px; }
-    .lede { font-size: 18px; background: rgba(34,197,94,0.08); border: 1px solid rgba(34,197,94,0.28); border-radius: 12px; padding: 16px 18px; }
-    h2 { font-size: 18px; margin: 34px 0 8px; }
-    p, li { color: #3f3f46; }
-    ul { padding-left: 20px; }
-    li { margin: 6px 0; }
+    body { background: var(--bg); color: var(--body); font-family: 'Archivo', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; -webkit-font-smoothing: antialiased; line-height: 1.62; }
     a { color: var(--green); }
-    code { background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; font-size: 0.9em; }
-    .foot { margin-top: 40px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+    .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+
+    .bar { max-width: 1160px; margin: 0 auto; padding: 26px 32px; display: flex; align-items: center; justify-content: space-between; }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 19px; letter-spacing: -0.02em; color: var(--ink); text-decoration: none; }
+    .brand .sq { display: inline-flex; width: 26px; height: 26px; border-radius: 7px; background: var(--ink); align-items: center; justify-content: center; }
+    .brand .sq span { width: 12px; height: 9px; border: 1.6px solid var(--bg); border-radius: 2px; display: block; }
+    .bar nav { display: flex; gap: 24px; font-size: 14.5px; font-weight: 500; color: #3f4247; }
+    .bar nav a { text-decoration: none; }
+    .rule { height: 1px; background: rgba(23,24,26,0.08); }
+
+    .wrap { max-width: 760px; margin: 0 auto; padding: 56px 32px 40px; }
+    .eyebrow { font-family: 'JetBrains Mono', monospace; font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--green); }
+    h1 { font-size: 42px; letter-spacing: -0.03em; font-weight: 800; color: var(--ink); margin: 14px 0 6px; }
+    .updated { color: var(--muted); font-size: 13px; font-family: 'JetBrains Mono', monospace; margin: 0 0 30px; }
+    .lede { font-size: 18px; color: var(--ink); background: rgba(27,142,81,0.07); border: 1px solid rgba(27,142,81,0.26); border-radius: 13px; padding: 18px 20px; }
+    h2 { font-size: 20px; letter-spacing: -0.01em; font-weight: 700; color: var(--ink); margin: 38px 0 8px; }
+    p, li { color: var(--body); }
+    ul { padding-left: 20px; }
+    li { margin: 7px 0; }
+    strong { color: var(--ink); font-weight: 600; }
+    code { font-family: 'JetBrains Mono', monospace; background: #f1f1ee; border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; font-size: 0.86em; }
+    .foot { max-width: 760px; margin: 0 auto; padding: 26px 32px 64px; color: var(--muted); font-size: 13px; font-family: 'JetBrains Mono', monospace; border-top: 1px solid rgba(23,24,26,0.08); }
+    .foot a { color: var(--green); text-decoration: none; }
   </style>
 </head>
 <body>
-  <main class="wrap">
-    <div class="brand">
-      <span class="logo">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="1" y="3" width="20" height="13" rx="2" stroke="#3f3f46" stroke-width="1.6"/><circle cx="18.5" cy="6.5" r="3.5" fill="#22c55e"/><circle cx="18.5" cy="6.5" r="1.5" fill="#fff"/></svg>
-      </span>
-      <span class="name">screensnap<span class="dot">.</span></span>
-    </div>
+  <div class="bar">
+    <a class="brand" href="app.html"><span class="sq"><span></span></span>screensnap</a>
+    <nav>
+      <a href="app.html">Home</a>
+      <a href="https://github.com/dmsolutionz/ScreenSnap">GitHub</a>
+    </nav>
+  </div>
+  <div class="rule"></div>
 
+  <main class="wrap">
+    <div class="eyebrow">Privacy-first · No cloud</div>
     <h1>Privacy Policy</h1>
-    <p class="updated">Last updated: 10 June 2026</p>
+    <p class="updated">Last updated: 1 July 2026</p>
 
     <p class="lede"><strong>screensnap collects no data.</strong> None of your activity, captures, or recordings ever leave your computer.</p>
 
     <h2>What screensnap does</h2>
-    <p>screensnap captures screenshots and screen/tab recordings and lets you annotate and edit them. Every part of this — capture, the webcam bubble, annotation, video trimming/encoding, and saving — happens <strong>entirely on your own machine, inside your browser</strong>.</p>
+    <p>screensnap captures screenshots and screen / window / tab recordings and lets you annotate and edit them — trim, cut, crop, zoom, beautify with a backdrop, add layers, and export to MP4 or GIF. Every part of this — capture, the webcam bubble, annotation, editing, video encoding, and saving — happens <strong>entirely on your own machine, inside your browser</strong>.</p>
 
     <h2>Data we collect</h2>
     <p><strong>Nothing.</strong> screensnap has:</p>
@@ -82,8 +97,8 @@
 
     <h2>Contact</h2>
     <p>Questions about privacy: <a href="mailto:help@dmsolutions.io">help@dmsolutions.io</a></p>
-
-    <div class="foot"><a href="app.html">← screensnap home</a> · free and open source (GPL-3.0). Privacy-first and fully local by design.</div>
   </main>
+
+  <div class="foot"><a href="app.html">← screensnap home</a> · free and open source (GPL-3.0) · privacy-first and fully local by design.</div>
 </body>
 </html>
