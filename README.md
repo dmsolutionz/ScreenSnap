@@ -1,5 +1,12 @@
 # screensnap.
 
+### ▸ [Add to Chrome — free on the Chrome Web Store](https://chromewebstore.google.com/detail/screensnap/hadhpopgpoejimciiihfffdmiihffkcl)
+
+[![Chrome Web Store](https://img.shields.io/chrome-web-store/v/hadhpopgpoejimciiihfffdmiihffkcl?label=Chrome%20Web%20Store&color=16a34a&logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/screensnap/hadhpopgpoejimciiihfffdmiihffkcl)
+[![Users](https://img.shields.io/chrome-web-store/users/hadhpopgpoejimciiihfffdmiihffkcl?color=16a34a)](https://chromewebstore.google.com/detail/screensnap/hadhpopgpoejimciiihfffdmiihffkcl)
+[![Rating](https://img.shields.io/chrome-web-store/rating/hadhpopgpoejimciiihfffdmiihffkcl?color=16a34a)](https://chromewebstore.google.com/detail/screensnap/hadhpopgpoejimciiihfffdmiihffkcl)
+[![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
+
 A free, local, watermark-free Chrome extension (Manifest V3) for screenshots and screen recording.
 Built because being nagged to log in just to save a screenshot is miserable.
 
@@ -44,7 +51,11 @@ Built because being nagged to log in just to save a screenshot is miserable.
 conversion step** — the recording is saved the instant you stop. (On the rare build without native
 MP4 support it saves `.webm` rather than lose your recording.)
 
-## Install (load unpacked)
+## Install
+
+**Most people:** [add it from the Chrome Web Store](https://chromewebstore.google.com/detail/screensnap/hadhpopgpoejimciiihfffdmiihffkcl) — one click, no sign-up.
+
+**From source (for development):**
 
 ```
 chrome://extensions  →  enable Developer mode  →  Load unpacked  →  select this folder
