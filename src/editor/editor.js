@@ -158,6 +158,7 @@ async function start(blob, fileName) {
     onLayerRangeChange: (id, r) => {
       store.update(id, { range: { inSec: r.tIn, outSec: r.tOut } });
       setStatus(shell.statusEl, meta, transforms);
+      if (id === selectedLayerId) updateInspector(); // keep the inspector's timing readout live
     },
     onLayerVisible: (id, visible) => store.update(id, { visible }),
     onLayerOpacity: (id, opacity) => store.update(id, { opacity }),
@@ -264,86 +265,85 @@ async function start(blob, fileName) {
   preview.seekTo(0);
 }
 
+const BD_OPTS = [["grad-violet", "Violet"], ["grad-ocean", "Ocean"], ["grad-sunset", "Sunset"], ["grad-mint", "Mint"], ["grad-slate", "Slate"], ["dark", "Dark"], ["light", "Light"], ["white", "White"]];
+
 function buildToolbar(el, transforms) {
   el.innerHTML = `
     <div class="ss-tb-group" id="ss-tools">
       ${TOOLS.map(([id, label]) => `<button class="ss-tool ${id === tool ? "on" : ""}" data-tool="${id}">${label}</button>`).join("")}
       <button class="ss-tool" id="ss-add-image" title="Add an image / logo overlay">+ Image</button>
     </div>
-    <div class="ss-tb-group" id="ss-colors">
-      ${COLORS.map((c) => `<button class="ss-sw ${c === color ? "on" : ""}" data-color="${c}" style="background:${c}"></button>`).join("")}
-    </div>
+    <span class="ss-tb-sep"></span>
     <div class="ss-tb-group">
       <button class="ss-tool" id="ss-crop-btn" title="Crop the frame">Crop</button>
-      <button class="ss-tool" id="ss-cut-btn" title="Cut mode: drag on the timeline to remove a section">Cut</button>
-      <button class="ss-tool" id="ss-zoom-add" title="Add a zoom at the playhead — then drag the box on the video to aim it, and its edges on the timeline to set duration">+ Zoom</button>
+      <button class="ss-tool" id="ss-cut-btn" title="Cut mode: drag on the Video track to remove a section">Cut</button>
+      <button class="ss-tool" id="ss-zoom-add" title="Add a zoom at the playhead">+ Zoom</button>
       <button class="ss-tool" id="ss-zoom-remove" title="Remove the selected zoom" disabled>Remove zoom</button>
     </div>
+    <span class="ss-tb-sep"></span>
     <div class="ss-tb-group">
-      <button class="ss-tool" id="ss-bd-btn" title="Wrap the video in a padded background">Backdrop</button>
-      <select id="ss-bd-bg" class="ss-select" title="Backdrop background">
-        <option value="grad-violet">Violet</option>
-        <option value="grad-ocean">Ocean</option>
-        <option value="grad-sunset">Sunset</option>
-        <option value="grad-mint">Mint</option>
-        <option value="grad-slate">Slate</option>
-        <option value="dark">Dark</option>
-        <option value="light">Light</option>
-        <option value="white">White</option>
-      </select>
-      <label class="ss-tb-label">Pad
-        <input type="range" id="ss-bd-pad" class="ss-bd-range" min="0" max="0.2" step="0.01" value="0.07" />
-      </label>
-    </div>
-    <div class="ss-tb-group">
-      <label class="ss-tb-label">Resolution
-        <select id="ss-res" class="ss-select">
-          <option value="">Original</option>
-          <option value="1080">1080p</option>
-          <option value="720">720p</option>
-        </select>
-      </label>
-      <label class="ss-tb-label">Speed
-        <select id="ss-speed" class="ss-select">
-          <option value="0.5">0.5x</option>
-          <option value="1" selected>1x</option>
-          <option value="1.5">1.5x</option>
-          <option value="2">2x</option>
-        </select>
-      </label>
-    </div>
-    <div class="ss-tb-group">
-      <button class="ss-tool" id="ss-audio-mute" title="Mute all audio">Mute</button>
-      <label class="ss-tb-label">Volume
-        <input type="range" id="ss-audio-vol" class="ss-bd-range" min="0" max="1" step="0.05" value="1" />
-      </label>
-      <button class="ss-tool" id="ss-add-audio" title="Import a voiceover or music track, mixed into the export">+ Audio</button>
-      <button class="ss-tool" id="ss-remove-audio" title="Remove the imported audio track" disabled>Remove audio</button>
+      <button class="ss-tool" data-pop="backdrop" id="ss-backdrop-pop" title="Padded background">Backdrop ▾</button>
+      <button class="ss-tool" data-pop="project" id="ss-project-pop" title="Resolution, speed, audio">Project ▾</button>
     </div>
     <div class="ss-tb-group ss-tb-right">
-      <button class="ss-btn ss-btn-primary" id="ss-download">Download original</button>
-      <button class="ss-btn ss-btn-ghost" id="ss-export">Export MP4</button>
-      <button class="ss-btn ss-btn-ghost" id="ss-export-gif">Export GIF</button>
+      <span class="ss-export-split">
+        <button class="ss-btn ss-btn-primary" id="ss-export" title="Export MP4">Export</button>
+        <button class="ss-btn ss-btn-primary ss-export-caret" data-pop="export" id="ss-export-caret" title="Export options">▾</button>
+      </span>
       <button class="ss-btn ss-btn-ghost" id="ss-close">Close</button>
+    </div>
+
+    <div class="ss-pop" id="ss-pop-backdrop" data-popbody hidden>
+      <label class="ss-pop-row"><input type="checkbox" id="ss-bd-on" /><span>Enable backdrop</span></label>
+      <label class="ss-pop-row"><span>Background</span><select id="ss-bd-bg" class="ss-select">${BD_OPTS.map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select></label>
+      <label class="ss-pop-row"><span>Padding</span><input type="range" id="ss-bd-pad" min="0" max="0.2" step="0.01" value="0.07" /></label>
+    </div>
+    <div class="ss-pop" id="ss-pop-project" data-popbody hidden>
+      <label class="ss-pop-row"><span>Resolution</span><select id="ss-res" class="ss-select"><option value="">Original</option><option value="1080">1080p</option><option value="720">720p</option></select></label>
+      <label class="ss-pop-row"><span>Speed</span><select id="ss-speed" class="ss-select"><option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="1.5">1.5x</option><option value="2">2x</option></select></label>
+      <label class="ss-pop-row"><span>Volume</span><input type="range" id="ss-audio-vol" min="0" max="1" step="0.05" value="1" /></label>
+      <label class="ss-pop-row"><input type="checkbox" id="ss-audio-mute-cb" /><span>Mute all audio</span></label>
+      <div class="ss-pop-row ss-pop-actions"><button class="ss-btn ss-btn-ghost" id="ss-add-audio">+ Add audio track</button><button class="ss-btn ss-btn-ghost" id="ss-remove-audio" disabled>Remove</button></div>
+    </div>
+    <div class="ss-pop ss-pop-menu" id="ss-pop-export" data-popbody hidden>
+      <button data-exp="mp4">Export MP4</button>
+      <button data-exp="gif">Export GIF</button>
+      <button data-exp="orig">Download original</button>
     </div>`;
 
+  // ── popovers ──────────────────────────────────────────────────────────────────────────────────
+  const closePopovers = (except) => {
+    el.querySelectorAll("[data-popbody]").forEach((p) => { if (p !== except) p.hidden = true; });
+    el.querySelectorAll("[data-pop]").forEach((b) => b.classList.remove("on"));
+  };
+  el.querySelectorAll("[data-pop]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const pop = el.querySelector(`#ss-pop-${btn.dataset.pop}`);
+      const opening = pop.hidden;
+      closePopovers();
+      if (!opening) return;
+      pop.hidden = false; btn.classList.add("on");
+      const br = btn.getBoundingClientRect(), er = el.getBoundingClientRect();
+      pop.style.top = `${br.bottom - er.top + 5}px`;
+      if (btn.dataset.pop === "export") { pop.style.left = "auto"; pop.style.right = `${er.right - br.right}px`; }
+      else { pop.style.right = "auto"; pop.style.left = `${br.left - er.left}px`; }
+    });
+  });
+  document.addEventListener("click", (e) => { if (!e.target.closest("[data-pop],[data-popbody]")) closePopovers(); });
+
+  // ── tools + clip actions ──────────────────────────────────────────────────────────────────────
   el.querySelector("#ss-tools").addEventListener("click", (e) => {
     const b = e.target.closest("[data-tool]");
     if (!b) return;
-    tool = b.dataset.tool;
-    session?.annotator.setTool(tool);
-    if (session?.cropOverlay?.isActive()) session.cropOverlay.exit(); // leave crop when picking a tool
-    selectZoom(null); // hide the zoom focus box so it never blocks drawing
-    el.querySelectorAll("[data-tool]").forEach((x) => x.classList.toggle("on", x.dataset.tool === tool));
+    setActiveTool(b.dataset.tool);
   });
-
   el.querySelector("#ss-add-image").addEventListener("click", async () => {
     if (!session) return;
     const file = await pickImageFile();
     if (!file) return;
     await addImageLayer(file, session.store, session.meta.width);
   });
-
   el.querySelector("#ss-crop-btn").addEventListener("click", () => {
     if (!session?.cropOverlay) return;
     if (session.cropOverlay.isActive()) { session.cropOverlay.exit(); markCropBtn(false); }
@@ -357,41 +357,27 @@ function buildToolbar(el, transforms) {
   });
   el.querySelector("#ss-zoom-add").addEventListener("click", () => addZoom());
   el.querySelector("#ss-zoom-remove").addEventListener("click", () => removeSelectedZoom());
-  el.querySelector("#ss-bd-btn").addEventListener("click", (e) => {
-    if (!session) return;
-    if (transforms.backdrop) transforms.backdrop = null;
-    else transforms.backdrop = { pad: Number(el.querySelector("#ss-bd-pad").value) || 0.07, radius: 0.03, shadow: true, bg: el.querySelector("#ss-bd-bg").value || "grad-violet" };
-    e.currentTarget.classList.toggle("on", !!transforms.backdrop);
+
+  // ── Backdrop popover ──────────────────────────────────────────────────────────────────────────
+  const applyBackdrop = () => {
     setStatus(session.shell.statusEl, session.meta, transforms);
-    session.preview.redraw();
-    session.zoomOverlay.refresh(); // canvas size changed — re-place the focus box if shown
-    session.selectionOverlay.refresh();
-  });
-  el.querySelector("#ss-bd-bg").addEventListener("change", (e) => {
-    if (!session || !transforms.backdrop) return;
-    transforms.backdrop.bg = e.target.value;
-    session.preview.redraw();
-  });
-  el.querySelector("#ss-bd-pad").addEventListener("input", (e) => {
-    if (!session || !transforms.backdrop) return;
-    transforms.backdrop.pad = Number(e.target.value) || 0;
     session.preview.redraw();
     session.zoomOverlay.refresh();
     session.selectionOverlay.refresh();
+  };
+  el.querySelector("#ss-bd-on").addEventListener("change", (e) => {
+    if (!session) return;
+    if (e.target.checked) transforms.backdrop = { pad: Number(el.querySelector("#ss-bd-pad").value) || 0.07, radius: 0.03, shadow: true, bg: el.querySelector("#ss-bd-bg").value || "grad-violet" };
+    else transforms.backdrop = null;
+    applyBackdrop();
   });
-  el.querySelector("#ss-colors").addEventListener("click", (e) => {
-    const b = e.target.closest("[data-color]");
-    if (!b) return;
-    color = b.dataset.color;
-    session?.annotator.setColor(color);
-    el.querySelectorAll("[data-color]").forEach((x) => x.classList.toggle("on", x.dataset.color === color));
-  });
+  el.querySelector("#ss-bd-bg").addEventListener("change", (e) => { if (session && transforms.backdrop) { transforms.backdrop.bg = e.target.value; session.preview.redraw(); } });
+  el.querySelector("#ss-bd-pad").addEventListener("input", (e) => { if (session && transforms.backdrop) { transforms.backdrop.pad = Number(e.target.value) || 0; applyBackdrop(); } });
+
+  // ── Project popover ───────────────────────────────────────────────────────────────────────────
   el.querySelector("#ss-res").addEventListener("change", (e) => {
-    const v = e.target.value;
-    transforms.outScale = v ? { maxHeight: Number(v) } : null;
+    transforms.outScale = e.target.value ? { maxHeight: Number(e.target.value) } : null;
     setStatus(session.shell.statusEl, session.meta, transforms);
-    // Resolution drives the preview canvas size (preview.composite reads getTransforms().outScale),
-    // so re-composite the cached frame at the new output dims immediately.
     session?.preview.redraw();
     session?.zoomOverlay?.refresh();
     session?.selectionOverlay?.refresh();
@@ -399,30 +385,41 @@ function buildToolbar(el, transforms) {
   el.querySelector("#ss-speed").addEventListener("change", (e) => {
     transforms.speed = Number(e.target.value) || 1;
     setStatus(session.shell.statusEl, session.meta, transforms);
-    // The preview's <video> picks up playbackRate live on the next frame — no re-anchor needed.
-    session?.timeline?.refresh(); // audio lane dims/enables based on speed === 1
+    session?.timeline?.refresh(); // audio track dims/enables on speed !== 1
   });
-  el.querySelector("#ss-audio-mute").addEventListener("click", (e) => {
-    transforms.audio.muted = !transforms.audio.muted;
-    e.currentTarget.classList.toggle("on", transforms.audio.muted);
+  const muteCb = el.querySelector("#ss-audio-mute-cb");
+  muteCb.addEventListener("change", (e) => {
+    transforms.audio.muted = e.target.checked;
     setStatus(session.shell.statusEl, session.meta, transforms);
     session?.preview.redraw();
   });
   el.querySelector("#ss-audio-vol").addEventListener("input", (e) => {
     transforms.audio.volume = Number(e.target.value);
-    if (transforms.audio.volume > 0 && transforms.audio.muted) {
-      transforms.audio.muted = false;
-      el.querySelector("#ss-audio-mute").classList.remove("on");
-    }
+    if (transforms.audio.volume > 0 && transforms.audio.muted) { transforms.audio.muted = false; muteCb.checked = false; }
     setStatus(session.shell.statusEl, session.meta, transforms);
     session?.preview.redraw();
   });
   el.querySelector("#ss-add-audio").addEventListener("click", () => onAddAudioClick());
   el.querySelector("#ss-remove-audio").addEventListener("click", () => removeExtraAudio());
-  el.querySelector("#ss-download").addEventListener("click", () => downloadOriginal());
+
+  // ── Export split + menu ───────────────────────────────────────────────────────────────────────
   el.querySelector("#ss-export").addEventListener("click", () => doExport(el.querySelector("#ss-export")));
-  el.querySelector("#ss-export-gif").addEventListener("click", () => doExport(el.querySelector("#ss-export-gif"), "gif"));
+  el.querySelector("#ss-pop-export").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-exp]"); if (!b) return;
+    closePopovers();
+    if (b.dataset.exp === "orig") downloadOriginal();
+    else doExport(el.querySelector("#ss-export"), b.dataset.exp === "gif" ? "gif" : undefined);
+  });
   el.querySelector("#ss-close").addEventListener("click", () => closeEditor());
+}
+
+// Switch the active drawing tool, updating the toolbar (Phase 2) / rail (Phase 3) highlight.
+function setActiveTool(t) {
+  tool = t;
+  session?.annotator.setTool(tool);
+  if (session?.cropOverlay?.isActive()) session.cropOverlay.exit();
+  selectZoom(null);
+  document.querySelectorAll("[data-tool]").forEach((x) => x.classList.toggle("on", x.dataset.tool === tool));
 }
 
 // Close the editor tab. The page was opened via chrome.tabs.create, so window.close() isn't reliable;
@@ -644,6 +641,60 @@ function selectLayer(id) {
   session.annotator.setSelectedId(selectedLayerId); // keep canvas Delete-key / hit-test in sync
   session.timeline.refresh();                        // update the layer lane's selected-block highlight
   session.selectionOverlay.refresh();                // show/hide the resize box for the new selection
+  updateInspector();                                 // show/hide the contextual inspector row
+}
+
+// The contextual inspector row (under the toolbar) — visible only while a layer is selected. Shows the
+// selected shape's color (shapes only), opacity, and time-range controls; replaces the last job the
+// Layers sidebar did. Rebuilt whenever the selection changes.
+function updateInspector() {
+  if (!session) return;
+  const el = session.shell.inspectorEl;
+  const store = session.store;
+  const l = selectedLayerId ? store.get(selectedLayerId) : null;
+  if (!l) { el.innerHTML = ""; return; }
+  const typeName = l.kind === "image" ? (l.image && l.image.frames ? "GIF" : "Image") : (((l.shape && l.shape.type) || "Shape").replace(/^./, (c) => c.toUpperCase()));
+  const hasColor = l.kind === "shape" && l.shape && l.shape.color != null;
+  const opacity = typeof l.opacity === "number" ? l.opacity : 1;
+  const range = l.range;
+  const fmtT = (s) => `${String(Math.floor((s || 0) / 60)).padStart(2, "0")}:${String(Math.floor((s || 0) % 60)).padStart(2, "0")}`;
+  el.innerHTML = `<div class="ss-insp">
+    <span class="ss-insp-title">${typeName} selected</span>
+    ${hasColor ? `<div class="ss-insp-colors">${COLORS.map((c) => `<button class="ss-sw ${l.shape.color === c ? "on" : ""}" data-color="${c}" style="background:${c}"></button>`).join("")}</div><span class="ss-insp-sep"></span>` : ""}
+    <span class="ss-insp-ctl">opacity <input type="range" id="ss-insp-op" min="0" max="1" step="0.05" value="${opacity}" /></span>
+    <span class="ss-insp-sep"></span>
+    <span class="ss-insp-ctl">timing <span class="ss-insp-range">${range ? `${fmtT(range.inSec)} – ${fmtT(range.outSec)}` : "always visible"}</span>
+      <button class="ss-insp-btn" data-timing="in">Set in</button>
+      <button class="ss-insp-btn" data-timing="out">Set out</button>
+      <button class="ss-insp-btn" data-timing="all">Always visible</button></span>
+    <span class="ss-insp-spacer"></span>
+    <span class="ss-insp-hint">⌫ delete · ⌘D duplicate · esc deselect</span>
+  </div>`;
+
+  const colorsEl = el.querySelector(".ss-insp-colors");
+  if (colorsEl) colorsEl.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-color]"); if (!b) return;
+    color = b.dataset.color;
+    session.annotator.setColor(color); // recolors the selected shape + arms the next one
+    updateInspector();
+  });
+  el.querySelector("#ss-insp-op").addEventListener("input", (e) => store.update(selectedLayerId, { opacity: Number(e.target.value) }));
+  const MINR = 0.1;
+  el.querySelector(".ss-insp").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-timing]"); if (!b) return;
+    const cur = store.get(selectedLayerId); if (!cur) return;
+    const r = cur.range;
+    if (b.dataset.timing === "all") store.update(selectedLayerId, { range: null });
+    else if (b.dataset.timing === "in") {
+      const outSec = r ? r.outSec : session.meta.durationSec;
+      store.update(selectedLayerId, { range: { inSec: Math.max(0, Math.min(lastTime, outSec - MINR)), outSec } });
+    } else {
+      const inSec = r ? r.inSec : 0;
+      store.update(selectedLayerId, { range: { inSec, outSec: Math.max(inSec + MINR, lastTime) } });
+    }
+    session.timeline.refresh();
+    updateInspector();
+  });
 }
 
 // Translate a drag on the imported-audio block (reported in OUTPUT seconds) into edits on
