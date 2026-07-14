@@ -104,6 +104,9 @@ body {
 .ss-pp { width: 38px; height: 38px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--green); color: #fff; border: none; cursor: pointer; }
 .ss-pp:hover { background: #15803d; }
 .ss-time { font-family: var(--mono); font-size: 12px; color: var(--chrome-muted); }
+.ss-step { width: 28px; height: 28px; border-radius: 7px; border: 1px solid var(--chrome-line); background: var(--chrome); font-size: 11px; color: var(--chrome-muted); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.ss-step:hover { color: var(--chrome-fg); background: #eef0f3; }
+.ss-key-hint { font-family: var(--mono); font-size: 10px; color: #9ca3af; }
 .ss-tb-spacer { flex: 1; }
 .ss-tlzoom { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--chrome-muted); }
 .ss-tlzoom-btn { width: 22px; height: 22px; border: 1px solid var(--chrome-line); border-radius: 6px; background: var(--chrome); color: var(--chrome-fg); font-size: 13px; line-height: 1; cursor: pointer; }
@@ -163,7 +166,7 @@ body {
 
 /* time areas: shared horizontal scale, positioned in JS (px). overflow hidden clips scrolled content. */
 .ss-tl-ttime { position: relative; flex: 1; overflow: hidden; }
-.ss-tl-rtime { cursor: pointer; }
+.ss-tl-rtime { cursor: pointer; margin: 0 10px; } /* same 10px inset as every track's time area */
 .ss-tl-rlabels { position: absolute; inset: 0; pointer-events: none; }
 .ss-tl-tick { position: absolute; top: 50%; transform: translate(-50%, -50%); font-family: var(--mono); font-size: 9.5px; color: #9ca3af; white-space: nowrap; }
 .ss-tl-vtime { margin: 6px 10px; }
@@ -209,6 +212,10 @@ body {
 /* full-height playhead spanning the whole panel */
 .ss-tl-ph { position: absolute; top: 0; bottom: 0; width: 2px; background: #18181b; box-shadow: 0 0 0 1px rgba(255,255,255,0.7); z-index: 20; pointer-events: none; }
 .ss-tl-ph-grab { position: absolute; top: 0; left: 50%; transform: translateX(-50%); width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-top: 8px solid #18181b; }
+
+/* snap guide: a thin green line + mm:ss label while a dragged edge snaps to a target */
+.ss-tl-snap { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--green); opacity: 0.75; z-index: 25; pointer-events: none; }
+.ss-tl-snap-lbl { position: absolute; top: 3px; left: 50%; transform: translateX(-50%); font-family: var(--mono); font-size: 8.5px; color: var(--green); background: #fff; border: 1px solid var(--green-line); border-radius: 3px; padding: 0 4px; white-space: nowrap; }
 
 /* zoom focus box over the preview (only shown while a block is selected) */
 .ss-zfocus { box-sizing: border-box; border: 2px solid var(--green); border-radius: 3px; box-shadow: 0 0 0 9999px rgba(0,0,0,0.30); }

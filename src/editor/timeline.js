@@ -75,12 +75,21 @@ function wireBlockDrag(container, opts) {
     if (drag.mode === "move") { const len = tOut - tIn; tIn = clamp(tIn + d, 0, maxSec - len); tOut = tIn + len; }
     else if (drag.mode === "in") tIn = clamp(tIn + d, 0, tOut - minLen);
     else if (drag.mode === "out") tOut = clamp(tOut + d, tIn + minLen, maxSec);
+    if (opts.snap) {
+      ({ tIn, tOut } = opts.snap(drag.id, { tIn, tOut }, drag.mode));
+      if (drag.mode === "move") { // re-clamp after a snap shift, preserving length
+        const len = tOut - tIn;
+        if (tOut > maxSec) { tIn = maxSec - len; tOut = maxSec; }
+        if (tIn < 0) { tIn = 0; tOut = len; }
+      }
+    }
     if (onChange) onChange(drag.id, { tIn, tOut }, drag.mode);
   });
   const end = (e) => {
     if (creating) { const c = creating; creating = null; container.releasePointerCapture?.(e.pointerId); if (onCreateEnd) onCreateEnd(c.anchorSec, secAt(e.clientX)); return; }
     if (!drag) return;
     container.releasePointerCapture?.(e.pointerId); drag = null;
+    if (opts.onDragEnd) opts.onDragEnd();
   };
   container.addEventListener("pointerup", end);
   container.addEventListener("pointercancel", end);
@@ -115,9 +124,10 @@ export function createTimeline(opts) {
   el.innerHTML = `<div class="ss-tl"></div>`;
   const panel = el.querySelector(".ss-tl");
 
+  const TIME_PAD = 10; // horizontal inset of every time area (matching margins on all rows + ruler)
   function timeW() {
-    // width of a time area = panel width minus the header column (minus the vertical scrollbar gutter)
-    const w = panel.getBoundingClientRect().width - HEADER_W;
+    // usable width of a time area = panel minus the header column and the shared horizontal insets
+    const w = panel.getBoundingClientRect().width - HEADER_W - TIME_PAD * 2;
     return Math.max(1, w);
   }
   function fitPps() { return timeW() / dur; }
@@ -196,6 +206,8 @@ export function createTimeline(opts) {
       getBlocks: () => ((getZoomBlocks && getZoomBlocks()) || []).map((b) => ({ id: b.id, tIn: b.tIn, tOut: b.tOut })),
       onSelect: (id) => onZoomSelect && onZoomSelect(id),
       onChange: (id, r) => onZoomChange && onZoomChange(id, { tIn: r.tIn, tOut: r.tOut }),
+      snap: makeSnap("zoom", Math.min(0.4, dur)),
+      onDragEnd: hideSnapGuide,
     });
 
     // one track per overlay layer (top of stack first)
@@ -217,6 +229,8 @@ export function createTimeline(opts) {
       getBlocks: () => ((getAudioCuts && getAudioCuts()) || []).map((c, i) => ({ id: i, tIn: c.in, tOut: c.out })),
       onSelect: (id) => { selectedMuteId = id; renderMutes(); },
       onChange: (id, r) => onAudioMuteChange && onAudioMuteChange(Number(id), { tIn: r.tIn, tOut: r.tOut }),
+      snap: makeSnap("mute", Math.min(0.08, dur)),
+      onDragEnd: hideSnapGuide,
       onCreateStart: (sec) => { selectedMuteId = null; pendingAMute = { in: sec, out: sec }; renderMutes(); },
       onCreateMove: (a, sec) => { pendingAMute = { in: Math.min(a, sec), out: Math.max(a, sec) }; renderMutes(); },
       onCreateEnd: (a, sec) => { const lo = Math.min(a, sec), hi = Math.max(a, sec); pendingAMute = null; if (hi - lo > 0.08 && onAddAudioCut) onAddAudioCut(lo, hi); renderMutes(); },
@@ -231,7 +245,55 @@ export function createTimeline(opts) {
     playEl.innerHTML = `<span class="ss-tl-ph-grab"></span>`;
     panel.appendChild(playEl);
 
+    // snap guide (shown while a dragged edge snaps to the playhead / another edge / a whole second)
+    snapEl = doc.createElement("div"); snapEl.className = "ss-tl-snap"; snapEl.style.display = "none";
+    snapEl.innerHTML = `<span class="ss-tl-snap-lbl"></span>`;
+    panel.appendChild(snapEl);
+
     lastSig = sig();
+  }
+
+  // ── snapping ─────────────────────────────────────────────────────────────────────────────────
+  let snapEl = null;
+  function showSnapGuide(sec) {
+    if (!snapEl) return;
+    snapEl.style.display = "block";
+    snapEl.style.left = `${HEADER_W + TIME_PAD + xOf(sec)}px`;
+    snapEl.querySelector(".ss-tl-snap-lbl").textContent = fmt(sec);
+  }
+  function hideSnapGuide() { if (snapEl) snapEl.style.display = "none"; }
+
+  // Every interesting edge on the shared ruler, excluding the block being dragged (else it would
+  // snap to itself): playhead, trim in/out, cut edges, zoom/layer/mute/extra block edges, whole seconds.
+  function snapCandidates(kind, id) {
+    const c = [0, dur, playSec, inSec, outSec];
+    for (let s = 1; s < dur; s++) c.push(s);
+    for (const cut of (getCuts && getCuts()) || []) c.push(cut.in, cut.out);
+    for (const b of (getZoomBlocks && getZoomBlocks()) || []) if (!(kind === "zoom" && String(b.id) === String(id))) c.push(b.tIn, b.tOut);
+    if (store) for (const l of store.layers) if (l.range && !(kind === "layer" && String(l.id) === String(id))) c.push(l.range.inSec, l.range.outSec);
+    ((getAudioCuts && getAudioCuts()) || []).forEach((m, i) => { if (!(kind === "mute" && String(i) === String(id))) c.push(m.in, m.out); });
+    const ea = getExtraAudio && getExtraAudio();
+    if (ea && kind !== "extra") { const len = Math.max(0, (ea.trimOut || 0) - (ea.trimIn || 0)); c.push(ea.offsetSec || 0, (ea.offsetSec || 0) + len); }
+    return c;
+  }
+
+  // A snap fn for one lane: pulls the moving edge(s) onto the nearest candidate within ~8px.
+  function makeSnap(kind, minLen) {
+    return (id, r, mode) => {
+      const th = 8 / pps();
+      const cands = snapCandidates(kind, id);
+      let best = null;
+      const consider = (edge) => { for (const c of cands) { const d = c - edge; if (Math.abs(d) <= th && (!best || Math.abs(d) < Math.abs(best.delta))) best = { delta: d, sec: c, edge }; } };
+      if (mode === "move") { consider(r.tIn); consider(r.tOut); } else consider(mode === "in" ? r.tIn : r.tOut);
+      if (!best) { hideSnapGuide(); return r; }
+      let { tIn, tOut } = r;
+      if (mode === "move") { tIn += best.delta; tOut += best.delta; }
+      else if (mode === "in") tIn = best.sec;
+      else tOut = best.sec;
+      if (tOut - tIn < minLen) { hideSnapGuide(); return r; } // never snap a block below its min length
+      showSnapGuide(best.sec);
+      return { tIn, tOut };
+    };
   }
 
   function buildLayerRow(l) {
@@ -268,6 +330,8 @@ export function createTimeline(opts) {
       },
       onSelect: (id) => onLayerSelect && onLayerSelect(id),
       onChange: (id, r) => onLayerRangeChange && onLayerRangeChange(id, { tIn: r.tIn, tOut: r.tOut }),
+      snap: makeSnap("layer", Math.min(0.1, dur)),
+      onDragEnd: hideSnapGuide,
     });
   }
 
@@ -296,6 +360,8 @@ export function createTimeline(opts) {
       },
       onSelect: (id) => { selectedExtra = !!id; renderExtra(); },
       onChange: (_id, r, mode) => onExtraAudioChange && onExtraAudioChange({ tIn: r.tIn, tOut: r.tOut }, mode),
+      snap: makeSnap("extra", Math.min(0.1, dur)),
+      onDragEnd: hideSnapGuide,
     });
   }
 
@@ -474,7 +540,7 @@ export function createTimeline(opts) {
     const w = timeW();
     if (x < -1 || x > w + 1) { playEl.style.display = "none"; return; }
     playEl.style.display = "block";
-    playEl.style.left = `${HEADER_W + x}px`;
+    playEl.style.left = `${HEADER_W + TIME_PAD + x}px`;
   }
 
   function refresh() {

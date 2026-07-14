@@ -3,7 +3,7 @@
 // FOUNDATION-OWNED and final — feature work happens inside the modules this orchestrates.
 import { loadClip, pickFile, toInput } from "./source.js";
 import { listIds } from "./idb.js";
-import { defaultTransforms, composeDims, outDuration } from "./transforms.js";
+import { defaultTransforms, composeDims, outDuration, segmentsOf } from "./transforms.js";
 import { createLayerStore, newImageLayer, newShapeLayer } from "./layers-model.js";
 import { translate } from "./shapes.js";
 import { buildShell } from "./ui-shell.js";
@@ -488,8 +488,11 @@ const PAUSE_SVG = '<svg viewBox="0 0 100 100" width="16" height="16" aria-hidden
 function buildTransport(el, durationSec) {
   if (!el) return;
   el.innerHTML = `
+    <button class="ss-step" id="ss-prev-edge" type="button" title="Previous clip edge or cut">⏮</button>
     <button class="ss-pp" id="ss-pp" type="button" aria-label="Play">${PLAY_SVG}</button>
+    <button class="ss-step" id="ss-next-edge" type="button" title="Next clip edge or cut">⏭</button>
     <span class="ss-time" id="ss-time">00:00 / ${fmtTime(durationSec)}</span>
+    <span class="ss-key-hint">space play · ←→ frame · ⇧←→ 1s</span>
     <div class="ss-tb-spacer"></div>
     <div class="ss-tlzoom">
       <span class="ss-tlzoom-label">tl zoom</span>
@@ -499,6 +502,8 @@ function buildTransport(el, durationSec) {
       <button class="ss-tlzoom-fit" id="ss-tlz-fit" title="Fit the whole clip" type="button">Fit</button>
     </div>`;
   el.querySelector("#ss-pp").addEventListener("click", () => togglePlay());
+  el.querySelector("#ss-prev-edge").addEventListener("click", () => jumpEdge(-1));
+  el.querySelector("#ss-next-edge").addEventListener("click", () => jumpEdge(1));
   const slider = el.querySelector("#ss-tlz-slider");
   const syncSlider = () => { if (session?.timeline) slider.value = String(session.timeline.getZoomNorm()); };
   el.querySelector("#ss-tlz-out").addEventListener("click", () => { session?.timeline.zoomBy(1 / 1.4); syncSlider(); });
@@ -818,6 +823,50 @@ async function togglePlay() {
   updateTransport();
 }
 
+// Every interesting SOURCE-time edge on the timeline (trim, cuts, zoom blocks, layer ranges, mute
+// bands) plus the clip bounds — the jump targets for ⏮/⏭. The imported track is skipped: its offset
+// lives on the OUTPUT timeline, not source time, so it has no direct seek target here.
+function edgeTimes() {
+  const t = session.transforms;
+  const out = [0, session.meta.durationSec, t.trimIn, t.trimOut];
+  (t.cuts || []).forEach((c) => out.push(c.in, c.out));
+  (t.zoom || []).forEach((b) => out.push(b.tIn, b.tOut));
+  session.store.layers.forEach((l) => { if (l.range) out.push(l.range.inSec, l.range.outSec); });
+  ((t.audio && t.audio.cuts) || []).forEach((c) => out.push(c.in, c.out));
+  return [...new Set(out.map((v) => Math.round(v * 1000) / 1000))].sort((a, b) => a - b);
+}
+
+// Seek to the previous (-1) / next (+1) edge relative to the playhead.
+function jumpEdge(dir) {
+  if (!session) return;
+  const edges = edgeTimes();
+  const target = dir < 0
+    ? [...edges].reverse().find((e) => e < lastTime - 0.05)
+    : edges.find((e) => e > lastTime + 0.05);
+  if (target != null) session.preview.seekTo(target);
+}
+
+// Frame-step (±1/30s) or 1s-step (⇧) relative to the playhead. Direction-aware across cuts: a step
+// landing inside a removed region continues into the next/previous kept segment instead of letting
+// seekTo snap it back to the edge it started from (which would make stepping at a cut edge a no-op).
+function stepBy(sec) {
+  if (!session) return;
+  session.preview.pause();
+  updateTransport();
+  let target = Math.max(0, Math.min(session.meta.durationSec, lastTime + sec));
+  const segs = segmentsOf(session.transforms);
+  if (!segs.some((s) => target >= s.in && target < s.out)) {
+    if (sec > 0) {
+      const nxt = segs.find((s) => s.in > target);
+      if (nxt) target = nxt.in;
+    } else {
+      const prv = [...segs].reverse().find((s) => s.out <= target);
+      if (prv) target = Math.max(prv.in, prv.out - 0.001);
+    }
+  }
+  session.preview.seekTo(target);
+}
+
 async function doExport(btn, format) {
   if (!session) return;
   const orig = btn.textContent;
@@ -902,6 +951,8 @@ window.addEventListener("keydown", (e) => {
   if (e.code === "Space" || e.key === " ") { e.preventDefault(); togglePlay(); return; }
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "d") { e.preventDefault(); duplicateSelected(); return; }
   if (e.metaKey || e.ctrlKey || e.altKey) return; // don't shadow browser shortcuts
+  if (e.key === "ArrowLeft") { e.preventDefault(); stepBy(e.shiftKey ? -1 : -1 / 30); return; }
+  if (e.key === "ArrowRight") { e.preventDefault(); stepBy(e.shiftKey ? 1 : 1 / 30); return; }
   if (e.key === "Escape") { setActiveTool("select"); selectLayer(null); return; }
   const k = e.key.toLowerCase();
   if (k === "i") { addImageFromPicker(); return; }
