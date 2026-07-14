@@ -1,14 +1,27 @@
 // The sidebar layers panel: an "Add image / logo" button and a live list of layers from the store.
 // onAddImage() resolves a chosen image File -> ImageBitmap (the controller picks the file and decodes
 // it). Re-renders on every store change. Each row shows a type label, an eye visibility toggle, an
-// opacity slider, reorder up/down buttons, and a delete button. The list is drawn top-to-bottom with
-// the TOP of the list = TOP of the draw stack (last in the store's array). Runs on the editor page,
-// so normal DOM is fine.
+// opacity slider, reorder up/down buttons, a delete button, and a time-range control (a layer can be
+// "Always visible" (range:null, the default) or "Timed" — shown only between its range.inSec/outSec,
+// stamped from the current playhead via getCurrentTime()). The list is drawn top-to-bottom with the
+// TOP of the list = TOP of the draw stack (last in the store's array). Runs on the editor page, so
+// normal DOM is fine.
 import { escapeHtml } from "./shapes.js";
 
-// { el, store, onAddImage }
-export function createLayersPanel({ el, store, onAddImage }) {
+const MIN_RANGE = 0.1; // smallest allowed (outSec - inSec), mirrors timeline.js's MIN_GAP
+
+function fmtRangeTime(sec) {
+  const s = Math.max(0, Math.floor(sec || 0));
+  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+}
+
+// { el, store, onAddImage, getCurrentTime, getDurationSec }
+//   getCurrentTime() -> current preview playhead (source seconds), used to stamp "Set in"/"Set out".
+//   getDurationSec() -> clip duration (source seconds), used as the default range end.
+export function createLayersPanel({ el, store, onAddImage, getCurrentTime, getDurationSec }) {
   const doc = el.ownerDocument;
+  const now = () => (typeof getCurrentTime === "function" ? getCurrentTime() || 0 : 0);
+  const dur = () => (typeof getDurationSec === "function" ? getDurationSec() || 0 : 0);
 
   el.innerHTML = `
     <div class="ss-panel">
@@ -32,19 +45,24 @@ export function createLayersPanel({ el, store, onAddImage }) {
     const id = l.id;
     const visible = l.visible !== false;
     const opacity = typeof l.opacity === "number" ? l.opacity : 1;
+    const range = l.range || null;
 
     const r = doc.createElement("div");
     r.className = "ss-layer-row";
+    r.style.cssText = "display:flex;flex-direction:column;align-items:stretch;gap:6px;padding:8px 10px;border:1px solid var(--chrome-line);border-radius:7px;";
     r.dataset.id = id;
     r.innerHTML = `
-      <button class="ss-layer-eye" data-eye title="${visible ? "Hide" : "Show"}">${visible ? "👁" : "🚫"}</button>
-      <span class="ss-layer-name">${escapeHtml(label(l))}</span>
-      <input class="ss-layer-op" type="range" min="0" max="1" step="0.05" value="${opacity}" title="Opacity" aria-label="Opacity" />
-      <div class="ss-layer-order">
-        <button class="ss-layer-up" data-up title="Move up" ${idx === total - 1 ? "disabled" : ""}>▲</button>
-        <button class="ss-layer-down" data-down title="Move down" ${idx === 0 ? "disabled" : ""}>▼</button>
+      <div class="ss-layer-row-top" style="display:flex;align-items:center;gap:8px;">
+        <button class="ss-layer-eye" data-eye title="${visible ? "Hide" : "Show"}">${visible ? "👁" : "🚫"}</button>
+        <span class="ss-layer-name">${escapeHtml(label(l))}</span>
+        <input class="ss-layer-op" type="range" min="0" max="1" step="0.05" value="${opacity}" title="Opacity" aria-label="Opacity" />
+        <div class="ss-layer-order">
+          <button class="ss-layer-up" data-up title="Move up" ${idx === total - 1 ? "disabled" : ""}>▲</button>
+          <button class="ss-layer-down" data-down title="Move down" ${idx === 0 ? "disabled" : ""}>▼</button>
+        </div>
+        <button class="ss-layer-del" data-del title="Delete">×</button>
       </div>
-      <button class="ss-layer-del" data-del title="Delete">×</button>`;
+      <div class="ss-layer-range" data-range style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--chrome-muted);"></div>`;
 
     // Some of the row controls aren't in editor.css yet; keep them styled inline so the panel stays
     // coherent with the dark chrome / green accent without touching the shared stylesheet.
@@ -75,7 +93,57 @@ export function createLayersPanel({ el, store, onAddImage }) {
 
     r.querySelector("[data-del]").addEventListener("click", () => store.remove(id));
 
+    renderRange(r.querySelector("[data-range]"), id, range);
+
     return r;
+  }
+
+  // The time-range sub-row: "Always visible" (range:null) vs "Timed" (range:{inSec,outSec}), stamped
+  // from the current playhead. Rebuilt in place on every store change so it always reflects live data.
+  function renderRange(el, id, range) {
+    el.textContent = "";
+    const toggle = doc.createElement("button");
+    toggle.className = "ss-layer-range-toggle";
+    toggle.style.cssText =
+      "border:none;background:transparent;color:var(--chrome-muted);font-size:11px;line-height:1;cursor:pointer;padding:2px 4px;border-radius:4px;white-space:nowrap;";
+    toggle.textContent = range ? "⏱ Timed" : "Always visible";
+    toggle.title = range ? "Click to make always visible" : "Click to show only during part of the clip";
+    toggle.addEventListener("click", () => {
+      if (range) store.update(id, { range: null });
+      else {
+        const inSec = now();
+        const outSec = Math.max(inSec + MIN_RANGE, dur() || inSec + MIN_RANGE);
+        store.update(id, { range: { inSec, outSec } });
+      }
+    });
+    el.appendChild(toggle);
+    if (!range) return;
+
+    const label = doc.createElement("span");
+    label.style.cssText = "flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+    label.textContent = `${fmtRangeTime(range.inSec)}–${fmtRangeTime(range.outSec)}`;
+    el.appendChild(label);
+
+    const mkBtn = (text, title, onClick) => {
+      const b = doc.createElement("button");
+      b.textContent = text;
+      b.title = title;
+      b.style.cssText =
+        "border:none;background:transparent;color:var(--chrome-muted);font-size:10px;line-height:1;cursor:pointer;padding:3px 5px;border-radius:4px;white-space:nowrap;";
+      b.addEventListener("click", onClick);
+      return b;
+    };
+    el.appendChild(mkBtn("Set in", "Set the start to the current playhead", () => {
+      const inSec = Math.min(now(), range.outSec - MIN_RANGE);
+      store.update(id, { range: { inSec: Math.max(0, inSec), outSec: range.outSec } });
+    }));
+    el.appendChild(mkBtn("Set out", "Set the end to the current playhead", () => {
+      const outSec = Math.max(now(), range.inSec + MIN_RANGE);
+      store.update(id, { range: { inSec: range.inSec, outSec } });
+    }));
+    const clear = mkBtn("×", "Clear — show for the whole clip", () => store.update(id, { range: null }));
+    clear.style.color = "var(--chrome-fg)";
+    el.appendChild(clear);
   }
 
   function renderList(layers) {

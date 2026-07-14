@@ -4,7 +4,9 @@
 // uses (base frame + overlay layers, scaled to the chosen output resolution), so what you see matches
 // what you'll export. Mediabunny is used only for the export pipeline, not here.
 import { drawComposite } from "./compositor.js";
-import { composeDims, effectiveSrcRect, segmentsOf } from "./transforms.js";
+import { composeDims, effectiveSrcRect, segmentsOf, outTimestamp } from "./transforms.js";
+
+function clamp01(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
 
 // If ct sits inside a removed (cut) gap, return the next kept segment's start so playback can skip
 // over it; null when ct is already inside a kept segment.
@@ -53,6 +55,52 @@ export function createPreview({ canvas, blob, getTransforms, store, onTime, onSt
   // forwards either the dest-only (dx,dy,dw,dh) or the source-rect (sx,sy,sw,sh,dx,dy,dw,dh) form.
   const baseFrame = { draw: (c, ...args) => { try { c.drawImage(video, ...args); } catch {} } };
 
+  // Optional imported audio track (voiceover / music), played through a second hidden element and kept
+  // in lockstep with the main video's OUTPUT-time position. No genlock between the two elements, so
+  // minor drift is possible over long playback — corrected on export (pipeline.js mixes it precisely).
+  let extraEl = null;      // hidden <audio> for the imported track, or null
+  let extraUrl = null;
+
+  function setExtraAudio(extraBlob) {
+    if (extraUrl) { try { URL.revokeObjectURL(extraUrl); } catch {} extraUrl = null; }
+    if (!extraBlob) {
+      if (extraEl) { try { extraEl.pause(); } catch {} extraEl.removeAttribute("src"); try { extraEl.load(); } catch {} if (extraEl.parentNode) extraEl.parentNode.removeChild(extraEl); extraEl = null; }
+      return;
+    }
+    if (!extraEl) {
+      extraEl = document.createElement("audio");
+      extraEl.preload = "auto";
+      extraEl.style.cssText = "position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0;pointer-events:none";
+      (document.body || document.documentElement).appendChild(extraEl);
+    }
+    extraUrl = URL.createObjectURL(extraBlob);
+    extraEl.src = extraUrl;
+  }
+
+  // Keep the imported track positioned/audible relative to the output timeline. outputPos is the main
+  // video's current output-time; `active` is whether the preview is playing (paused → keep silent but
+  // correctly positioned for the next play). Called from loop() and seekTo().
+  function syncExtraAudio(outputPos, active) {
+    const t = getTransforms ? getTransforms() : null;
+    const ea = t && t.extraAudio;
+    if (!extraEl || !ea) { if (extraEl) { try { extraEl.pause(); } catch {} } return; }
+    const start = ea.offsetSec || 0;
+    const end = start + Math.max(0, (ea.trimOut || 0) - (ea.trimIn || 0));
+    const inWindow = outputPos >= start && outputPos < end;
+    const vol = ea.muted ? 0 : clamp01(typeof ea.volume === "number" ? ea.volume : 1);
+    if (extraEl.volume !== vol) extraEl.volume = vol;
+    const wantAt = (ea.trimIn || 0) + (outputPos - start);
+    if (!active || !inWindow) {
+      if (!extraEl.paused) { try { extraEl.pause(); } catch {} }
+      if (!active && inWindow && Number.isFinite(wantAt)) { try { extraEl.currentTime = Math.max(0, wantAt); } catch {} }
+      return;
+    }
+    if (extraEl.paused) {
+      if (Number.isFinite(wantAt)) { try { extraEl.currentTime = Math.max(0, wantAt); } catch {} }
+      extraEl.play().catch(() => {});
+    }
+  }
+
   const readyP = new Promise((resolve) => {
     video.addEventListener("loadedmetadata", () => {
       srcW = video.videoWidth || 2;
@@ -79,6 +127,12 @@ export function createPreview({ canvas, blob, getTransforms, store, onTime, onSt
   function composite() {
     if (destroyed || !ctx) return;
     const t = getTransforms ? getTransforms() : null;
+    // Live global mute/volume — mirrors the playbackRate sync in loop() below. Per-region mute (the
+    // audio lane's mute bands) isn't reflected here: that would need a Web Audio graph on the <video>
+    // element, deferred (see transforms.js / pipeline.js comments); the export applies it correctly.
+    const a = t && t.audio;
+    const gain = a ? (a.muted ? 0 : (typeof a.volume === "number" ? a.volume : 1)) : 1;
+    if (video.volume !== gain) video.volume = gain;
     const cd = composeDims(t || {}, srcW || 2, srcH || 2);
     if (canvas.width !== cd.outW) canvas.width = cd.outW;
     if (canvas.height !== cd.outH) canvas.height = cd.outH;
@@ -104,6 +158,7 @@ export function createPreview({ canvas, blob, getTransforms, store, onTime, onSt
       if (skip != null && skip - ct > 0.001) { try { video.currentTime = skip; } catch {} }
     }
     composite();
+    if (t) syncExtraAudio(outTimestamp(video.currentTime, t), true);
     if (onTime) { try { onTime(video.currentTime); } catch {} }
     raf = requestAnimationFrame(loop);
   }
@@ -114,7 +169,12 @@ export function createPreview({ canvas, blob, getTransforms, store, onTime, onSt
       const t = getTransforms ? getTransforms() : null;
       const target = t ? snapToKept(segmentsOf(t), Math.max(0, sec)) : Math.max(0, sec);
       return new Promise((resolve) => {
-        const done = () => { composite(); if (onTime) { try { onTime(video.currentTime); } catch {} } resolve(); };
+        const done = () => {
+          composite();
+          if (t) syncExtraAudio(outTimestamp(video.currentTime, t), playing);
+          if (onTime) { try { onTime(video.currentTime); } catch {} }
+          resolve();
+        };
         video.addEventListener("seeked", done, { once: true });
         try { video.currentTime = target; } catch { video.removeEventListener("seeked", done); resolve(); }
       });
@@ -149,6 +209,7 @@ export function createPreview({ canvas, blob, getTransforms, store, onTime, onSt
     if (raf) cancelAnimationFrame(raf);
     raf = 0;
     try { video.pause(); } catch {}
+    if (extraEl) { try { extraEl.pause(); } catch {} }
   }
 
   // Re-composite the current frame (instant) so layer/transform edits show immediately while paused.
@@ -164,6 +225,7 @@ export function createPreview({ canvas, blob, getTransforms, store, onTime, onSt
     try { video.load(); } catch {}
     if (video.parentNode) video.parentNode.removeChild(video);
     URL.revokeObjectURL(url);
+    setExtraAudio(null); // tear down the imported-audio element + revoke its URL
   }
 
   // Paint the first frame once metadata is in.
@@ -175,6 +237,7 @@ export function createPreview({ canvas, blob, getTransforms, store, onTime, onSt
     pause,
     redraw,
     destroy,
+    setExtraAudio,
     isPlaying: () => playing,
     currentTime: () => video.currentTime,
   };

@@ -13,7 +13,9 @@ import { createAnnotator } from "./annotate.js";
 import { runExport, runGifExport } from "./export.js";
 import { createCropOverlay } from "./crop-overlay.js";
 import { createZoomOverlay } from "./zoom-overlay.js";
+import { createImageResizeOverlay } from "./image-resize-overlay.js";
 import { decodeGif } from "./gif-decode.js";
+import { computeWaveformPeaks } from "./audio-waveform.js";
 
 const COLORS = ["#ef4444", "#f59e0b", "#22c55e", "#3b82f6", "#111111"];
 const TOOLS = [
@@ -33,6 +35,8 @@ let tool = "select";
 let color = "#22c55e";
 let lastTime = 0;        // latest preview playhead (source seconds) — anchor for a new zoom block
 let selectedZoomId = null; // id of the zoom block currently being edited (focus box shown)
+let selectedLayerId = null; // id of the layer currently selected on the stage (resize box shown for images)
+let audioPeaks = null; // { peaks, buckets } from computeWaveformPeaks(), or null (no track / not decoded yet)
 const NEW_ZOOM_SCALE = 2;  // default magnification for a freshly-added zoom block
 
 async function boot() {
@@ -87,7 +91,14 @@ async function start(blob, fileName) {
     onTime: (sec) => onPreviewTime(sec),
     onStop: (err) => onPreviewStop(err),
   });
-  const annotator = createAnnotator({ canvas: shell.stageCanvas, store, getTool: () => tool, getColor: () => color, getTransforms: () => transforms });
+  const annotator = createAnnotator({
+    canvas: shell.stageCanvas,
+    store,
+    getTool: () => tool,
+    getColor: () => color,
+    getTransforms: () => transforms,
+    onSelectionChange: (id) => selectLayer(id),
+  });
 
   const timeline = createTimeline({
     el: shell.timelineEl,
@@ -115,7 +126,63 @@ async function start(blob, fileName) {
     getSelectedZoom: () => selectedZoomId,
     onZoomSelect: (id) => selectZoom(id),
     onZoomChange: (id, patch) => changeZoom(id, patch),
+    getAudioPeaks: () => audioPeaks,
+    getAudioCuts: () => transforms.audio.cuts || [],
+    onAddAudioCut: (i, o) => {
+      transforms.audio.cuts = (transforms.audio.cuts || []).concat([{ in: i, out: o }]);
+      setStatus(shell.statusEl, meta, transforms);
+      timeline.refresh();
+      preview.redraw();
+    },
+    onRemoveAudioCut: (idx) => {
+      transforms.audio.cuts = (transforms.audio.cuts || []).filter((_, k) => k !== idx);
+      setStatus(shell.statusEl, meta, transforms);
+      timeline.refresh();
+      preview.redraw();
+    },
+    onAudioMuteChange: (idx, r) => {
+      const arr = (transforms.audio.cuts || []).slice();
+      if (idx < 0 || idx >= arr.length) return;
+      arr[idx] = { in: r.tIn, out: r.tOut };
+      transforms.audio.cuts = arr;
+      setStatus(shell.statusEl, meta, transforms);
+      timeline.refresh();
+      preview.redraw();
+    },
+    getAudioEnabled: () => transforms.speed === 1,
+    // Layer-range lane (one row per overlay layer). Both this and the sidebar write layer.range via the
+    // store, so preview + timeline (which subscribes to the store) stay in sync automatically.
+    store,
+    getSelectedLayer: () => selectedLayerId,
+    onLayerSelect: (id) => selectLayer(id),
+    onLayerRangeChange: (id, r) => {
+      store.update(id, { range: { inSec: r.tIn, outSec: r.tOut } });
+      setStatus(shell.statusEl, meta, transforms);
+    },
+    // Imported-audio lane.
+    getExtraAudio: () => transforms.extraAudio,
+    onExtraAudioChange: (r, mode) => changeExtraAudio(r, mode),
+    onExtraMute: () => {
+      if (!transforms.extraAudio) return;
+      transforms.extraAudio.muted = !transforms.extraAudio.muted;
+      setStatus(shell.statusEl, meta, transforms);
+      timeline.refresh();
+    },
+    onExtraVolume: (v) => {
+      if (!transforms.extraAudio) return;
+      transforms.extraAudio.volume = v;
+      if (v > 0) transforms.extraAudio.muted = false;
+      setStatus(shell.statusEl, meta, transforms);
+      timeline.refresh();
+    },
   });
+
+  // Waveform decode is fire-and-forget — a long recording can take real time to fully decode, and the
+  // timeline/lane render fine in a "no data yet" state until this resolves and calls refresh().
+  audioPeaks = null;
+  computeWaveformPeaks({ input, durationSec })
+    .then((peaks) => { audioPeaks = peaks; timeline.refresh(); })
+    .catch((err) => console.warn("[screensnap] waveform decode failed:", err));
 
   const layersPanel = createLayersPanel({
     el: shell.sidebarEl,
@@ -125,6 +192,8 @@ async function start(blob, fileName) {
       if (!file) return;
       await addImageLayer(file, store, width);
     },
+    getCurrentTime: () => lastTime,
+    getDurationSec: () => durationSec,
   });
 
   // Crop overlay: a "Crop" toolbar toggle enters it; Apply sets transforms.crop (source px) and the
@@ -165,11 +234,29 @@ async function start(blob, fileName) {
     },
   });
 
+  // Image resize overlay: shown over the stage while an image/gif layer is selected (via the
+  // "select" tool). Drag the corner handle to resize (aspect-ratio locked); the box is
+  // pointer-events:none so the existing select-tool move-drag on the image body keeps working.
+  const resizeOverlay = createImageResizeOverlay({
+    stageEl: shell.stageCanvas.parentElement,
+    canvas: shell.stageCanvas,
+    store,
+    getTransforms: () => transforms,
+    srcW: width,
+    srcH: height,
+    getLayer: () => (selectedLayerId ? store.get(selectedLayerId) : null),
+    onChange: ({ x, y, w, h }) => {
+      const cur = store.get(selectedLayerId);
+      if (!cur || !cur.image) return;
+      store.update(selectedLayerId, { image: { ...cur.image, x, y, w, h } });
+    },
+  });
+
   // Note: preview.js already subscribes to the store and re-composites on every layer change
   // (add/remove/move/opacity/visibility), so annotations show live without a second subscription
   // here — adding one would double-composite each edit.
 
-  session = { input, meta, transforms, store, preview, timeline, annotator, layersPanel, cropOverlay, zoomOverlay, shell, fileName, blob };
+  session = { input, meta, transforms, store, preview, timeline, annotator, layersPanel, cropOverlay, zoomOverlay, resizeOverlay, shell, fileName, blob, extraAudioInput: null, extraAudioBlob: null };
 
   // Prominent transport: a play/pause button + time readout, plus a click-to-play overlay centred on
   // the stage (hidden while playing and while a drawing tool is active so it never blocks annotation).
@@ -226,6 +313,14 @@ function buildToolbar(el, transforms) {
           <option value="2">2x</option>
         </select>
       </label>
+    </div>
+    <div class="ss-tb-group">
+      <button class="ss-tool" id="ss-audio-mute" title="Mute all audio">Mute</button>
+      <label class="ss-tb-label">Volume
+        <input type="range" id="ss-audio-vol" class="ss-bd-range" min="0" max="1" step="0.05" value="1" />
+      </label>
+      <button class="ss-tool" id="ss-add-audio" title="Import a voiceover or music track, mixed into the export">+ Audio</button>
+      <button class="ss-tool" id="ss-remove-audio" title="Remove the imported audio track" disabled>Remove audio</button>
     </div>
     <div class="ss-tb-group ss-tb-right">
       <button class="ss-btn ss-btn-primary" id="ss-download">Download original</button>
@@ -297,7 +392,25 @@ function buildToolbar(el, transforms) {
     transforms.speed = Number(e.target.value) || 1;
     setStatus(session.shell.statusEl, session.meta, transforms);
     // The preview's <video> picks up playbackRate live on the next frame — no re-anchor needed.
+    session?.timeline?.refresh(); // audio lane dims/enables based on speed === 1
   });
+  el.querySelector("#ss-audio-mute").addEventListener("click", (e) => {
+    transforms.audio.muted = !transforms.audio.muted;
+    e.currentTarget.classList.toggle("on", transforms.audio.muted);
+    setStatus(session.shell.statusEl, session.meta, transforms);
+    session?.preview.redraw();
+  });
+  el.querySelector("#ss-audio-vol").addEventListener("input", (e) => {
+    transforms.audio.volume = Number(e.target.value);
+    if (transforms.audio.volume > 0 && transforms.audio.muted) {
+      transforms.audio.muted = false;
+      el.querySelector("#ss-audio-mute").classList.remove("on");
+    }
+    setStatus(session.shell.statusEl, session.meta, transforms);
+    session?.preview.redraw();
+  });
+  el.querySelector("#ss-add-audio").addEventListener("click", () => onAddAudioClick());
+  el.querySelector("#ss-remove-audio").addEventListener("click", () => removeExtraAudio());
   el.querySelector("#ss-download").addEventListener("click", () => downloadOriginal());
   el.querySelector("#ss-export").addEventListener("click", () => doExport(el.querySelector("#ss-export")));
   el.querySelector("#ss-export-gif").addEventListener("click", () => doExport(el.querySelector("#ss-export-gif"), "gif"));
@@ -382,6 +495,74 @@ async function addImageLayer(file, store, width) {
   }
 }
 
+// ── Imported audio track (voiceover / music) ─────────────────────────────────────────────────────
+// Import a file → probe it → stash the Input on `session` and the plain positional state on
+// transforms.extraAudio. Scoped to exactly one imported track in v1; re-importing replaces (behind a
+// confirm). Fully independent of whether the recording has audio of its own.
+async function onAddAudioClick() {
+  if (!session) return;
+  if (session.transforms.extraAudio && !confirm("Replace the current imported audio track?")) return;
+  const file = await pickAudioFile();
+  if (!file) return;
+  await addExtraAudio(file);
+}
+
+async function addExtraAudio(file) {
+  if (!session) return;
+  let input, durationSec;
+  try {
+    input = toInput(file);
+    const aTrack = await input.getPrimaryAudioTrack();
+    if (!aTrack) { alert("That file doesn’t have an audio track we can use."); return; }
+    durationSec = await aTrack.computeDuration();
+    if (!(durationSec > 0)) { alert("That audio file appears to be empty."); return; }
+  } catch (err) {
+    console.warn("[screensnap] couldn't load imported audio:", err);
+    alert("Sorry — that audio file couldn’t be added.");
+    return;
+  }
+  session.extraAudioInput = input;
+  session.extraAudioBlob = file;
+  session.transforms.extraAudio = {
+    name: file.name || "audio", durationSec,
+    trimIn: 0, trimOut: durationSec, offsetSec: 0, volume: 1, muted: false,
+  };
+  session.preview.setExtraAudio(file);
+  setStatus(session.shell.statusEl, session.meta, session.transforms);
+  session.timeline.refresh();
+  const rm = document.getElementById("ss-remove-audio");
+  if (rm) rm.disabled = false;
+}
+
+function removeExtraAudio() {
+  if (!session) return;
+  session.extraAudioInput = null;
+  session.extraAudioBlob = null;
+  session.transforms.extraAudio = null;
+  session.preview.setExtraAudio(null);
+  setStatus(session.shell.statusEl, session.meta, session.transforms);
+  session.timeline.refresh();
+  const rm = document.getElementById("ss-remove-audio");
+  if (rm) rm.disabled = true;
+}
+
+function pickAudioFile() {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "audio/*"; // broad hint; the real gate is the getPrimaryAudioTrack() probe on import
+    input.style.display = "none";
+    document.body.appendChild(input);
+    input.addEventListener("change", () => {
+      const f = input.files && input.files[0];
+      input.remove();
+      resolve(f || null);
+    });
+    window.addEventListener("focus", () => setTimeout(() => { input.remove(); resolve(null); }, 400), { once: true });
+    input.click();
+  });
+}
+
 // ── Zoom blocks ────────────────────────────────────────────────────────────────────────────────
 // Add a ~2s zoom block at the current playhead, centered at 2x, and select it so the focus box shows.
 function addZoom() {
@@ -426,6 +607,45 @@ function changeZoom(id, patch) {
   if (patch.tOut != null) b.tOut = patch.tOut;
   session.timeline.refresh();
   session.zoomOverlay.refresh();
+  session.preview.redraw();
+}
+
+// Single funnel for "which layer is selected", driven from a canvas click (via annotate.js's
+// onSelectionChange) OR a timeline-block click (via onLayerSelect). The guard makes it idempotent: a
+// timeline click calls annotator.setSelectedId(), which re-fires onSelectionChange → selectLayer again;
+// the second pass sees the same id and returns, so the two-way sync settles instead of looping.
+function selectLayer(id) {
+  const next = id || null;
+  if (next === selectedLayerId) return;
+  selectedLayerId = next;
+  if (!session) return;
+  session.annotator.setSelectedId(selectedLayerId); // keep canvas Delete-key / hit-test in sync
+  session.timeline.refresh();                        // update the layer lane's selected-block highlight
+  const l = selectedLayerId ? session.store.get(selectedLayerId) : null;
+  if (l && l.kind === "image") session.resizeOverlay.show();
+  else session.resizeOverlay.hide();
+}
+
+// Translate a drag on the imported-audio block (reported in OUTPUT seconds) into edits on
+// transforms.extraAudio. Body-drag moves it; the left edge trims the file's start (moving offset and
+// trimIn together so the untouched part doesn't shift); the right edge trims the file's end.
+function changeExtraAudio(r, mode) {
+  if (!session) return;
+  const ea = session.transforms.extraAudio;
+  if (!ea) return;
+  if (mode === "move") {
+    ea.offsetSec = Math.max(0, r.tIn);
+  } else if (mode === "in") {
+    let delta = r.tIn - ea.offsetSec;          // how far the left edge moved (output seconds)
+    if (ea.trimIn + delta < 0) delta = -ea.trimIn; // can't use audio from before the file's start
+    ea.trimIn += delta;
+    ea.offsetSec += delta;
+  } else if (mode === "out") {
+    const newLen = r.tOut - ea.offsetSec;
+    ea.trimOut = Math.min(ea.durationSec, ea.trimIn + Math.max(0, newLen));
+  }
+  setStatus(session.shell.statusEl, session.meta, session.transforms);
+  session.timeline.refresh();
   session.preview.redraw();
 }
 
@@ -491,6 +711,7 @@ async function doExport(btn, format) {
     transforms: session.transforms,
     store: session.store,
     fileName: session.fileName,
+    extraAudioInput: session.extraAudioInput, // ignored by the GIF path
     onProgress: (frac) => { btn.textContent = `Exporting ${Math.round(frac * 100)}%`; },
   };
   try {
@@ -514,8 +735,17 @@ function setStatus(el, meta, t, errMsg) {
   const cuts = Array.isArray(t.cuts) && t.cuts.length ? ` · ${t.cuts.length} cut${t.cuts.length > 1 ? "s" : ""}` : "";
   const zoom = Array.isArray(t.zoom) && t.zoom.length ? ` · ${t.zoom.length} zoom` : "";
   const bd = t.backdrop ? " · backdrop" : "";
-  const audio = (t.speed || 1) === 1 ? "audio on" : "audio off (speed ≠ 1x)";
-  el.textContent = `${res} · ${t.speed}x · ${outDuration(t).toFixed(1)}s out${cuts}${zoom}${bd} · ${audio}`;
+  const a = t.audio || {};
+  let audio;
+  if ((t.speed || 1) !== 1) audio = "audio off (speed ≠ 1x)";
+  else if (a.muted) audio = "audio muted";
+  else {
+    const mutes = Array.isArray(a.cuts) && a.cuts.length ? `, ${a.cuts.length} muted region${a.cuts.length > 1 ? "s" : ""}` : "";
+    const vol = typeof a.volume === "number" && a.volume !== 1 ? `, ${Math.round(a.volume * 100)}%` : "";
+    audio = `audio on${vol}${mutes}`;
+  }
+  const extra = t.extraAudio ? ` · + ${t.extraAudio.name || "audio"}${t.extraAudio.muted ? " (muted)" : ""}` : "";
+  el.textContent = `${res} · ${t.speed}x · ${outDuration(t).toFixed(1)}s out${cuts}${zoom}${bd} · ${audio}${extra}`;
 }
 
 // Raster formats only — SVG is excluded deliberately (scriptable XML, and it has no intrinsic

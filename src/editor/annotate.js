@@ -8,14 +8,22 @@ import { newShapeLayer } from "./layers-model.js";
 import { hit, translate } from "./shapes.js";
 import { cropRect, composeDims } from "./transforms.js";
 
-// { canvas, store, getTool, getColor, getTransforms }
-export function createAnnotator({ canvas, store, getTool, getColor, getTransforms }) {
+// { canvas, store, getTool, getColor, getTransforms, onSelectionChange }
+//   onSelectionChange(id|null) -> fired whenever the selected layer changes (select/deselect/tool
+//   switch/delete), so the controller can drive a selection-dependent UI (e.g. resize handles).
+export function createAnnotator({ canvas, store, getTool, getColor, getTransforms, onSelectionChange }) {
   let tool = (getTool && getTool()) || "select";
   let color = (getColor && getColor()) || "#22c55e";
   let drag = null;       // in-progress create drag: { tool,color,width,x1,y1,x2,y2 }
   let moving = null;     // in-progress select drag: { id, start:{x,y}, orig:shape }
   let selectedId = null;
   let editingText = false;
+
+  function setSelected(id) {
+    if (selectedId === id) return;
+    selectedId = id;
+    if (typeof onSelectionChange === "function") onSelectionChange(selectedId);
+  }
   // Latched SOURCE dimensions. The compositor draws shapes in source-pixel space and scales them by
   // outW/srcW, so every shape we store MUST be in source coords. preview.js sizes this canvas to the
   // *output* (outputDims w/ outScale): at "Original" (outScale:null) canvas.width === srcW, but at
@@ -88,7 +96,7 @@ export function createAnnotator({ canvas, store, getTool, getColor, getTransform
 
   function placeText(p) {
     editingText = true;
-    selectedId = null;
+    setSelected(null);
     const c = (getColor && getColor()) || color;
     // size is stored in SOURCE px (compositor scales it by outW/srcW), so base it on source width.
     const size = Math.max(18, srcWidth() / 30);
@@ -135,13 +143,13 @@ export function createAnnotator({ canvas, store, getTool, getColor, getTransform
     if (t === "select") {
       canvas.setPointerCapture?.(e.pointerId);
       const l = topLayerAt(p);
-      selectedId = l ? l.id : null;
+      setSelected(l ? l.id : null);
       if (l && l.kind === "image") moving = { id: l.id, kind: "image", start: p, orig: { x: l.image.x, y: l.image.y } };
       else if (l) moving = { id: l.id, kind: "shape", start: p, orig: JSON.parse(JSON.stringify(l.shape)) };
       return;
     }
     canvas.setPointerCapture?.(e.pointerId);
-    selectedId = null;
+    setSelected(null);
     const c = (getColor && getColor()) || color;
     if (t === "text") return placeText(p);
     drag = { tool: t, color: c, width: weight(), x1: p.x, y1: p.y, x2: p.x, y2: p.y };
@@ -186,7 +194,7 @@ export function createAnnotator({ canvas, store, getTool, getColor, getTransform
     if ((e.key === "Delete" || e.key === "Backspace") && selectedId != null) {
       e.preventDefault();
       store.remove(selectedId);
-      selectedId = null;
+      setSelected(null);
     }
   }
 
@@ -196,7 +204,10 @@ export function createAnnotator({ canvas, store, getTool, getColor, getTransform
   window.addEventListener("keydown", onKey, true);
 
   return {
-    setTool(t) { tool = t; if (t !== "select") selectedId = null; },
+    // Push a selection in from outside (e.g. a timeline-clip click), so Delete-key handling and the
+    // resize overlay stay correct for selections that didn't originate from a canvas click.
+    setSelectedId(id) { setSelected(id || null); },
+    setTool(t) { tool = t; if (t !== "select") setSelected(null); },
     setColor(c) {
       color = c;
       // Recolour the live selection so the colour swatch acts on the picked shape too.

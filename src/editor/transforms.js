@@ -12,7 +12,22 @@
 
 export function defaultTransforms(meta) {
   const dur = Math.max(0, (meta && meta.durationSec) || 0);
-  return { trimIn: 0, trimOut: dur, cuts: [], outScale: null, speed: 1, crop: null, zoom: [], backdrop: null };
+  return {
+    trimIn: 0, trimOut: dur, cuts: [], outScale: null, speed: 1, crop: null, zoom: [], backdrop: null,
+    // Independent audio mute mask — same {trimIn,trimOut,cuts} shape as the video fields above, so
+    // segmentsOf()/keepFrame() work unmodified when called as segmentsOf(t.audio)/keepFrame(sec, t.audio).
+    // This is NOT a ripple window like video's cuts (which shift later segments earlier in the output):
+    // it only decides, per audio buffer already included by the video's own trim/cuts, whether to pass
+    // real samples through or zero them — so muting a stretch of audio never desyncs it from the video.
+    audio: { trimIn: 0, trimOut: dur, cuts: [], volume: 1, muted: false },
+    // An optional imported audio track (voiceover / music) layered onto the OUTPUT timeline. null until
+    // one is added. offsetSec is in OUTPUT seconds (the final trimmed/cut timeline), NOT source seconds:
+    // an imported asset is placed on the edited result, not tied to a moment in the recording, so it
+    // never needs to skip over the video's cut gaps. trimIn/trimOut select which portion of the file is
+    // used (in the file's own seconds); durationSec is the file's native length. The file's Mediabunny
+    // Input isn't plain data, so it lives on the editor `session` (session.extraAudioInput), not here.
+    extraAudio: null, // { name, durationSec, trimIn, trimOut, offsetSec, volume, muted }
+  };
 }
 
 // Round a value to the nearest EVEN integer (>= 2). H.264 chroma subsampling requires even dims.
@@ -25,6 +40,18 @@ function toEven(n) {
 
 function clamp(v, lo, hi) {
   return v < lo ? lo : v > hi ? hi : v;
+}
+
+// Target video bitrate for a given output frame size, so export file size actually shrinks with
+// resolution instead of encoding a smaller frame at a fixed bitrate. bpp (bits/pixel/frame) is tuned
+// for screen-recording content (mostly static UI, far less motion than camera video), clamped to a
+// floor (keeps small/cropped outputs legible) and a ceiling (caps a large "Original" 4K+ export).
+const BITRATE_BPP = 0.12;
+const MIN_BITRATE = 1.5e6;
+const MAX_BITRATE = 20e6;
+export function videoBitrateFor(outW, outH, fps = 30) {
+  const raw = BITRATE_BPP * Math.max(0, outW) * Math.max(0, outH) * fps;
+  return Math.round(clamp(raw, MIN_BITRATE, MAX_BITRATE));
 }
 
 // outScale null => source dims unchanged. {maxHeight} => scale down to fit that height (never up),
@@ -72,7 +99,9 @@ export function composeDims(t, srcW, srcH) {
 
 // ── Segments (trim minus cuts) ──────────────────────────────────────────────────────────────────
 // Normalize cuts and subtract them from [trimIn, trimOut] to get the ordered list of kept segments.
-// Each segment is {in, out} in SOURCE seconds. Always returns at least one segment.
+// Each segment is {in, out} in SOURCE seconds. Always returns at least one segment. Generic over any
+// object with {trimIn,trimOut,cuts} — used for both the video transforms and transforms.audio (the
+// independent audio mute mask), so segmentsOf(t.audio)/keepFrame(sec, t.audio) work unmodified.
 export function segmentsOf(t) {
   const lo = Math.max(0, t.trimIn || 0);
   const hi = Math.max(lo, t.trimOut == null ? lo : t.trimOut);
@@ -145,6 +174,15 @@ export function outDuration(t) {
 // audio is concatenated in the pipeline by feeding only buffers inside a kept segment.
 export function audioEnabled(t) {
   return safeSpeed(t) === 1;
+}
+
+// The gain (0..1) to apply to kept audio samples, from the independent audio mute mask (t.audio).
+// Global mute -> 0; otherwise the global volume slider, defaulting to 1. Regional mute-out is applied
+// separately per-buffer via keepFrame(timestamp, t.audio) at the call site (pipeline.js).
+export function audioGainFor(t) {
+  const a = t && t.audio;
+  if (!a || a.muted) return 0;
+  return typeof a.volume === "number" ? a.volume : 1;
 }
 
 // ── Zoom (blocks of magnification, each eased in/out) ────────────────────────────────────────────

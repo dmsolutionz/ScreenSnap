@@ -7,13 +7,74 @@ import {
   Input, ALL_FORMATS, BlobSource, VideoSampleSink, AudioBufferSink,
   Output, Mp4OutputFormat, BufferTarget, CanvasSource, AudioBufferSource, getEncodableCodecs,
 } from "../vendor/mediabunny.mjs";
-import { composeDims, keepFrame, outTimestamp, outFrameDuration, outDuration, audioEnabled, effectiveSrcRect } from "./transforms.js";
+import { composeDims, keepFrame, outTimestamp, outFrameDuration, outDuration, audioEnabled, effectiveSrcRect, videoBitrateFor, audioGainFor } from "./transforms.js";
 import { drawComposite } from "./compositor.js";
 
+// Read the sample rate / channel count of a track's first decoded buffer (used to size the mixing
+// OfflineAudioContext). Returns null if the track can't be read.
+async function firstBufferFormat(track, startSec) {
+  try {
+    const sink = new AudioBufferSink(track);
+    const b = await sink.getBuffer(Math.max(0, startSec || 0));
+    if (b && b.buffer) return { sampleRate: b.buffer.sampleRate, channels: b.buffer.numberOfChannels };
+  } catch { /* fall through to null */ }
+  return null;
+}
+
+// Mix the (trimmed / mute-masked) main audio and an optional imported track into ONE AudioBuffer via
+// an OfflineAudioContext (a standard Web Audio API — no ffmpeg, no WASM, no new dependency). Each source
+// buffer is scheduled at its true OUTPUT-time position through its own GainNode, and the context sums
+// them; anything scheduled past the context's fixed length renders as nothing (natural truncation).
+// -> AudioBuffer, or null if there was genuinely nothing to render.
+async function mixAudio({ transforms, aTrack, wantMainAudio, extraTrack, extraAudio, totalOut, signal }) {
+  const fmt =
+    (wantMainAudio ? await firstBufferFormat(aTrack, transforms.trimIn) : null) ||
+    (extraTrack ? await firstBufferFormat(extraTrack, extraAudio ? extraAudio.trimIn : 0) : null) ||
+    { sampleRate: 48000, channels: 2 };
+  const length = Math.max(1, Math.ceil(totalOut * fmt.sampleRate));
+  const ctx = new OfflineAudioContext(Math.max(1, fmt.channels), length, fmt.sampleRate);
+
+  const schedule = (buffer, outSec, gain) => {
+    if (!(gain > 0) || outSec >= totalOut) return;
+    const node = ctx.createBufferSource();
+    node.buffer = buffer;
+    const g = ctx.createGain();
+    g.gain.value = gain;
+    node.connect(g).connect(ctx.destination);
+    node.start(Math.max(0, outSec));
+  };
+
+  if (wantMainAudio) {
+    const sink = new AudioBufferSink(aTrack);
+    const baseGain = audioGainFor(transforms); // global volume; global mute already excluded upstream
+    for await (const { buffer, timestamp } of sink.buffers(transforms.trimIn, transforms.trimOut)) {
+      if (signal && signal.aborted) throw new DOMException("Export cancelled", "AbortError");
+      if (!keepFrame(timestamp, transforms)) continue; // video's own ripple gate — unchanged
+      const audible = transforms.audio ? keepFrame(timestamp, transforms.audio) : true; // mute mask
+      schedule(buffer, outTimestamp(timestamp, transforms), audible ? baseGain : 0);
+    }
+  }
+
+  if (extraTrack && extraAudio) {
+    const sink = new AudioBufferSink(extraTrack);
+    const gain = extraAudio.muted ? 0 : (typeof extraAudio.volume === "number" ? extraAudio.volume : 1);
+    if (gain > 0) {
+      for await (const { buffer, timestamp } of sink.buffers(extraAudio.trimIn, extraAudio.trimOut)) {
+        if (signal && signal.aborted) throw new DOMException("Export cancelled", "AbortError");
+        // Map the file's own time to the OUTPUT timeline: its trimmed start lands at offsetSec.
+        schedule(buffer, extraAudio.offsetSec + (timestamp - extraAudio.trimIn), gain);
+      }
+    }
+  }
+
+  return ctx.startRendering();
+}
+
 // input: a Mediabunny Input (from source.toInput). transforms: see transforms.js. store: layer store
-// (compositor reads visibleOrdered()). onProgress(0..1). signal: optional AbortSignal.
+// (compositor reads visibleOrdered()). onProgress(0..1). signal: optional AbortSignal. extraAudioInput:
+// an optional second Mediabunny Input for an imported audio track (mixed in per transforms.extraAudio).
 // -> Blob('video/mp4')
-export async function transcode({ input, transforms, store, onProgress, signal }) {
+export async function transcode({ input, transforms, store, onProgress, signal, extraAudioInput }) {
   const codecs = await getEncodableCodecs();
   if (!codecs || !codecs.includes("avc")) {
     throw new Error("This browser can't encode H.264 (AVC) video, so MP4 export isn't available here. Try a recent Chrome.");
@@ -36,15 +97,22 @@ export async function transcode({ input, transforms, store, onProgress, signal }
   const unit = Math.max(1, srcW / 900);
 
   const output = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() });
-  const vSrc = new CanvasSource(canvas, { codec: "avc", bitrate: 8e6 });
+  const vSrc = new CanvasSource(canvas, { codec: "avc", bitrate: videoBitrateFor(outW, outH) });
   output.addVideoTrack(vSrc, { frameRate: 30 });
 
-  // Audio: only carried when the transform allows it (1x speed in v1). Re-encode to AAC via
-  // AudioBufferSink -> AudioBufferSource.
+  // Audio: the main track is carried when the transform allows it (1x speed in v1) and it isn't
+  // globally muted; an imported track (transforms.extraAudio) is mixed in independently of the main
+  // one. We add an output audio track whenever EITHER contributes — split from "does main audio play"
+  // so an imported voiceover works even on a recording that has no audio of its own.
   const aTrack = await input.getPrimaryAudioTrack();
-  const wantAudio = !!aTrack && audioEnabled(transforms);
+  const wantMainAudio = !!aTrack && audioEnabled(transforms) && !(transforms.audio && transforms.audio.muted);
+  let extraTrack = null;
+  if (extraAudioInput && transforms.extraAudio) {
+    try { extraTrack = await extraAudioInput.getPrimaryAudioTrack(); } catch { extraTrack = null; }
+  }
+  const hasAnyAudioSource = wantMainAudio || !!extraTrack;
   let aSrc = null;
-  if (wantAudio) {
+  if (hasAnyAudioSource) {
     aSrc = new AudioBufferSource({ codec: "aac", bitrate: 192e3 });
     output.addAudioTrack(aSrc);
   }
@@ -76,16 +144,14 @@ export async function transcode({ input, transforms, store, onProgress, signal }
       sample.close(); // REQUIRED: release the frame to avoid decoder backpressure / leaks
     }
 
-    if (wantAudio) {
-      const aSink = new AudioBufferSink(aTrack);
-      // AudioBufferSource auto-sequences timestamps from 0 by accumulated buffer duration, so we feed
-      // buffers in order (skipping any in the pre-trim region or inside a removed cut) and the kept
-      // buffers concatenate — landing the first at output time 0, aligned with the trimmed video.
-      for await (const { buffer, timestamp } of aSink.buffers(transforms.trimIn, transforms.trimOut)) {
-        if (signal && signal.aborted) throw new DOMException("Export cancelled", "AbortError");
-        if (!keepFrame(timestamp, transforms)) continue;
-        await aSrc.add(buffer);
-      }
+    if (hasAnyAudioSource) {
+      // Mix everything into one buffer offline, then hand it to the encoder in a single add() —
+      // AudioBufferSource.add() auto-chunks an arbitrarily large buffer internally, so one call is fine.
+      const mixed = await mixAudio({
+        transforms, aTrack, wantMainAudio, extraTrack,
+        extraAudio: transforms.extraAudio, totalOut, signal,
+      });
+      if (mixed) await aSrc.add(mixed);
     }
 
     await output.finalize();
