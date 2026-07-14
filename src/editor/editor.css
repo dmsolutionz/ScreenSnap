@@ -85,9 +85,17 @@ body {
   display: flex; align-items: center; justify-content: center; padding: 24px;
 }
 .ss-canvas { max-width: 100%; max-height: 100%; box-shadow: 0 6px 28px rgba(0, 0, 0, 0.18); background: #fff; display: block; }
-/* left tool rail + contextual inspector (filled in later phases; collapse to nothing while empty) */
-.ss-rail { flex: 0 0 auto; background: var(--chrome-2); border-right: 1px solid var(--chrome-line); }
+/* left tool rail: 52px icon column (V R A T B I). Tooltips fly out to the right on hover. */
+.ss-rail { flex: 0 0 52px; width: 52px; background: var(--chrome-2); border-right: 1px solid var(--chrome-line); display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 0; }
 .ss-rail:empty { display: none; }
+.ss-rail-btn { position: relative; width: 38px; height: 38px; border-radius: 9px; border: 1px solid transparent; background: transparent; color: var(--chrome-muted); display: flex; align-items: center; justify-content: center; cursor: pointer; }
+.ss-rail-btn:hover { color: var(--chrome-fg); background: #eef0f3; }
+.ss-rail-btn.on { background: var(--green-tint); border-color: var(--green-line); color: var(--green); }
+.ss-rail-btn.locked { box-shadow: 0 0 0 1.5px var(--green); }
+.ss-rail-tip { position: absolute; left: 46px; top: 50%; transform: translateY(-50%); white-space: nowrap; background: #18181b; color: #fff; font-size: 11px; border-radius: 6px; padding: 5px 9px; display: none; align-items: center; gap: 7px; z-index: 60; pointer-events: none; }
+.ss-rail-btn:hover .ss-rail-tip { display: flex; }
+.ss-rail-tip kbd { font-family: var(--mono); font-size: 9.5px; background: rgba(255,255,255,0.18); border-radius: 3px; padding: 1px 4px; }
+.ss-rail-tip-hint { font-size: 10px; color: #9ca3af; }
 .ss-inspector { flex: 0 0 auto; background: var(--chrome); border-bottom: 1px solid var(--chrome-line); }
 .ss-inspector:empty { display: none; }
 

@@ -13,7 +13,9 @@ import { cropRect, composeDims } from "./transforms.js";
 //   switch/delete), so the controller can drive a selection-dependent UI (e.g. resize handles).
 //   onDraft(rect|null) -> the in-progress creation rect (source px) while dragging out a new
 //   rect/blur/arrow, so the controller can show a live bounding box; null when the drag ends.
-export function createAnnotator({ canvas, store, getTool, getColor, getTransforms, onSelectionChange, onDraft }) {
+//   onCreate(id, shiftHeld) -> fired after a new shape is committed, so the controller can auto-return
+//   to Select and select it (unless the tool is locked / shift is held to keep drawing).
+export function createAnnotator({ canvas, store, getTool, getColor, getTransforms, onSelectionChange, onDraft, onCreate }) {
   let tool = (getTool && getTool()) || "select";
   let color = (getColor && getColor()) || "#22c55e";
   let drag = null;       // in-progress create drag: { tool,color,width,x1,y1,x2,y2 }
@@ -134,7 +136,10 @@ export function createAnnotator({ canvas, store, getTool, getColor, getTransform
       const text = input.value.trim();
       input.remove();
       editingText = false;
-      if (text) store.add(newShapeLayer({ type: "text", color: c, size, x: p.x, y: p.y, text }));
+      if (text) {
+        const added = store.add(newShapeLayer({ type: "text", color: c, size, x: p.x, y: p.y, text }));
+        if (added && typeof onCreate === "function") onCreate(added.id, false);
+      }
     };
     input.addEventListener("blur", commit);
     input.addEventListener("keydown", (ev) => {
@@ -184,21 +189,22 @@ export function createAnnotator({ canvas, store, getTool, getColor, getTransform
     reportDraft();
   }
 
-  function up() {
+  function up(e) {
     if (moving) { moving = null; return; }
     if (!drag) return;
     const d = drag;
     drag = null;
     reportDraft(); // drag is now null -> clears the draft box
+    const shift = !!(e && e.shiftKey);
     const x = Math.min(d.x1, d.x2), y = Math.min(d.y1, d.y2), w = Math.abs(d.x2 - d.x1), h = Math.abs(d.y2 - d.y1);
+    let added = null;
     if (d.tool === "arrow") {
       if (Math.hypot(d.x2 - d.x1, d.y2 - d.y1) < 4) return;
-      store.add(newShapeLayer({ type: "arrow", color: d.color, width: d.width, x1: d.x1, y1: d.y1, x2: d.x2, y2: d.y2 }));
-      return;
-    }
-    if (w < 4 || h < 4) return;
-    if (d.tool === "blur") store.add(newShapeLayer({ type: "blur", x, y, w, h }));
-    else store.add(newShapeLayer({ type: d.tool, color: d.color, width: d.width, x, y, w, h }));
+      added = store.add(newShapeLayer({ type: "arrow", color: d.color, width: d.width, x1: d.x1, y1: d.y1, x2: d.x2, y2: d.y2 }));
+    } else if (w < 4 || h < 4) return;
+    else if (d.tool === "blur") added = store.add(newShapeLayer({ type: "blur", x, y, w, h }));
+    else added = store.add(newShapeLayer({ type: d.tool, color: d.color, width: d.width, x, y, w, h }));
+    if (added && typeof onCreate === "function") onCreate(added.id, shift); // drives draw-once → Select
   }
 
   function onKey(e) {

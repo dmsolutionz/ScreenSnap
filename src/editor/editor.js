@@ -4,7 +4,8 @@
 import { loadClip, pickFile, toInput } from "./source.js";
 import { listIds } from "./idb.js";
 import { defaultTransforms, composeDims, outDuration } from "./transforms.js";
-import { createLayerStore, newImageLayer } from "./layers-model.js";
+import { createLayerStore, newImageLayer, newShapeLayer } from "./layers-model.js";
+import { translate } from "./shapes.js";
 import { buildShell } from "./ui-shell.js";
 import { createPreview } from "./preview.js";
 import { createTimeline } from "./timeline.js";
@@ -17,12 +18,15 @@ import { decodeGif } from "./gif-decode.js";
 import { computeWaveformPeaks } from "./audio-waveform.js";
 
 const COLORS = ["#ef4444", "#f59e0b", "#22c55e", "#3b82f6", "#111111"];
-const TOOLS = [
-  ["select", "Select"],
-  ["rect", "Rectangle"],
-  ["arrow", "Arrow"],
-  ["text", "Text"],
-  ["blur", "Blur"],
+// Left tool rail: [id, label, keyboard shortcut, svg icon]. "image" is an action (file picker), not a
+// mode. Icons are inline SVG lifted from the design handoff.
+const RAIL_TOOLS = [
+  ["select", "Select", "V", '<svg viewBox="0 0 24 24" width="17" height="17"><polygon points="7,4 7,17.5 10.5,14 13,19.5 15.2,18.5 12.7,13 17.5,12.5" fill="currentColor"/></svg>'],
+  ["rect", "Rectangle", "R", '<svg viewBox="0 0 24 24" width="17" height="17"><rect x="4.5" y="7" width="15" height="10" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>'],
+  ["arrow", "Arrow", "A", '<svg viewBox="0 0 24 24" width="17" height="17"><line x1="6" y1="18" x2="17" y2="7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><polyline points="11,6.5 17.5,6.5 17.5,13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>'],
+  ["text", "Text", "T", '<svg viewBox="0 0 24 24" width="17" height="17"><line x1="5.5" y1="6.5" x2="18.5" y2="6.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><line x1="12" y1="6.5" x2="12" y2="18.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>'],
+  ["blur", "Blur", "B", '<svg viewBox="0 0 24 24" width="17" height="17"><circle cx="12" cy="12" r="6.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 2.4"/><circle cx="12" cy="12" r="3" fill="currentColor" opacity="0.4"/></svg>'],
+  ["image", "Add image", "I", '<svg viewBox="0 0 24 24" width="17" height="17"><rect x="4.5" y="5.5" width="15" height="13" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="9" cy="10" r="1.5" fill="currentColor"/><polyline points="6,17 11,12.5 14,15 16.5,13 19,15.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>'],
 ];
 
 const root = document.getElementById("root");
@@ -31,6 +35,7 @@ const openBtn = document.getElementById("open-btn");
 
 let session = null; // { input, meta, transforms, store, preview, timeline, annotator, layersPanel, shell, fileName }
 let tool = "select";
+let toolLocked = false; // double-click a rail tool to keep drawing with it (draw-once otherwise)
 let color = "#22c55e";
 let lastTime = 0;        // latest preview playhead (source seconds) — anchor for a new zoom block
 let selectedZoomId = null; // id of the zoom block currently being edited (focus box shown)
@@ -80,6 +85,7 @@ async function start(blob, fileName) {
   const shell = buildShell(root);
 
   buildToolbar(shell.toolbarEl, transforms);
+  buildRail(shell.railEl);
   setStatus(shell.statusEl, meta, transforms);
 
   const preview = createPreview({
@@ -98,6 +104,13 @@ async function start(blob, fileName) {
     getTransforms: () => transforms,
     onSelectionChange: (id) => selectLayer(id),
     onDraft: (rect) => session && session.selectionOverlay.setDraft(rect),
+    // Draw-once: after a shape is committed, return to Select with the new shape selected — the very
+    // next drag moves it. Holding ⇧ or double-click-locking the rail tool keeps drawing instead.
+    onCreate: (id, shiftHeld) => {
+      if (toolLocked || shiftHeld) return;
+      setActiveTool("select");
+      selectLayer(id);
+    },
   });
 
   const timeline = createTimeline({
@@ -269,11 +282,6 @@ const BD_OPTS = [["grad-violet", "Violet"], ["grad-ocean", "Ocean"], ["grad-suns
 
 function buildToolbar(el, transforms) {
   el.innerHTML = `
-    <div class="ss-tb-group" id="ss-tools">
-      ${TOOLS.map(([id, label]) => `<button class="ss-tool ${id === tool ? "on" : ""}" data-tool="${id}">${label}</button>`).join("")}
-      <button class="ss-tool" id="ss-add-image" title="Add an image / logo overlay">+ Image</button>
-    </div>
-    <span class="ss-tb-sep"></span>
     <div class="ss-tb-group">
       <button class="ss-tool" id="ss-crop-btn" title="Crop the frame">Crop</button>
       <button class="ss-tool" id="ss-cut-btn" title="Cut mode: drag on the Video track to remove a section">Cut</button>
@@ -332,18 +340,7 @@ function buildToolbar(el, transforms) {
   });
   document.addEventListener("click", (e) => { if (!e.target.closest("[data-pop],[data-popbody]")) closePopovers(); });
 
-  // ── tools + clip actions ──────────────────────────────────────────────────────────────────────
-  el.querySelector("#ss-tools").addEventListener("click", (e) => {
-    const b = e.target.closest("[data-tool]");
-    if (!b) return;
-    setActiveTool(b.dataset.tool);
-  });
-  el.querySelector("#ss-add-image").addEventListener("click", async () => {
-    if (!session) return;
-    const file = await pickImageFile();
-    if (!file) return;
-    await addImageLayer(file, session.store, session.meta.width);
-  });
+  // ── clip actions (tools live in the left rail now) ────────────────────────────────────────────
   el.querySelector("#ss-crop-btn").addEventListener("click", () => {
     if (!session?.cropOverlay) return;
     if (session.cropOverlay.isActive()) { session.cropOverlay.exit(); markCropBtn(false); }
@@ -413,13 +410,63 @@ function buildToolbar(el, transforms) {
   el.querySelector("#ss-close").addEventListener("click", () => closeEditor());
 }
 
-// Switch the active drawing tool, updating the toolbar (Phase 2) / rail (Phase 3) highlight.
-function setActiveTool(t) {
+// Switch the active drawing tool, updating the rail highlight. `lock` keeps the tool armed after a
+// shape is drawn (double-click / ⇧); otherwise drawing auto-returns to Select (draw-once).
+function setActiveTool(t, lock = false) {
   tool = t;
+  toolLocked = lock && t !== "select";
   session?.annotator.setTool(tool);
   if (session?.cropOverlay?.isActive()) session.cropOverlay.exit();
   selectZoom(null);
-  document.querySelectorAll("[data-tool]").forEach((x) => x.classList.toggle("on", x.dataset.tool === tool));
+  document.querySelectorAll("[data-tool]").forEach((x) => {
+    x.classList.toggle("on", x.dataset.tool === tool);
+    x.classList.toggle("locked", x.dataset.tool === tool && toolLocked);
+  });
+}
+
+// The 52px left icon rail: single click arms a tool (draw-once), double-click locks it for repeated
+// shapes; "image" is a one-shot file-picker action. Tooltips show name + shortcut + lock hint.
+function buildRail(el) {
+  el.innerHTML = RAIL_TOOLS.map(([id, label, key]) => `
+    <button class="ss-rail-btn ${id === tool ? "on" : ""}" data-tool="${id}" aria-label="${label}">
+      ${RAIL_TOOLS.find((t) => t[0] === id)[3]}
+      <span class="ss-rail-tip">${label} <kbd>${key}</kbd>${id !== "select" && id !== "image" ? '<span class="ss-rail-tip-hint">2× click = lock</span>' : ""}</span>
+    </button>`).join("");
+  el.addEventListener("click", async (e) => {
+    const b = e.target.closest("[data-tool]");
+    if (!b) return;
+    if (b.dataset.tool === "image") { await addImageFromPicker(); return; }
+    setActiveTool(b.dataset.tool, false);
+  });
+  el.addEventListener("dblclick", (e) => {
+    const b = e.target.closest("[data-tool]");
+    if (!b || b.dataset.tool === "image" || b.dataset.tool === "select") return;
+    setActiveTool(b.dataset.tool, true);
+  });
+}
+
+async function addImageFromPicker() {
+  if (!session) return;
+  const file = await pickImageFile();
+  if (!file) return;
+  await addImageLayer(file, session.store, session.meta.width);
+}
+
+// ⌘D: duplicate the selected layer, offset slightly, and select the copy.
+function duplicateSelected() {
+  if (!session || !selectedLayerId) return;
+  const l = session.store.get(selectedLayerId);
+  if (!l) return;
+  const OFF = Math.max(12, Math.round((session.meta.width || 900) / 80));
+  let copy = null;
+  if (l.kind === "image" && l.image) {
+    copy = session.store.add(newImageLayer({ ...l.image, x: l.image.x + OFF, y: l.image.y + OFF }));
+  } else if (l.kind === "shape" && l.shape) {
+    copy = session.store.add(newShapeLayer(translate(l.shape, OFF, OFF)));
+  }
+  if (!copy) return;
+  session.store.update(copy.id, { visible: l.visible, opacity: l.opacity, range: l.range ? { ...l.range } : null });
+  selectLayer(copy.id);
 }
 
 // Close the editor tab. The page was opened via chrome.tabs.create, so window.close() isn't reliable;
@@ -844,15 +891,21 @@ function pickImageFile() {
   });
 }
 
-// Spacebar toggles play/pause — unless you're typing in a field (e.g. the text-annotation input).
+// Keyboard shortcuts — all ignored while typing in a field (e.g. the text-annotation input).
+// Space = play/pause · V R A T B = tools · I = add image · esc = Select + deselect · ⌘D = duplicate.
+const TOOL_KEYS = { v: "select", r: "rect", a: "arrow", t: "text", b: "blur" };
 window.addEventListener("keydown", (e) => {
-  if (e.code !== "Space" && e.key !== " ") return;
   const el = document.activeElement;
   const tag = el && el.tagName;
-  if (tag === "INPUT" || tag === "TEXTAREA" || (el && el.isContentEditable)) return;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (el && el.isContentEditable)) return;
   if (!session) return;
-  e.preventDefault();
-  togglePlay();
+  if (e.code === "Space" || e.key === " ") { e.preventDefault(); togglePlay(); return; }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "d") { e.preventDefault(); duplicateSelected(); return; }
+  if (e.metaKey || e.ctrlKey || e.altKey) return; // don't shadow browser shortcuts
+  if (e.key === "Escape") { setActiveTool("select"); selectLayer(null); return; }
+  const k = e.key.toLowerCase();
+  if (k === "i") { addImageFromPicker(); return; }
+  if (TOOL_KEYS[k]) setActiveTool(TOOL_KEYS[k], e.shiftKey);
 });
 
 boot();
