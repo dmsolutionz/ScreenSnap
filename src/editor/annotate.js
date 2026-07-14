@@ -8,10 +8,12 @@ import { newShapeLayer } from "./layers-model.js";
 import { hit, translate } from "./shapes.js";
 import { cropRect, composeDims } from "./transforms.js";
 
-// { canvas, store, getTool, getColor, getTransforms, onSelectionChange }
+// { canvas, store, getTool, getColor, getTransforms, onSelectionChange, onDraft }
 //   onSelectionChange(id|null) -> fired whenever the selected layer changes (select/deselect/tool
 //   switch/delete), so the controller can drive a selection-dependent UI (e.g. resize handles).
-export function createAnnotator({ canvas, store, getTool, getColor, getTransforms, onSelectionChange }) {
+//   onDraft(rect|null) -> the in-progress creation rect (source px) while dragging out a new
+//   rect/blur/arrow, so the controller can show a live bounding box; null when the drag ends.
+export function createAnnotator({ canvas, store, getTool, getColor, getTransforms, onSelectionChange, onDraft }) {
   let tool = (getTool && getTool()) || "select";
   let color = (getColor && getColor()) || "#22c55e";
   let drag = null;       // in-progress create drag: { tool,color,width,x1,y1,x2,y2 }
@@ -23,6 +25,13 @@ export function createAnnotator({ canvas, store, getTool, getColor, getTransform
     if (selectedId === id) return;
     selectedId = id;
     if (typeof onSelectionChange === "function") onSelectionChange(selectedId);
+  }
+
+  // Report the in-progress create-drag as a normalized source-px rect (or clear it with null).
+  function reportDraft() {
+    if (typeof onDraft !== "function") return;
+    if (!drag) { onDraft(null); return; }
+    onDraft({ x: Math.min(drag.x1, drag.x2), y: Math.min(drag.y1, drag.y2), w: Math.abs(drag.x2 - drag.x1), h: Math.abs(drag.y2 - drag.y1) });
   }
   // Latched SOURCE dimensions. The compositor draws shapes in source-pixel space and scales them by
   // outW/srcW, so every shape we store MUST be in source coords. preview.js sizes this canvas to the
@@ -153,6 +162,7 @@ export function createAnnotator({ canvas, store, getTool, getColor, getTransform
     const c = (getColor && getColor()) || color;
     if (t === "text") return placeText(p);
     drag = { tool: t, color: c, width: weight(), x1: p.x, y1: p.y, x2: p.x, y2: p.y };
+    reportDraft();
   }
 
   function move(e) {
@@ -171,6 +181,7 @@ export function createAnnotator({ canvas, store, getTool, getColor, getTransform
     const p = toImg(e);
     drag.x2 = p.x;
     drag.y2 = p.y;
+    reportDraft();
   }
 
   function up() {
@@ -178,6 +189,7 @@ export function createAnnotator({ canvas, store, getTool, getColor, getTransform
     if (!drag) return;
     const d = drag;
     drag = null;
+    reportDraft(); // drag is now null -> clears the draft box
     const x = Math.min(d.x1, d.x2), y = Math.min(d.y1, d.y2), w = Math.abs(d.x2 - d.x1), h = Math.abs(d.y2 - d.y1);
     if (d.tool === "arrow") {
       if (Math.hypot(d.x2 - d.x1, d.y2 - d.y1) < 4) return;

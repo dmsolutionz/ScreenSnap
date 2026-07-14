@@ -8,12 +8,11 @@ import { createLayerStore, newImageLayer } from "./layers-model.js";
 import { buildShell } from "./ui-shell.js";
 import { createPreview } from "./preview.js";
 import { createTimeline } from "./timeline.js";
-import { createLayersPanel } from "./layers-ui.js";
 import { createAnnotator } from "./annotate.js";
 import { runExport, runGifExport } from "./export.js";
 import { createCropOverlay } from "./crop-overlay.js";
 import { createZoomOverlay } from "./zoom-overlay.js";
-import { createImageResizeOverlay } from "./image-resize-overlay.js";
+import { createSelectionOverlay } from "./selection-overlay.js";
 import { decodeGif } from "./gif-decode.js";
 import { computeWaveformPeaks } from "./audio-waveform.js";
 
@@ -98,6 +97,7 @@ async function start(blob, fileName) {
     getColor: () => color,
     getTransforms: () => transforms,
     onSelectionChange: (id) => selectLayer(id),
+    onDraft: (rect) => session && session.selectionOverlay.setDraft(rect),
   });
 
   const timeline = createTimeline({
@@ -150,8 +150,8 @@ async function start(blob, fileName) {
       preview.redraw();
     },
     getAudioEnabled: () => transforms.speed === 1,
-    // Layer-range lane (one row per overlay layer). Both this and the sidebar write layer.range via the
-    // store, so preview + timeline (which subscribes to the store) stay in sync automatically.
+    // Overlay layer tracks (one row per layer): the range block, plus the header controls the Layers
+    // sidebar used to own (eye / opacity / reorder = z-order / delete).
     store,
     getSelectedLayer: () => selectedLayerId,
     onLayerSelect: (id) => selectLayer(id),
@@ -159,7 +159,18 @@ async function start(blob, fileName) {
       store.update(id, { range: { inSec: r.tIn, outSec: r.tOut } });
       setStatus(shell.statusEl, meta, transforms);
     },
-    // Imported-audio lane.
+    onLayerVisible: (id, visible) => store.update(id, { visible }),
+    onLayerOpacity: (id, opacity) => store.update(id, { opacity }),
+    onLayerReorder: (id, beforeId) => {
+      // Drop `id` at the row currently occupied by `beforeId` (both are store indices in draw order).
+      const from = store.layers.findIndex((l) => l.id === id);
+      const to = store.layers.findIndex((l) => l.id === beforeId);
+      if (from === -1 || to === -1) return;
+      store.move(id, to);
+      timeline.refresh();
+    },
+    onLayerDelete: (id) => { store.remove(id); if (selectedLayerId === id) selectLayer(null); timeline.refresh(); },
+    // Imported-audio track.
     getExtraAudio: () => transforms.extraAudio,
     onExtraAudioChange: (r, mode) => changeExtraAudio(r, mode),
     onExtraMute: () => {
@@ -175,6 +186,7 @@ async function start(blob, fileName) {
       setStatus(shell.statusEl, meta, transforms);
       timeline.refresh();
     },
+    onExtraRemove: () => removeExtraAudio(),
   });
 
   // Waveform decode is fire-and-forget — a long recording can take real time to fully decode, and the
@@ -183,18 +195,6 @@ async function start(blob, fileName) {
   computeWaveformPeaks({ input, durationSec })
     .then((peaks) => { audioPeaks = peaks; timeline.refresh(); })
     .catch((err) => console.warn("[screensnap] waveform decode failed:", err));
-
-  const layersPanel = createLayersPanel({
-    el: shell.sidebarEl,
-    store,
-    onAddImage: async () => {
-      const file = await pickImageFile();
-      if (!file) return;
-      await addImageLayer(file, store, width);
-    },
-    getCurrentTime: () => lastTime,
-    getDurationSec: () => durationSec,
-  });
 
   // Crop overlay: a "Crop" toolbar toggle enters it; Apply sets transforms.crop (source px) and the
   // preview/export recompute from there. The annotator's canvas is covered while it's active.
@@ -209,6 +209,7 @@ async function start(blob, fileName) {
       setStatus(shell.statusEl, meta, transforms);
       preview.redraw();
       zoomOverlay.refresh(); // crop changes the content rect — re-place the focus box if shown
+      selectionOverlay.refresh();
       markCropBtn(false);
     },
     onExit: () => markCropBtn(false),
@@ -234,10 +235,11 @@ async function start(blob, fileName) {
     },
   });
 
-  // Image resize overlay: shown over the stage while an image/gif layer is selected (via the
-  // "select" tool). Drag the corner handle to resize (aspect-ratio locked); the box is
-  // pointer-events:none so the existing select-tool move-drag on the image body keeps working.
-  const resizeOverlay = createImageResizeOverlay({
+  // Selection / resize overlay: draws a dashed box while you drag out a new rect/blur/arrow, and a box
+  // with 8 resize handles around the selected layer (image OR any shape). Box bodies are
+  // pointer-events:none so annotate.js keeps owning click-to-select and drag-to-move; only the handles
+  // resize. It writes size changes straight to the store.
+  const selectionOverlay = createSelectionOverlay({
     stageEl: shell.stageCanvas.parentElement,
     canvas: shell.stageCanvas,
     store,
@@ -245,18 +247,13 @@ async function start(blob, fileName) {
     srcW: width,
     srcH: height,
     getLayer: () => (selectedLayerId ? store.get(selectedLayerId) : null),
-    onChange: ({ x, y, w, h }) => {
-      const cur = store.get(selectedLayerId);
-      if (!cur || !cur.image) return;
-      store.update(selectedLayerId, { image: { ...cur.image, x, y, w, h } });
-    },
   });
 
   // Note: preview.js already subscribes to the store and re-composites on every layer change
   // (add/remove/move/opacity/visibility), so annotations show live without a second subscription
   // here — adding one would double-composite each edit.
 
-  session = { input, meta, transforms, store, preview, timeline, annotator, layersPanel, cropOverlay, zoomOverlay, resizeOverlay, shell, fileName, blob, extraAudioInput: null, extraAudioBlob: null };
+  session = { input, meta, transforms, store, preview, timeline, annotator, cropOverlay, zoomOverlay, selectionOverlay, shell, fileName, blob, extraAudioInput: null, extraAudioBlob: null };
 
   // Prominent transport: a play/pause button + time readout, plus a click-to-play overlay centred on
   // the stage (hidden while playing and while a drawing tool is active so it never blocks annotation).
@@ -271,6 +268,7 @@ function buildToolbar(el, transforms) {
   el.innerHTML = `
     <div class="ss-tb-group" id="ss-tools">
       ${TOOLS.map(([id, label]) => `<button class="ss-tool ${id === tool ? "on" : ""}" data-tool="${id}">${label}</button>`).join("")}
+      <button class="ss-tool" id="ss-add-image" title="Add an image / logo overlay">+ Image</button>
     </div>
     <div class="ss-tb-group" id="ss-colors">
       ${COLORS.map((c) => `<button class="ss-sw ${c === color ? "on" : ""}" data-color="${c}" style="background:${c}"></button>`).join("")}
@@ -339,6 +337,13 @@ function buildToolbar(el, transforms) {
     el.querySelectorAll("[data-tool]").forEach((x) => x.classList.toggle("on", x.dataset.tool === tool));
   });
 
+  el.querySelector("#ss-add-image").addEventListener("click", async () => {
+    if (!session) return;
+    const file = await pickImageFile();
+    if (!file) return;
+    await addImageLayer(file, session.store, session.meta.width);
+  });
+
   el.querySelector("#ss-crop-btn").addEventListener("click", () => {
     if (!session?.cropOverlay) return;
     if (session.cropOverlay.isActive()) { session.cropOverlay.exit(); markCropBtn(false); }
@@ -360,6 +365,7 @@ function buildToolbar(el, transforms) {
     setStatus(session.shell.statusEl, session.meta, transforms);
     session.preview.redraw();
     session.zoomOverlay.refresh(); // canvas size changed — re-place the focus box if shown
+    session.selectionOverlay.refresh();
   });
   el.querySelector("#ss-bd-bg").addEventListener("change", (e) => {
     if (!session || !transforms.backdrop) return;
@@ -371,6 +377,7 @@ function buildToolbar(el, transforms) {
     transforms.backdrop.pad = Number(e.target.value) || 0;
     session.preview.redraw();
     session.zoomOverlay.refresh();
+    session.selectionOverlay.refresh();
   });
   el.querySelector("#ss-colors").addEventListener("click", (e) => {
     const b = e.target.closest("[data-color]");
@@ -387,6 +394,7 @@ function buildToolbar(el, transforms) {
     // so re-composite the cached frame at the new output dims immediately.
     session?.preview.redraw();
     session?.zoomOverlay?.refresh();
+    session?.selectionOverlay?.refresh();
   });
   el.querySelector("#ss-speed").addEventListener("change", (e) => {
     transforms.speed = Number(e.target.value) || 1;
@@ -437,8 +445,22 @@ function buildTransport(el, durationSec) {
   if (!el) return;
   el.innerHTML = `
     <button class="ss-pp" id="ss-pp" type="button" aria-label="Play">${PLAY_SVG}</button>
-    <span class="ss-time" id="ss-time">00:00 / ${fmtTime(durationSec)}</span>`;
+    <span class="ss-time" id="ss-time">00:00 / ${fmtTime(durationSec)}</span>
+    <div class="ss-tb-spacer"></div>
+    <div class="ss-tlzoom">
+      <span class="ss-tlzoom-label">tl zoom</span>
+      <button class="ss-tlzoom-btn" id="ss-tlz-out" title="Zoom out" type="button">−</button>
+      <input type="range" id="ss-tlz-slider" class="ss-tlzoom-slider" min="0" max="1" step="0.01" value="0" title="Timeline zoom" />
+      <button class="ss-tlzoom-btn" id="ss-tlz-in" title="Zoom in" type="button">+</button>
+      <button class="ss-tlzoom-fit" id="ss-tlz-fit" title="Fit the whole clip" type="button">Fit</button>
+    </div>`;
   el.querySelector("#ss-pp").addEventListener("click", () => togglePlay());
+  const slider = el.querySelector("#ss-tlz-slider");
+  const syncSlider = () => { if (session?.timeline) slider.value = String(session.timeline.getZoomNorm()); };
+  el.querySelector("#ss-tlz-out").addEventListener("click", () => { session?.timeline.zoomBy(1 / 1.4); syncSlider(); });
+  el.querySelector("#ss-tlz-in").addEventListener("click", () => { session?.timeline.zoomBy(1.4); syncSlider(); });
+  el.querySelector("#ss-tlz-fit").addEventListener("click", () => { session?.timeline.fit(); syncSlider(); });
+  slider.addEventListener("input", () => session?.timeline.setZoomNorm(Number(slider.value)));
 }
 
 // Reflect play state across the transport button + the centre stage overlay.
@@ -621,9 +643,7 @@ function selectLayer(id) {
   if (!session) return;
   session.annotator.setSelectedId(selectedLayerId); // keep canvas Delete-key / hit-test in sync
   session.timeline.refresh();                        // update the layer lane's selected-block highlight
-  const l = selectedLayerId ? session.store.get(selectedLayerId) : null;
-  if (l && l.kind === "image") session.resizeOverlay.show();
-  else session.resizeOverlay.hide();
+  session.selectionOverlay.refresh();                // show/hide the resize box for the new selection
 }
 
 // Translate a drag on the imported-audio block (reported in OUTPUT seconds) into edits on
