@@ -38,12 +38,21 @@ Built because being nagged to log in just to save a screenshot is miserable.
 - **System / tab audio** and/or **microphone** (mixed), **pause / resume**, and a red **REC** badge
 
 **Video editor** (opens after a recording; WebCodecs, no ffmpeg/WASM)
+- A **multi-track timeline** — pinned ruler + video track, then a track per overlay, plus audio —
+  with drag-to-move / drag-edge-to-resize clips, **snapping** (playhead, clip edges, whole seconds),
+  timeline zoom, and a constant-height panel (adding tracks never reflows the stage)
 - **Trim** the ends and **cut** mistakes out of the middle (multi-segment), **resolution** and **speed**
 - **Crop** free-form or to a ratio (16:9 / 1:1 / 9:16 / 4:3); **Zoom** with draggable, resizable focus
   blocks that ease in/out; **Beautify backdrop** (gradient/solid + rounded corners + shadow)
 - **Layers** — annotations (text, arrows, shapes, blur), **image/logo** overlays, and **animated GIF**
-  overlays, composited live (WYSIWYG preview = export)
-- **Export** a native **MP4** or an animated **GIF** — or download the original clip untouched
+  overlays — all **resizable** on the stage (8-handle selection box) and **time-scoped** on the
+  timeline (e.g. an arrow that appears for 3 seconds), composited live (WYSIWYG preview = export)
+- **Audio editing** — waveform view, drag to **mute regions** (without cutting the video), volume /
+  mute, and **import a voiceover or music track** (movable, trimmable, mixed into the export)
+- A left **tool rail** with keyboard shortcuts (V R A T B I), draw-once tools that return to Select,
+  ⌘D duplicate, frame-step keys, and prev/next-edit transport buttons
+- **Export** a native **MP4** (bitrate scales with resolution, so 720p/1080p genuinely shrink files)
+  or an animated **GIF** — or download the original clip untouched
 
 ## MP4, natively — no transcoding
 
