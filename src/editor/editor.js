@@ -34,6 +34,7 @@ const empty = document.getElementById("empty");
 const openBtn = document.getElementById("open-btn");
 
 let session = null; // { input, meta, transforms, store, preview, timeline, annotator, cropOverlay, zoomOverlay, selectionOverlay, shell, fileName, blob, extraAudioInput, extraAudioBlob }
+let stageResizeObserver = null; // re-places the stage overlays when the stage's box changes
 let tool = "select";
 let toolLocked = false; // double-click a rail tool to keep drawing with it (draw-once otherwise)
 let color = "#22c55e";
@@ -277,6 +278,19 @@ async function start(blob, fileName) {
   // here — adding one would double-composite each edit.
 
   session = { input, meta, transforms, store, preview, timeline, annotator, cropOverlay, zoomOverlay, selectionOverlay, shell, fileName, blob, extraAudioInput: null, extraAudioBlob: null };
+
+  // The stage overlays position from the canvas rect, but the stage reflows when the chrome around it
+  // changes size (inspector row appearing on selection, window resize) — re-place them when that happens.
+  if (stageResizeObserver) stageResizeObserver.disconnect();
+  stageResizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => {
+    if (!session) return;
+    session.zoomOverlay.refresh();
+    session.selectionOverlay.refresh();
+  }) : null;
+  if (stageResizeObserver) {
+    stageResizeObserver.observe(shell.stageCanvas.parentElement);
+    stageResizeObserver.observe(shell.stageCanvas);
+  }
 
   // Prominent transport: a play/pause button + time readout, plus a click-to-play overlay centred on
   // the stage (hidden while playing and while a drawing tool is active so it never blocks annotation).
@@ -707,8 +721,8 @@ function selectLayer(id) {
   if (!session) return;
   session.annotator.setSelectedId(selectedLayerId); // keep canvas Delete-key / hit-test in sync
   session.timeline.refresh();                        // update the layer lane's selected-block highlight
-  session.selectionOverlay.refresh();                // show/hide the resize box for the new selection
-  updateInspector();                                 // show/hide the contextual inspector row
+  updateInspector();                                 // show/hide the inspector row FIRST — it reflows the stage…
+  session.selectionOverlay.refresh();                // …then place the resize box from the settled canvas rect
 }
 
 // The contextual inspector row (under the toolbar) — visible only while a layer is selected. Shows the
