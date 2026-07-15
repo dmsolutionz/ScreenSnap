@@ -54,4 +54,27 @@ export function distToSeg(p, a, b) {
   let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2; t = Math.max(0, Math.min(1, t));
   return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
 }
+// EDITOR-ONLY (no counterpart in editor-overlay.js): remap a shape from its old bounding box `ob` into
+// a new one `nb` (both {x,y,w,h} in source px) — the inverse of bbox(), used by the resize overlay.
+// rect/blur set their box directly; arrow/pencil endpoints remap by the affine old→new transform; text
+// scales its font size by whichever axis changed more and repositions its top-left.
+export function setBounds(s, nb, ob) {
+  const c = JSON.parse(JSON.stringify(s));
+  if (c.type === "rect" || c.type === "blur") { c.x = nb.x; c.y = nb.y; c.w = nb.w; c.h = nb.h; return c; }
+  if (c.type === "text") {
+    const rw = ob.w > 0.0001 ? nb.w / ob.w : 1;
+    const rh = ob.h > 0.0001 ? nb.h / ob.h : 1;
+    const ratio = Math.abs(rw - 1) > Math.abs(rh - 1) ? rw : rh;
+    c.size = Math.max(6, (c.size || 12) * ratio);
+    c.x = nb.x; c.y = nb.y;
+    return c;
+  }
+  const remap = (x, y) => ({
+    x: ob.w > 0.0001 ? nb.x + (x - ob.x) * (nb.w / ob.w) : nb.x + (x - ob.x),
+    y: ob.h > 0.0001 ? nb.y + (y - ob.y) * (nb.h / ob.h) : nb.y + (y - ob.y),
+  });
+  if (c.x1 != null) { const a = remap(c.x1, c.y1), b = remap(c.x2, c.y2); c.x1 = a.x; c.y1 = a.y; c.x2 = b.x; c.y2 = b.y; return c; }
+  if (c.points) { c.points = c.points.map((p) => remap(p.x, p.y)); return c; }
+  return c;
+}
 export function escapeHtml(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }

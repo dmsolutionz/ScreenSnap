@@ -16,8 +16,9 @@ These are hard rules for anyone — human or AI — working in this project.
   the pure-JS, no-WASM media library that powers the video editor's pipeline. See `src/vendor/ATTRIBUTION.md` for the
   pinned version + SHA-256.
 - **No ffmpeg / no WASM.** Recordings are saved as native MP4 via `MediaRecorder` (`video/mp4`) with no transcoding.
-  The video editor re-encodes via the browser-native **WebCodecs** API (still no ffmpeg, no WASM) and only ever
-  outputs MP4. If a browser lacks native MP4 capture it saves `.webm` rather than lose the recording.
+  The video editor re-encodes via the browser-native **WebCodecs** API (still no ffmpeg, no WASM); its video
+  output is always MP4, plus a from-scratch pure-JS animated-GIF export (`src/editor/gif-*.js`). If a browser
+  lacks native MP4 capture it saves `.webm` rather than lose the recording.
 
 ## Product principles (do not regress)
 - Completely free and unrestricted: no paywalls, no watermarks, no forced sign-ups, no upsell prompts.
@@ -59,5 +60,8 @@ re-injected by a `tabs.onUpdated` listener when the tab navigates; surviving a j
 starts (declining → same-site-only; shortcuts/toolbar still stop everywhere). Mic & camera
 permission is granted via a small dedicated window (`src/permission/`), since neither the popup nor the offscreen
 document can prompt. When a recording finishes it is stashed in IndexedDB and the **video editor** (`src/editor/`) opens in a
-tab — a WebCodecs-based trim / resolution / speed / overlay-layer editor that exports MP4 (or Downloads the clip
-as-is). All surfaces reflect state live via `STATE_CHANGED`.
+tab — a WebCodecs-based **multi-track timeline** editor (constant-height frozen-pane track grid: pinned ruler + video
+track, then a track per overlay layer, audio with mute regions, and an optional imported voiceover/music track mixed
+in via `OfflineAudioContext` at export) with trim / cuts / crop / zoom blocks / speed / resolution, resizable +
+time-scoped overlay layers, a left tool rail with draw-once tools, snapping, and MP4 / GIF export (or Download the
+clip as-is). All surfaces reflect state live via `STATE_CHANGED` (the editor itself runs standalone off IndexedDB).

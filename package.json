@@ -1,9 +1,9 @@
 {
   "name": "screensnap",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "private": true,
   "type": "module",
-  "description": "Free, local, watermark-free screenshot + screen recording Chrome extension (MV3). Records native MP4 entirely on-device.",
+  "description": "Free, local, watermark-free screenshot + screen recording Chrome extension (MV3). Records native MP4 entirely on-device, with a multi-track timeline video editor (trim, cut, zoom, audio, overlays).",
   "license": "GPL-3.0-or-later",
   "scripts": {
     "make:icons": "node scripts/make-icons.mjs",

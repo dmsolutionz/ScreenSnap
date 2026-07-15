@@ -8,14 +8,33 @@ import { newShapeLayer } from "./layers-model.js";
 import { hit, translate } from "./shapes.js";
 import { cropRect, composeDims } from "./transforms.js";
 
-// { canvas, store, getTool, getColor, getTransforms }
-export function createAnnotator({ canvas, store, getTool, getColor, getTransforms }) {
+// { canvas, store, getTool, getColor, getTransforms, onSelectionChange, onDraft }
+//   onSelectionChange(id|null) -> fired whenever the selected layer changes (select/deselect/tool
+//   switch/delete), so the controller can drive a selection-dependent UI (e.g. resize handles).
+//   onDraft(rect|null) -> the in-progress creation rect (source px) while dragging out a new
+//   rect/blur/arrow, so the controller can show a live bounding box; null when the drag ends.
+//   onCreate(id, shiftHeld) -> fired after a new shape is committed, so the controller can auto-return
+//   to Select and select it (unless the tool is locked / shift is held to keep drawing).
+export function createAnnotator({ canvas, store, getTool, getColor, getTransforms, onSelectionChange, onDraft, onCreate }) {
   let tool = (getTool && getTool()) || "select";
   let color = (getColor && getColor()) || "#22c55e";
   let drag = null;       // in-progress create drag: { tool,color,width,x1,y1,x2,y2 }
   let moving = null;     // in-progress select drag: { id, start:{x,y}, orig:shape }
   let selectedId = null;
   let editingText = false;
+
+  function setSelected(id) {
+    if (selectedId === id) return;
+    selectedId = id;
+    if (typeof onSelectionChange === "function") onSelectionChange(selectedId);
+  }
+
+  // Report the in-progress create-drag as a normalized source-px rect (or clear it with null).
+  function reportDraft() {
+    if (typeof onDraft !== "function") return;
+    if (!drag) { onDraft(null); return; }
+    onDraft({ x: Math.min(drag.x1, drag.x2), y: Math.min(drag.y1, drag.y2), w: Math.abs(drag.x2 - drag.x1), h: Math.abs(drag.y2 - drag.y1) });
+  }
   // Latched SOURCE dimensions. The compositor draws shapes in source-pixel space and scales them by
   // outW/srcW, so every shape we store MUST be in source coords. preview.js sizes this canvas to the
   // *output* (outputDims w/ outScale): at "Original" (outScale:null) canvas.width === srcW, but at
@@ -88,7 +107,7 @@ export function createAnnotator({ canvas, store, getTool, getColor, getTransform
 
   function placeText(p) {
     editingText = true;
-    selectedId = null;
+    setSelected(null);
     const c = (getColor && getColor()) || color;
     // size is stored in SOURCE px (compositor scales it by outW/srcW), so base it on source width.
     const size = Math.max(18, srcWidth() / 30);
@@ -117,7 +136,10 @@ export function createAnnotator({ canvas, store, getTool, getColor, getTransform
       const text = input.value.trim();
       input.remove();
       editingText = false;
-      if (text) store.add(newShapeLayer({ type: "text", color: c, size, x: p.x, y: p.y, text }));
+      if (text) {
+        const added = store.add(newShapeLayer({ type: "text", color: c, size, x: p.x, y: p.y, text }));
+        if (added && typeof onCreate === "function") onCreate(added.id, false);
+      }
     };
     input.addEventListener("blur", commit);
     input.addEventListener("keydown", (ev) => {
@@ -135,16 +157,17 @@ export function createAnnotator({ canvas, store, getTool, getColor, getTransform
     if (t === "select") {
       canvas.setPointerCapture?.(e.pointerId);
       const l = topLayerAt(p);
-      selectedId = l ? l.id : null;
+      setSelected(l ? l.id : null);
       if (l && l.kind === "image") moving = { id: l.id, kind: "image", start: p, orig: { x: l.image.x, y: l.image.y } };
       else if (l) moving = { id: l.id, kind: "shape", start: p, orig: JSON.parse(JSON.stringify(l.shape)) };
       return;
     }
     canvas.setPointerCapture?.(e.pointerId);
-    selectedId = null;
+    setSelected(null);
     const c = (getColor && getColor()) || color;
     if (t === "text") return placeText(p);
     drag = { tool: t, color: c, width: weight(), x1: p.x, y1: p.y, x2: p.x, y2: p.y };
+    reportDraft();
   }
 
   function move(e) {
@@ -163,22 +186,25 @@ export function createAnnotator({ canvas, store, getTool, getColor, getTransform
     const p = toImg(e);
     drag.x2 = p.x;
     drag.y2 = p.y;
+    reportDraft();
   }
 
-  function up() {
+  function up(e) {
     if (moving) { moving = null; return; }
     if (!drag) return;
     const d = drag;
     drag = null;
+    reportDraft(); // drag is now null -> clears the draft box
+    const shift = !!(e && e.shiftKey);
     const x = Math.min(d.x1, d.x2), y = Math.min(d.y1, d.y2), w = Math.abs(d.x2 - d.x1), h = Math.abs(d.y2 - d.y1);
+    let added = null;
     if (d.tool === "arrow") {
       if (Math.hypot(d.x2 - d.x1, d.y2 - d.y1) < 4) return;
-      store.add(newShapeLayer({ type: "arrow", color: d.color, width: d.width, x1: d.x1, y1: d.y1, x2: d.x2, y2: d.y2 }));
-      return;
-    }
-    if (w < 4 || h < 4) return;
-    if (d.tool === "blur") store.add(newShapeLayer({ type: "blur", x, y, w, h }));
-    else store.add(newShapeLayer({ type: d.tool, color: d.color, width: d.width, x, y, w, h }));
+      added = store.add(newShapeLayer({ type: "arrow", color: d.color, width: d.width, x1: d.x1, y1: d.y1, x2: d.x2, y2: d.y2 }));
+    } else if (w < 4 || h < 4) return;
+    else if (d.tool === "blur") added = store.add(newShapeLayer({ type: "blur", x, y, w, h }));
+    else added = store.add(newShapeLayer({ type: d.tool, color: d.color, width: d.width, x, y, w, h }));
+    if (added && typeof onCreate === "function") onCreate(added.id, shift); // drives draw-once → Select
   }
 
   function onKey(e) {
@@ -186,7 +212,7 @@ export function createAnnotator({ canvas, store, getTool, getColor, getTransform
     if ((e.key === "Delete" || e.key === "Backspace") && selectedId != null) {
       e.preventDefault();
       store.remove(selectedId);
-      selectedId = null;
+      setSelected(null);
     }
   }
 
@@ -196,7 +222,10 @@ export function createAnnotator({ canvas, store, getTool, getColor, getTransform
   window.addEventListener("keydown", onKey, true);
 
   return {
-    setTool(t) { tool = t; if (t !== "select") selectedId = null; },
+    // Push a selection in from outside (e.g. a timeline-clip click), so Delete-key handling and the
+    // resize overlay stay correct for selections that didn't originate from a canvas click.
+    setSelectedId(id) { setSelected(id || null); },
+    setTool(t) { tool = t; if (t !== "select") setSelected(null); },
     setColor(c) {
       color = c;
       // Recolour the live selection so the colour swatch acts on the picked shape too.
