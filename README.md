@@ -16,6 +16,8 @@ Built because being nagged to log in just to save a screenshot is miserable.
 - **No dark patterns** — no forced new tab after recording, no mandatory cloud hosting. Capture →
   it lands in your Downloads. Done.
 
+![A walk through the video editor: trim, annotate, zoom, audio editing, backdrop, and export](docs/media/screensnap-demo.gif)
+
 ## Features
 
 **Screenshots** (PNG)
