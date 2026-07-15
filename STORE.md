@@ -5,6 +5,12 @@ Plain text only: no markdown, no emojis, no em dashes.
 
 ---
 
+v1.3 has been released with the following new features:
+• A proper multi-track timeline in the video editor. The video, every overlay, and the audio each get their own track, with drag to move, drag edges to resize, and snapping.
+• Annotations, images, and GIFs can now be resized right on the video, and shown for just part of the clip.
+• Audio editing on the timeline. Mute regions without cutting the picture, adjust the volume, or mix in a voiceover or music track from a file.
+• New 720p and 1080p export presets that genuinely shrink file sizes.
+
 Screen recording shouldn't cost money, put a watermark on your video, or make you sign up. screensnap records your screen and takes screenshots for free. There's no time limit, no account, and no cloud. Everything stays on your machine, and all of it is open source. Feature requests are welcome on GitHub.
 
 RECORD ANYTHING, FREE AND UNLIMITED
