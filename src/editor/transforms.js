@@ -156,6 +156,21 @@ export function outTimestamp(srcSec, t) {
   return acc / sp;
 }
 
+// Inverse of outTimestamp: map an OUTPUT time back to the SOURCE time that plays there. Walks the
+// kept segments accumulating (speed-multiplied) output time; an outSec at/past the end of the output
+// maps to the last kept segment's end. Used to place output-anchored objects (the imported audio
+// track) on the timeline's source-seconds ruler.
+export function srcTimestamp(outSec, t) {
+  const segs = segmentsOf(t);
+  let rem = Math.max(0, outSec) * safeSpeed(t);
+  for (const s of segs) {
+    const len = s.out - s.in;
+    if (rem <= len) return s.in + rem;
+    rem -= len;
+  }
+  return segs[segs.length - 1].out;
+}
+
 // Fall back to a 30fps frame duration when the source sample reports no duration.
 export function outFrameDuration(srcDurSec, t) {
   return (srcDurSec || 1 / 30) / safeSpeed(t);

@@ -12,6 +12,8 @@
 // CHILDREN inside the persistent containers and re-lays-out positions. setPlayhead() only moves the
 // playhead. Pure DOM, no canvas (waveform is one SVG path).
 
+import { escapeHtml } from "./shapes.js";
+
 const HEADER_W = 172; // px, the fixed track-header column
 const ZOOM_STEP = 1.4;
 const MAX_ZOOM_MULT = 10; // furthest zoom-in relative to Fit
@@ -101,8 +103,11 @@ function wireBlockDrag(container, opts) {
 //   getAudioPeaks, getAudioCuts, onAddAudioCut, onRemoveAudioCut, onAudioMuteChange, getAudioEnabled,
 //   store, getSelectedLayer, onLayerSelect, onLayerRangeChange,
 //   onLayerVisible, onLayerOpacity, onLayerReorder, onLayerDelete,
-//   getExtraAudio, onExtraAudioChange, onExtraMute, onExtraVolume, onExtraRemove
+//   getExtraAudio, getExtraBlock, onExtraAudioChange, onExtraMute, onExtraVolume, onExtraRemove,
+//   onScaleChange
 // }
+//   getExtraBlock() -> the imported track's {tIn,tOut} in SOURCE seconds (the controller converts from
+//   its output-time offset), or null. onScaleChange() fires when tl-zoom changes (slider stays synced).
 export function createTimeline(opts) {
   const {
     el, durationSec, onTrimChange, onSeek, onAddCut, onRemoveCut, getCuts,
@@ -110,7 +115,8 @@ export function createTimeline(opts) {
     getAudioPeaks, getAudioCuts, onAddAudioCut, onRemoveAudioCut, onAudioMuteChange, getAudioEnabled,
     store, getSelectedLayer, onLayerSelect, onLayerRangeChange,
     onLayerVisible, onLayerOpacity, onLayerReorder, onLayerDelete,
-    getExtraAudio, onExtraAudioChange, onExtraMute, onExtraVolume, onExtraRemove,
+    getExtraAudio, getExtraBlock, onExtraAudioChange, onExtraMute, onExtraVolume, onExtraRemove,
+    onScaleChange,
   } = opts;
 
   const dur = Math.max(0.001, durationSec || 0);
@@ -141,7 +147,7 @@ export function createTimeline(opts) {
 
   // ── skeleton (rebuilt only on layer-set change) ─────────────────────────────────────────────────
   let inEl, outEl, trimEl, cutsEl, vtime, rtime, rlabels, lanesEl, playEl;
-  let ztime, atime, awpath, amutesEl;
+  let ztime, atime, awsvg, awpath, amutesEl;
   const layerRows = new Map(); // id -> { time, block }
   let extraRow = null;         // { time }
   let lastSig = null;
@@ -191,6 +197,7 @@ export function createTimeline(opts) {
     vrow.appendChild(vtime);
     panel.appendChild(vrow);
     wireVideoTrack();
+    vtime.classList.toggle("ss-tl-cutmode", cutMode); // survive skeleton rebuilds mid cut-mode
 
     // scrolling lanes
     lanesEl = doc.createElement("div");
@@ -218,9 +225,9 @@ export function createTimeline(opts) {
     const arow = doc.createElement("div"); arow.className = "ss-tl-trk ss-tl-trk-audio";
     arow.appendChild(header("", `<span class="ss-tl-ticon">🔊</span><span class="ss-tl-tname">Audio</span>`));
     atime = timeArea("ss-tl-atime");
-    const svg = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("class", "ss-tl-await"); svg.setAttribute("viewBox", "0 0 100 30"); svg.setAttribute("preserveAspectRatio", "none");
-    awpath = doc.createElementNS("http://www.w3.org/2000/svg", "path"); svg.appendChild(awpath); atime.appendChild(svg);
+    awsvg = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
+    awsvg.setAttribute("class", "ss-tl-await"); awsvg.setAttribute("viewBox", "0 0 100 30"); awsvg.setAttribute("preserveAspectRatio", "none");
+    awpath = doc.createElementNS("http://www.w3.org/2000/svg", "path"); awsvg.appendChild(awpath); atime.appendChild(awsvg);
     amutesEl = doc.createElement("div"); amutesEl.className = "ss-tl-amutes"; atime.appendChild(amutesEl);
     arow.appendChild(atime); lanesEl.appendChild(arow);
     wireBlockDrag(atime, {
@@ -272,8 +279,8 @@ export function createTimeline(opts) {
     for (const b of (getZoomBlocks && getZoomBlocks()) || []) if (!(kind === "zoom" && String(b.id) === String(id))) c.push(b.tIn, b.tOut);
     if (store) for (const l of store.layers) if (l.range && !(kind === "layer" && String(l.id) === String(id))) c.push(l.range.inSec, l.range.outSec);
     ((getAudioCuts && getAudioCuts()) || []).forEach((m, i) => { if (!(kind === "mute" && String(i) === String(id))) c.push(m.in, m.out); });
-    const ea = getExtraAudio && getExtraAudio();
-    if (ea && kind !== "extra") { const len = Math.max(0, (ea.trimOut || 0) - (ea.trimIn || 0)); c.push(ea.offsetSec || 0, (ea.offsetSec || 0) + len); }
+    const eb = getExtraBlock && getExtraBlock();
+    if (eb && kind !== "extra") c.push(eb.tIn, eb.tOut);
     return c;
   }
 
@@ -341,7 +348,7 @@ export function createTimeline(opts) {
     const h = header("", "");
     h.innerHTML =
       `<span class="ss-tl-ticon">🎙</span>` +
-      `<span class="ss-tl-tname ss-tl-exname-h">${ea.name || "audio"}</span>` +
+      `<span class="ss-tl-tname ss-tl-exname-h">${escapeHtml(ea.name || "audio")}</span>` +
       `<button class="ss-tl-eye ss-tl-exmute" data-exmute title="Mute track">${ea.muted ? "🔇" : "🔊"}</button>` +
       `<input class="ss-tl-op ss-tl-exvol" type="range" min="0" max="1" step="0.05" value="${typeof ea.volume === "number" ? ea.volume : 1}" title="Volume" />` +
       `<button class="ss-tl-del" data-exdel title="Remove track">×</button>`;
@@ -354,9 +361,8 @@ export function createTimeline(opts) {
     wireBlockDrag(t, {
       secAt: (x) => secAtIn(x, t), maxSec: dur, minLen: Math.min(0.1, dur), blockSelector: ".ss-tl-exblock",
       getBlocks: () => {
-        const e2 = getExtraAudio && getExtraAudio(); if (!e2) return [];
-        const len = Math.max(0, (e2.trimOut || 0) - (e2.trimIn || 0));
-        return [{ id: "ex", tIn: e2.offsetSec || 0, tOut: (e2.offsetSec || 0) + len }];
+        const eb = getExtraBlock && getExtraBlock();
+        return eb ? [{ id: "ex", tIn: eb.tIn, tOut: eb.tOut }] : [];
       },
       onSelect: (id) => { selectedExtra = !!id; renderExtra(); },
       onChange: (_id, r, mode) => onExtraAudioChange && onExtraAudioChange({ tIn: r.tIn, tOut: r.tOut }, mode),
@@ -495,19 +501,24 @@ export function createTimeline(opts) {
   function renderAudio() {
     const data = getAudioPeaks && getAudioPeaks();
     awpath.setAttribute("d", data ? waveformPath(data.peaks, data.buckets) : "");
+    // The waveform spans the WHOLE clip on the shared scale (stretched by tl-zoom, shifted by pan);
+    // the lane's overflow:hidden clips it, keeping peaks aligned with the ruler and mute bands.
+    awsvg.style.left = `${xOf(0)}px`;
+    awsvg.style.width = `${dur * pps()}px`;
     const enabled = !getAudioEnabled || getAudioEnabled() !== false;
     atime.classList.toggle("ss-tl-adisabled", !enabled || !data);
     renderMutes();
   }
   function renderExtra() {
     if (!extraRow) return;
-    const ea = getExtraAudio && getExtraAudio(); if (!ea) return;
+    const ea = getExtraAudio && getExtraAudio();
+    const eb = getExtraBlock && getExtraBlock();
+    if (!ea || !eb) return;
     extraRow.time.textContent = "";
-    const len = Math.max(0, (ea.trimOut || 0) - (ea.trimIn || 0));
-    const lo = clamp(ea.offsetSec || 0, 0, dur), hi = clamp((ea.offsetSec || 0) + len, lo, dur);
+    const lo = clamp(eb.tIn, 0, dur), hi = clamp(eb.tOut, lo, dur);
     const b = doc.createElement("div"); b.className = "ss-tl-exblock" + (selectedExtra ? " on" : ""); b.dataset.id = "ex";
-    posBlock(b, lo, hi); b.title = `${ea.name || "audio"} · ${fmt(len)}`;
-    b.innerHTML = `<span class="ss-tl-edge ss-tl-edge-l" data-edge="in"></span><span class="ss-tl-exname">${ea.name || "audio"}</span><span class="ss-tl-edge ss-tl-edge-r" data-edge="out"></span>`;
+    posBlock(b, lo, hi); b.title = `${ea.name || "audio"} · ${fmt(Math.max(0, (ea.trimOut || 0) - (ea.trimIn || 0)))}`;
+    b.innerHTML = `<span class="ss-tl-edge ss-tl-edge-l" data-edge="in"></span><span class="ss-tl-exname">${escapeHtml(ea.name || "audio")}</span><span class="ss-tl-edge ss-tl-edge-r" data-edge="out"></span>`;
     extraRow.time.appendChild(b);
   }
 
@@ -556,17 +567,32 @@ export function createTimeline(opts) {
   // a block's in-progress pointer capture.
   const unsub = store && typeof store.subscribe === "function" ? store.subscribe(refresh) : null;
 
-  // ⌘/ctrl + wheel to zoom around the pointer; plain wheel scrolls the lanes vertically (native).
+  // ⌘/ctrl + wheel zooms around the pointer; a horizontal wheel/trackpad swipe (or ⇧+wheel) pans the
+  // zoomed timeline; a plain vertical wheel scrolls the lanes natively.
   panel.addEventListener("wheel", (e) => {
-    if (!(e.metaKey || e.ctrlKey)) return;
-    e.preventDefault();
-    const before = pps();
-    const anchorSec = secAtIn(e.clientX, rtime);
-    const mult = e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
-    setPps(before * mult);
-    scrollX = clamp(anchorSec * pps() - (e.clientX - rtime.getBoundingClientRect().left), 0, maxScroll());
-    layout();
+    if (e.metaKey || e.ctrlKey) {
+      e.preventDefault();
+      const before = pps();
+      const anchorSec = secAtIn(e.clientX, rtime);
+      const mult = e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
+      setPps(before * mult);
+      scrollX = clamp(anchorSec * pps() - (e.clientX - rtime.getBoundingClientRect().left), 0, maxScroll());
+      layout();
+      if (onScaleChange) onScaleChange();
+      return;
+    }
+    const dx = e.shiftKey && Math.abs(e.deltaX) < Math.abs(e.deltaY) ? e.deltaY : e.deltaX;
+    if (Math.abs(dx) > Math.abs(e.deltaY) || e.shiftKey) {
+      if (maxScroll() <= 0) return; // nothing to pan at Fit
+      e.preventDefault();
+      scrollX = clamp(scrollX + dx, 0, maxScroll());
+      layout();
+    }
   }, { passive: false });
+
+  // Keep the px-based layout in sync with the panel's size (fit-mode pps depends on it).
+  const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => layout()) : null;
+  if (ro) ro.observe(panel);
 
   function setPps(v) {
     const fit = fitPps();
@@ -585,11 +611,11 @@ export function createTimeline(opts) {
     },
     setCutMode(on) { cutMode = !!on; vtime.classList.toggle("ss-tl-cutmode", cutMode); },
     isCutMode: () => cutMode,
-    zoomBy(mult) { setPps(pps() * mult); scrollX = clamp(scrollX, 0, maxScroll()); layout(); },
-    fit() { fitMode = true; scrollX = 0; layout(); },
+    zoomBy(mult) { setPps(pps() * mult); scrollX = clamp(scrollX, 0, maxScroll()); layout(); if (onScaleChange) onScaleChange(); },
+    fit() { fitMode = true; scrollX = 0; layout(); if (onScaleChange) onScaleChange(); },
     setZoomNorm(t) { const fit = fitPps(); setPps(fit * (1 + clamp(t, 0, 1) * (MAX_ZOOM_MULT - 1))); scrollX = clamp(scrollX, 0, maxScroll()); layout(); },
     getZoomNorm() { const fit = fitPps(); return clamp((pps() / fit - 1) / (MAX_ZOOM_MULT - 1), 0, 1); },
     refresh,
-    destroy() { if (unsub) unsub(); el.innerHTML = ""; },
+    destroy() { if (unsub) unsub(); if (ro) ro.disconnect(); el.innerHTML = ""; },
   };
 }

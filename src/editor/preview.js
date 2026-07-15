@@ -87,7 +87,9 @@ export function createPreview({ canvas, blob, getTransforms, store, onTime, onSt
     const start = ea.offsetSec || 0;
     const end = start + Math.max(0, (ea.trimOut || 0) - (ea.trimIn || 0));
     const inWindow = outputPos >= start && outputPos < end;
-    const vol = ea.muted ? 0 : clamp01(typeof ea.volume === "number" ? ea.volume : 1);
+    // "Mute all audio" (t.audio.muted) is a master mute and silences this track too.
+    const masterMuted = !!(t.audio && t.audio.muted);
+    const vol = ea.muted || masterMuted ? 0 : clamp01(typeof ea.volume === "number" ? ea.volume : 1);
     if (extraEl.volume !== vol) extraEl.volume = vol;
     const wantAt = (ea.trimIn || 0) + (outputPos - start);
     if (!active || !inWindow) {
@@ -98,6 +100,10 @@ export function createPreview({ canvas, blob, getTransforms, store, onTime, onSt
     if (extraEl.paused) {
       if (Number.isFinite(wantAt)) { try { extraEl.currentTime = Math.max(0, wantAt); } catch {} }
       extraEl.play().catch(() => {});
+    } else if (Number.isFinite(wantAt) && Math.abs(extraEl.currentTime - wantAt) > 0.25) {
+      // Already playing but out of position (scrub-while-playing, loop wrap) — re-seek. The 0.25s
+      // threshold corrects discrete jumps without fighting normal frame-to-frame element drift.
+      try { extraEl.currentTime = Math.max(0, wantAt); } catch {}
     }
   }
 

@@ -1,6 +1,7 @@
 // buildShell mounts the editor chrome into a root element and hands back the slots the controller
-// wires up: the stage <canvas>, the sidebar / timeline / toolbar / status containers, and a tiny
-// event bus. FROZEN interface — feature modules rely on these exact slot references and bus shape.
+// wires up: the stage <canvas>, the rail / inspector / timeline / toolbar / transport / status
+// containers, and a tiny event bus. FROZEN interface — feature modules rely on these exact slot
+// references and bus shape.
 
 function makeBus() {
   const map = new Map();

@@ -3,7 +3,7 @@
 // FOUNDATION-OWNED and final — feature work happens inside the modules this orchestrates.
 import { loadClip, pickFile, toInput } from "./source.js";
 import { listIds } from "./idb.js";
-import { defaultTransforms, composeDims, outDuration, segmentsOf } from "./transforms.js";
+import { defaultTransforms, composeDims, outDuration, segmentsOf, outTimestamp, srcTimestamp } from "./transforms.js";
 import { createLayerStore, newImageLayer, newShapeLayer } from "./layers-model.js";
 import { translate } from "./shapes.js";
 import { buildShell } from "./ui-shell.js";
@@ -33,7 +33,7 @@ const root = document.getElementById("root");
 const empty = document.getElementById("empty");
 const openBtn = document.getElementById("open-btn");
 
-let session = null; // { input, meta, transforms, store, preview, timeline, annotator, layersPanel, shell, fileName }
+let session = null; // { input, meta, transforms, store, preview, timeline, annotator, cropOverlay, zoomOverlay, selectionOverlay, shell, fileName, blob, extraAudioInput, extraAudioBlob }
 let tool = "select";
 let toolLocked = false; // double-click a rail tool to keep drawing with it (draw-once otherwise)
 let color = "#22c55e";
@@ -184,8 +184,16 @@ async function start(blob, fileName) {
       timeline.refresh();
     },
     onLayerDelete: (id) => { store.remove(id); if (selectedLayerId === id) selectLayer(null); timeline.refresh(); },
-    // Imported-audio track.
+    // Imported-audio track. extraAudio.offsetSec lives on the OUTPUT timeline (post trim/cuts/speed),
+    // but the timeline ruler is SOURCE seconds — getExtraBlock converts so the block visually sticks
+    // to the frame the user aligned it with under any trim/cuts/speed (and stretches across cut gaps).
     getExtraAudio: () => transforms.extraAudio,
+    getExtraBlock: () => {
+      const ea = transforms.extraAudio;
+      if (!ea) return null;
+      const len = Math.max(0, (ea.trimOut || 0) - (ea.trimIn || 0));
+      return { tIn: srcTimestamp(ea.offsetSec || 0, transforms), tOut: srcTimestamp((ea.offsetSec || 0) + len, transforms) };
+    },
     onExtraAudioChange: (r, mode) => changeExtraAudio(r, mode),
     onExtraMute: () => {
       if (!transforms.extraAudio) return;
@@ -201,6 +209,7 @@ async function start(blob, fileName) {
       timeline.refresh();
     },
     onExtraRemove: () => removeExtraAudio(),
+    onScaleChange: () => syncTlZoomSlider(),
   });
 
   // Waveform decode is fire-and-forget — a long recording can take real time to fully decode, and the
@@ -505,11 +514,17 @@ function buildTransport(el, durationSec) {
   el.querySelector("#ss-prev-edge").addEventListener("click", () => jumpEdge(-1));
   el.querySelector("#ss-next-edge").addEventListener("click", () => jumpEdge(1));
   const slider = el.querySelector("#ss-tlz-slider");
-  const syncSlider = () => { if (session?.timeline) slider.value = String(session.timeline.getZoomNorm()); };
-  el.querySelector("#ss-tlz-out").addEventListener("click", () => { session?.timeline.zoomBy(1 / 1.4); syncSlider(); });
-  el.querySelector("#ss-tlz-in").addEventListener("click", () => { session?.timeline.zoomBy(1.4); syncSlider(); });
-  el.querySelector("#ss-tlz-fit").addEventListener("click", () => { session?.timeline.fit(); syncSlider(); });
+  // zoomBy/fit fire the timeline's onScaleChange -> syncTlZoomSlider, so ⌘-wheel zoom stays synced too.
+  el.querySelector("#ss-tlz-out").addEventListener("click", () => session?.timeline.zoomBy(1 / 1.4));
+  el.querySelector("#ss-tlz-in").addEventListener("click", () => session?.timeline.zoomBy(1.4));
+  el.querySelector("#ss-tlz-fit").addEventListener("click", () => session?.timeline.fit());
   slider.addEventListener("input", () => session?.timeline.setZoomNorm(Number(slider.value)));
+}
+
+// Reflect the timeline's current zoom into the transport slider (fired via onScaleChange).
+function syncTlZoomSlider() {
+  const slider = document.getElementById("ss-tlz-slider");
+  if (slider && session?.timeline) slider.value = String(session.timeline.getZoomNorm());
 }
 
 // Reflect play state across the transport button + the centre stage overlay.
@@ -749,25 +764,28 @@ function updateInspector() {
   });
 }
 
-// Translate a drag on the imported-audio block (reported in OUTPUT seconds) into edits on
-// transforms.extraAudio. Body-drag moves it; the left edge trims the file's start (moving offset and
-// trimIn together so the untouched part doesn't shift); the right edge trims the file's end.
+// Translate a drag on the imported-audio block into edits on transforms.extraAudio. The timeline
+// reports SOURCE seconds (its ruler); extraAudio.offsetSec lives on the OUTPUT timeline, so drag
+// results convert through outTimestamp() first. Body-drag moves it; the left edge trims the file's
+// start (moving offset and trimIn together so the untouched part doesn't shift); the right edge
+// trims the file's end.
 function changeExtraAudio(r, mode) {
   if (!session) return;
-  const ea = session.transforms.extraAudio;
+  const t = session.transforms;
+  const ea = t.extraAudio;
   if (!ea) return;
   if (mode === "move") {
-    ea.offsetSec = Math.max(0, r.tIn);
+    ea.offsetSec = Math.max(0, outTimestamp(r.tIn, t));
   } else if (mode === "in") {
-    let delta = r.tIn - ea.offsetSec;          // how far the left edge moved (output seconds)
-    if (ea.trimIn + delta < 0) delta = -ea.trimIn; // can't use audio from before the file's start
+    let delta = outTimestamp(r.tIn, t) - ea.offsetSec; // how far the left edge moved (output seconds)
+    if (ea.trimIn + delta < 0) delta = -ea.trimIn;     // can't use audio from before the file's start
     ea.trimIn += delta;
     ea.offsetSec += delta;
   } else if (mode === "out") {
-    const newLen = r.tOut - ea.offsetSec;
+    const newLen = outTimestamp(r.tOut, t) - ea.offsetSec;
     ea.trimOut = Math.min(ea.durationSec, ea.trimIn + Math.max(0, newLen));
   }
-  setStatus(session.shell.statusEl, session.meta, session.transforms);
+  setStatus(session.shell.statusEl, session.meta, t);
   session.timeline.refresh();
   session.preview.redraw();
 }
