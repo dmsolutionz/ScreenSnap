@@ -102,7 +102,9 @@ function updatePipBar() {
   const finalizing = s && (s.phase === "saving" || s.phase === "transcoding");
   if (pipPauseBtn) { pipPauseBtn.innerHTML = paused ? SVG_PLAY : SVG_PAUSE; pipPauseBtn.title = paused ? "Resume" : "Pause"; pipPauseBtn.style.display = finalizing ? "none" : ""; }
   if (pipRec) { pipRec.style.background = paused ? "#d97706" : "#dc2626"; pipRec.style.animation = paused || finalizing ? "none" : ""; }
-  if (pipTime) pipTime.textContent = finalizing ? "Saving…" : fmtClock(elapsedMs(s) / 1000);
+  // Only count while actually recording: during setup (phase "preparing") the clock stays at 00:00 —
+  // a stale startedAt from a previous take must never show as already-elapsed time.
+  if (pipTime) pipTime.textContent = finalizing ? "Saving…" : fmtClock((s && s.phase === "recording" ? elapsedMs(s) : 0) / 1000);
 }
 
 async function minimizeSelf() {
