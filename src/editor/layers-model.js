@@ -32,6 +32,13 @@ export function createLayerStore() {
       notify();
       return l;
     },
+    replace(next) {
+      // Swap the whole list in place (undo/redo restore). In-place because `layers` is shared by
+      // reference with every consumer (timeline, annotator, compositor).
+      layers.splice(0, layers.length, ...next);
+      notify();
+      return layers;
+    },
     move(id, toIdx) {
       const i = layers.findIndex((l) => l.id === id);
       if (i === -1) return false;
@@ -50,6 +57,84 @@ export function createLayerStore() {
     subscribe(fn) {
       subs.add(fn);
       return () => subs.delete(fn);
+    },
+  };
+}
+
+// Snapshot-based undo/redo over a layer store (⌘Z / ctrl+Z in the video editor). A continuous update
+// stream — drag-to-move, handle-resize, the opacity slider — coalesces into ONE step: the first change
+// of a gesture pushes the pre-change snapshot, and the gesture closes on pointer-up (or after a quiet
+// spell, for changes that aren't pointer-driven). Bitmaps/GIF frames are shared by reference across
+// snapshots — only the positional/style data is copied, so history is cheap even with big images.
+export function createLayerHistory(store, { limit = 50 } = {}) {
+  const clone = (ls) => ls.map((l) => ({
+    ...l,
+    shape: l.shape ? JSON.parse(JSON.stringify(l.shape)) : l.shape,
+    image: l.image ? { ...l.image } : l.image,
+    range: l.range ? { ...l.range } : l.range,
+  }));
+  const undoStack = [];
+  let redoStack = [];
+  let live = clone(store.layers); // the state BEFORE the in-flight gesture — what undo restores
+  let restoring = false;
+  let gestureOpen = false;
+  let pointerDown = false;
+  let quietTimer = null;
+
+  const closeGesture = () => {
+    clearTimeout(quietTimer);
+    quietTimer = null;
+    gestureOpen = false;
+    live = clone(store.layers);
+  };
+  const onPointerDown = () => { pointerDown = true; };
+  const onPointerUp = () => {
+    pointerDown = false;
+    // setTimeout(0): the release itself can commit a store change (a shape is added on pointer-up) —
+    // let it join this gesture before the gesture closes.
+    if (gestureOpen) { clearTimeout(quietTimer); quietTimer = setTimeout(closeGesture, 0); }
+  };
+  window.addEventListener("pointerdown", onPointerDown, true);
+  window.addEventListener("pointerup", onPointerUp, true);
+  window.addEventListener("pointercancel", onPointerUp, true);
+  const unsub = store.subscribe(() => {
+    if (restoring) return;
+    if (!gestureOpen) {
+      undoStack.push(live);
+      if (undoStack.length > limit) undoStack.shift();
+      redoStack = [];
+      gestureOpen = true;
+    }
+    clearTimeout(quietTimer);
+    quietTimer = setTimeout(closeGesture, pointerDown ? 4000 : 400); // long backstop while dragging
+  });
+
+  const restore = (snapshot) => {
+    restoring = true;
+    try { store.replace(clone(snapshot)); } finally { restoring = false; }
+    live = snapshot;
+  };
+  return {
+    undo() {
+      if (gestureOpen) closeGesture(); // sync `live` to the current state first
+      if (!undoStack.length) return false;
+      redoStack.push(live);
+      restore(undoStack.pop());
+      return true;
+    },
+    redo() {
+      if (gestureOpen) closeGesture();
+      if (!redoStack.length) return false;
+      undoStack.push(live);
+      restore(redoStack.pop());
+      return true;
+    },
+    destroy() {
+      if (unsub) unsub();
+      clearTimeout(quietTimer);
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("pointerup", onPointerUp, true);
+      window.removeEventListener("pointercancel", onPointerUp, true);
     },
   };
 }

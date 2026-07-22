@@ -4,7 +4,7 @@
 import { loadClip, pickFile, toInput } from "./source.js";
 import { listIds } from "./idb.js";
 import { defaultTransforms, composeDims, outDuration, segmentsOf, outTimestamp, srcTimestamp } from "./transforms.js";
-import { createLayerStore, newImageLayer, newShapeLayer } from "./layers-model.js";
+import { createLayerStore, createLayerHistory, newImageLayer, newShapeLayer } from "./layers-model.js";
 import { translate } from "./shapes.js";
 import { buildShell } from "./ui-shell.js";
 import { createPreview } from "./preview.js";
@@ -83,6 +83,7 @@ async function start(blob, fileName) {
   const transforms = defaultTransforms(meta);
 
   const store = createLayerStore();
+  const history = createLayerHistory(store); // ⌘Z/ctrl+Z over every layer edit (move, resize, add, delete…)
   const shell = buildShell(root);
 
   buildToolbar(shell.toolbarEl, transforms);
@@ -277,7 +278,7 @@ async function start(blob, fileName) {
   // (add/remove/move/opacity/visibility), so annotations show live without a second subscription
   // here — adding one would double-composite each edit.
 
-  session = { input, meta, transforms, store, preview, timeline, annotator, cropOverlay, zoomOverlay, selectionOverlay, shell, fileName, blob, extraAudioInput: null, extraAudioBlob: null };
+  session = { input, meta, transforms, store, history, preview, timeline, annotator, cropOverlay, zoomOverlay, selectionOverlay, shell, fileName, blob, extraAudioInput: null, extraAudioBlob: null };
 
   // The stage overlays position from the canvas rect, but the stage reflows when the chrome around it
   // changes size (inspector row appearing on selection, window resize) — re-place them when that happens.
@@ -982,6 +983,18 @@ window.addEventListener("keydown", (e) => {
   if (!session) return;
   if (e.code === "Space" || e.key === " ") { e.preventDefault(); togglePlay(); return; }
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "d") { e.preventDefault(); duplicateSelected(); return; }
+  if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "z") {
+    e.preventDefault();
+    const done = e.shiftKey ? session.history.redo() : session.history.undo();
+    if (done) {
+      // The store notify already redraws the preview + re-places the selection box; the timeline and
+      // inspector are manual. A selected layer that the restore removed must also be deselected.
+      if (selectedLayerId && !session.store.get(selectedLayerId)) selectLayer(null);
+      else updateInspector();
+      session.timeline.refresh();
+    }
+    return;
+  }
   if (e.metaKey || e.ctrlKey || e.altKey) return; // don't shadow browser shortcuts
   if (e.key === "ArrowLeft") { e.preventDefault(); stepBy(e.shiftKey ? -1 : -1 / 30); return; }
   if (e.key === "ArrowRight") { e.preventDefault(); stepBy(e.shiftKey ? 1 : 1 / 30); return; }
@@ -990,5 +1003,20 @@ window.addEventListener("keydown", (e) => {
   if (k === "i") { addImageFromPicker(); return; }
   if (TOOL_KEYS[k]) setActiveTool(TOOL_KEYS[k], e.shiftKey);
 });
+
+// Click-away deselect: clicking the stage background (outside the video) or an empty part of the
+// timeline dismisses the selection box. Clicks on the canvas keep their existing behavior (annotate.js
+// selects/deselects by hit-test), and clicks that act ON the selection — the resize handles, a layer's
+// own track row, the inspector — or on the tool rail keep it. Other chrome (toolbar, transport,
+// popovers) deliberately leaves the selection alone.
+document.addEventListener("pointerdown", (e) => {
+  if (!session || !selectedLayerId) return;
+  const t = e.target instanceof Element ? e.target : null;
+  if (!t) return;
+  if (!t.closest(".ss-stage, .ss-timeline")) return;
+  if (t === session.shell.stageCanvas) return;
+  if (t.closest(".ss-sel-host, .ss-tl-trk-layer")) return;
+  selectLayer(null);
+}, true);
 
 boot();
