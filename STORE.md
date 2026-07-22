@@ -10,6 +10,8 @@ v1.3 has been released with the following new features:
 • Annotations, images, and GIFs can now be resized right on the video, and shown for just part of the clip.
 • Audio editing on the timeline. Mute regions without cutting the picture, adjust the volume, or mix in a voiceover or music track from a file.
 • New 720p and 1080p export presets that genuinely shrink file sizes.
+• Undo in the editor. Ctrl+Z (cmd+Z on Mac) reverts an accidental move, resize, or delete, and shift redoes it.
+• Fixes: tab recordings now survive going fullscreen mid-take, and starting a second recording right after the first works cleanly.
 
 Screen recording shouldn't cost money, put a watermark on your video, or make you sign up. screensnap records your screen and takes screenshots for free. There's no time limit, no account, and no cloud. Everything stays on your machine, and all of it is open source. Feature requests are welcome on GitHub.
 
@@ -26,6 +28,7 @@ A REAL VIDEO EDITOR, ALSO FREE
 • Trim the ends, or cut mistakes out of the middle.
 • Zoom into the action with draggable focus blocks that ease in and out.
 • Add text, arrows, boxes, blur, logos, images, and animated GIFs. Resize them right on the video and set when they appear and disappear (circle something, then stop circling it).
+• Undo and redo. Ctrl+Z (cmd+Z on Mac) reverts a move, resize, or delete, and shift redoes it.
 • Edit the audio. Mute regions without cutting the picture, change the volume, or mix in a voiceover or music track from a file.
 • Crop free-form or to a ratio (16:9, 1:1, 9:16, 4:3), change the speed, or wrap the video in a gradient backdrop with rounded corners and a shadow.
 • Export a native MP4 (pick 720p or 1080p to shrink the file) or an animated GIF, or download the original untouched. Every frame is encoded on your device.
