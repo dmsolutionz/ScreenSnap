@@ -5,13 +5,17 @@ Plain text only: no markdown, no emojis, no em dashes.
 
 ---
 
-v1.3 has been released with the following new features:
+v1.3.1 has been released with the following updates:
+• Undo in the editor. Ctrl+Z (cmd+Z on Mac) reverts an accidental move, resize, or delete, and shift redoes it.
+• Tab recordings now survive going fullscreen mid-take.
+• Starting a second recording right after the first now works cleanly.
+• The selection outline clears when you click away from it.
+
+v1.3 added:
 • A proper multi-track timeline in the video editor. The video, every overlay, and the audio each get their own track, with drag to move, drag edges to resize, and snapping.
 • Annotations, images, and GIFs can now be resized right on the video, and shown for just part of the clip.
 • Audio editing on the timeline. Mute regions without cutting the picture, adjust the volume, or mix in a voiceover or music track from a file.
 • New 720p and 1080p export presets that genuinely shrink file sizes.
-• Undo in the editor. Ctrl+Z (cmd+Z on Mac) reverts an accidental move, resize, or delete, and shift redoes it.
-• Fixes: tab recordings now survive going fullscreen mid-take, and starting a second recording right after the first works cleanly.
 
 Screen recording shouldn't cost money, put a watermark on your video, or make you sign up. screensnap records your screen and takes screenshots for free. There's no time limit, no account, and no cloud. Everything stays on your machine, and all of it is open source. Feature requests are welcome on GitHub.
 
