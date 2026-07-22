@@ -53,8 +53,15 @@ async function handle(msg, sender) {
     case MSG.EDITOR_CANCEL:
       return editorCancel();
 
-    case MSG.START_RECORDING:
+    case MSG.START_RECORDING: {
+      // Refuse to start over an active take: re-entering here mid-recording (a stale popup view, a
+      // shortcut race) would flip state to PREPARING while the offscreen recorder is still live — its
+      // idempotent-start guard then swallows the new OFFSCREEN_START, leaving a stuck timer and a
+      // "recording" that never records. Stop the current take first, then start fresh.
+      const cur = await getState();
+      if (cur.phase === PHASE.RECORDING) return { ok: false, error: "Already recording — stop the current recording first." };
       return startRecording(msg.options || {});
+    }
     case MSG.VC_GO:
     case MSG.REC_GO:
       return beginCapture();
@@ -350,7 +357,9 @@ async function startRecording(options) {
     videoFormat: opts.videoFormat, videoFps: opts.videoFps, videoMaxHeight: opts.videoMaxHeight,
     countdownSec: opts.countdownSec, camHidden: false, drawActive: false,
     recordingTabId: tab.id, controlInjectable: isInjectable(tab.url),
-    paused: false, pausedAt: null, pausedTotalMs: 0, recordedDurationMs: 0, error: null, note: null, lastSaved: null,
+    // startedAt is cleared here (it's only set on REC_STARTED): a previous take's value leaking into
+    // this one made every timer surface show already-elapsed time before recording even began.
+    startedAt: null, paused: false, pausedAt: null, pausedTotalMs: 0, recordedDurationMs: 0, error: null, note: null, lastSaved: null,
   });
   await injectFile(tab.id, "src/content/recorder-control.js");
   return { ok: true };
@@ -384,7 +393,9 @@ async function startScreenRecording(opts) {
     countdownSec: 0, camHidden: false, drawActive: false, displaySurface: null, camIsPip: false, previewWinId: null,
     bubbleShape: opts.bubbleShape, bubbleSize: opts.bubbleSize, bubbleCorner: opts.bubbleCorner, camMirror: opts.camMirror,
     recordingTabId: tab ? tab.id : null, controlInjectable: tab ? isInjectable(tab.url) : false,
-    paused: false, pausedAt: null, pausedTotalMs: 0, recordedDurationMs: 0, error: null, note: null, lastSaved: null,
+    // startedAt cleared for the same reason as the tab path: a stale value from the previous take made
+    // the PiP strip / popup timers show elapsed time while this take was still setting up.
+    startedAt: null, paused: false, pausedAt: null, pausedTotalMs: 0, recordedDurationMs: 0, error: null, note: null, lastSaved: null,
   });
 
   // Screen + Cam: open the "set up your camera" window first. Its "Start recording" click pops the floating
@@ -414,6 +425,9 @@ async function startScreenRecording(opts) {
   // PiP is the camera on an entire-screen share), and starts the recorder. A dismissed picker → REC_DONE{cancelled}.
   // If creating/messaging the offscreen doc fails, no REC_ERROR comes back, so reset here or it sticks at PREPARING.
   try {
+    // A leftover offscreen doc (an abandoned picker, a dead recorder) silently swallows
+    // OFFSCREEN_START via its idempotent-start guard — a new take always gets a fresh document.
+    await closeOffscreen();
     await ensureOffscreen();
     await sendOffscreen({
       type: MSG.OFFSCREEN_START, sourceKind: "screen", withCam, pipActive,
@@ -449,11 +463,30 @@ async function beginCapture() {
   let streamId;
   try { streamId = await getTabMediaStreamId(st.recordingTabId); }
   catch (e) { startInFlight = false; await setState({ phase: PHASE.IDLE, error: String((e && e.message) || e) }); return { ok: false }; }
+  // Measure the tab so the capture can be pinned to a FIXED frame size (min == max constraints). A tab
+  // that resizes mid-recording — entering fullscreen, a window resize — otherwise changes the stream's
+  // frame dimensions, which Chrome's MP4 muxer can't represent: the recorder errors and the take dies.
+  // With a fixed size Chrome scales (letterboxing on aspect change) instead, so fullscreen just works.
+  // Best-effort: if the measurement fails the offscreen doc falls back to max-only constraints.
+  let fixed = null;
+  try {
+    const [res] = await chrome.scripting.executeScript({
+      target: { tabId: st.recordingTabId },
+      func: () => ({ w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio || 1 }),
+    });
+    const v = res && res.result;
+    if (v && v.w > 0 && v.h > 0) {
+      const even = (n) => Math.max(2, Math.round(n / 2) * 2); // H.264 wants even dimensions
+      const scale = Math.min(1, (st.videoMaxHeight || 2160) / (v.h * v.dpr), 3840 / (v.w * v.dpr));
+      fixed = { width: even(v.w * v.dpr * scale), height: even(v.h * v.dpr * scale) };
+    }
+  } catch {}
   // Reset to idle if the offscreen doc can't be created/messaged — otherwise no REC_ERROR comes back and the
   // state stays stuck at PREPARING.
   try {
+    await closeOffscreen(); // a leftover doc would swallow OFFSCREEN_START — new take, fresh document
     await ensureOffscreen();
-    await sendOffscreen({ type: MSG.OFFSCREEN_START, streamId, sourceKind: "tab", withMic: st.withMic, withSystemAudio: st.withSystemAudio, videoFormat: st.videoFormat || "mp4", fps: st.videoFps || 30, maxHeight: st.videoMaxHeight || 2160 });
+    await sendOffscreen({ type: MSG.OFFSCREEN_START, streamId, sourceKind: "tab", withMic: st.withMic, withSystemAudio: st.withSystemAudio, videoFormat: st.videoFormat || "mp4", fps: st.videoFps || 30, maxHeight: st.videoMaxHeight || 2160, fixedWidth: fixed ? fixed.width : null, fixedHeight: fixed ? fixed.height : null });
   } catch (e) {
     startInFlight = false; await closeOffscreen(); await setState({ phase: PHASE.IDLE, error: String((e && e.message) || e) }); return { ok: false };
   }
@@ -541,7 +574,9 @@ async function stopRecording(discard) {
     // doesn't stay stuck mid-picker; the offscreen still tears down (its later REC_DONE is idempotent here).
     const preparing = st.phase === PHASE.PREPARING;
     await sendOffscreen({ type: MSG.OFFSCREEN_STOP, discard: discard || preparing });
-    if (preparing) { startInFlight = false; await setState({ phase: PHASE.IDLE }); await closePreviewWindow(); }
+    // …and during PREPARING also tear the document down: if the screen picker is still open, closing
+    // the doc dismisses it — otherwise the picker floats on, and picking later starts a doomed take.
+    if (preparing) { startInFlight = false; await closeOffscreen(); await setState({ phase: PHASE.IDLE }); await closePreviewWindow(); }
   } else { startInFlight = false; await setState({ phase: PHASE.IDLE }); await closePreviewWindow(); }
   return { ok: true };
 }

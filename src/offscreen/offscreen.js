@@ -55,7 +55,21 @@ async function startRecording(opts) {
     if (e.data && e.data.size) chunks.push(e.data);
   };
   recorder.onstop = () => finalize().catch(fail);
-  recorder.onerror = (e) => fail((e && e.error) || new Error("MediaRecorder error"));
+  recorder.onerror = (e) => {
+    const err = (e && e.error) || new Error("MediaRecorder error");
+    // Salvage: if part of the take was already captured, save that instead of dropping everything — a
+    // recording must never be lost. The recorder fires "stop" after a fatal error, so finalize() runs
+    // with the chunks recorded so far; the note tells the user why it ended early. The timed backstop
+    // covers a build that skips the stop event (the finalize latch + identity check prevent doubles).
+    const cur = current;
+    if (cur.recorder === recorder && cur.chunks && cur.chunks.length) {
+      cur.errNote = `Recording ended early (${String((err && err.message) || err)}) — saved what was captured.`;
+      try { if (recorder.state !== "inactive") recorder.stop(); } catch {}
+      setTimeout(() => { if (current === cur && !cur.finalized) finalize().catch(fail); }, 1500);
+      return;
+    }
+    fail(err);
+  };
 
   current = { ...current, recorder, stream, chunks, opts, mime, discard: false, startedAt: Date.now() };
 
@@ -117,7 +131,17 @@ async function buildStream(opts) {
       ...(withSystemAudio ? { systemAudio: "include" } : {}),
     });
   } else {
-    const video = { mandatory: { chromeMediaSource: "tab", chromeMediaSourceId: streamId, maxWidth: 3840, maxHeight: maxHeight || 2160, maxFrameRate: fps || 30 } };
+    // min == max pins the capture to a FIXED frame size (Chromium's fixed-resolution policy): when the
+    // tab resizes mid-recording — fullscreen video, a window resize — the frames are scaled/letterboxed
+    // into the same dimensions instead of changing the stream's frame size, which would kill the MP4
+    // recorder mid-take (its muxer can't represent a resolution change). The service worker measures
+    // the tab and passes fixedWidth/Height; without them (measurement failed) fall back to max-only.
+    const fw = opts.fixedWidth > 0 ? Math.round(opts.fixedWidth) : 0;
+    const fh = opts.fixedHeight > 0 ? Math.round(opts.fixedHeight) : 0;
+    const size = fw && fh
+      ? { minWidth: fw, minHeight: fh, maxWidth: fw, maxHeight: fh }
+      : { maxWidth: 3840, maxHeight: maxHeight || 2160 };
+    const video = { mandatory: { chromeMediaSource: "tab", chromeMediaSourceId: streamId, ...size, maxFrameRate: fps || 30 } };
     const audio = withSystemAudio ? { mandatory: { chromeMediaSource: "tab", chromeMediaSourceId: streamId } } : false;
     try {
       av = await navigator.mediaDevices.getUserMedia({ video, audio });
@@ -286,7 +310,9 @@ function pickMime(preferMp4) {
 }
 
 async function finalize() {
-  const { chunks, mime, opts, discard } = current;
+  if (current.finalized) return; // stop event + error backstop can both land here — run once
+  current.finalized = true;
+  const { chunks, mime, opts, discard, errNote } = current;
 
   if (discard || !chunks || !chunks.length) {
     cleanupTracks();
@@ -299,7 +325,7 @@ async function finalize() {
   const blob = new Blob(chunks, { type: baseType });
   const isMp4 = baseType.includes("mp4");
   const ext = isMp4 ? "mp4" : "webm";
-  const note = !isMp4 && opts.videoFormat !== "webm" ? "Saved as WebM — this browser can't record MP4 natively." : null;
+  const note = errNote || (!isMp4 && opts.videoFormat !== "webm" ? "Saved as WebM — this browser can't record MP4 natively." : null);
 
   send({ type: MSG.REC_PHASE, phase: PHASE.SAVING });
   const filename = `screensnap/recording-${stamp()}.${ext}`;
