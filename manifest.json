@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "screensnap.",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "description": "Free, local, watermark-free screen recorder & screenshots. Timeline editor: trim, zoom, audio, annotate. Export native MP4 or GIF.",
   "minimum_chrome_version": "124",
   "icons": {
@@ -30,11 +30,19 @@
     "tabCapture",
     "offscreen",
     "downloads",
-    "storage"
+    "storage",
+    "identity"
   ],
   "optional_host_permissions": [
-    "<all_urls>"
+    "<all_urls>",
+    "https://*.googleapis.com/*"
   ],
+  "oauth2": {
+    "client_id": "716504417274-h5o390m4ihjji2j9206c96ualpgl1enb.apps.googleusercontent.com",
+    "scopes": [
+      "https://www.googleapis.com/auth/drive.file"
+    ]
+  },
   "commands": {
     "stop-recording": {
       "suggested_key": { "default": "Alt+Shift+S" },

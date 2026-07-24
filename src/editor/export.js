@@ -5,11 +5,12 @@ import { transcode } from "./pipeline.js";
 import { transcodeGif } from "./gif-export.js";
 
 // input: Mediabunny Input. transforms: see transforms.js. store: layer store. fileName: suggested
-// name. onProgress(0..1). signal: optional AbortSignal.
-export async function runExport({ input, transforms, store, fileName, onProgress, signal, extraAudioInput }) {
+// name. onProgress(0..1). signal: optional AbortSignal. download:false skips the local save so a
+// caller can route the blob elsewhere (the Drive upload path) without also writing a file.
+export async function runExport({ input, transforms, store, fileName, onProgress, signal, extraAudioInput, download = true }) {
   const blob = await transcode({ input, transforms, store, onProgress, signal, extraAudioInput });
   const name = toEditedName(fileName, "mp4");
-  await downloadBlob(blob, `screensnap/${name}`);
+  if (download) await downloadBlob(blob, `screensnap/${name}`);
   return { blob, fileName: name };
 }
 

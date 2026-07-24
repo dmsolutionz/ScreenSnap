@@ -5,7 +5,12 @@ Plain text only: no markdown, no emojis, no em dashes.
 
 ---
 
-v1.3.1 has been released with the following updates:
+v1.4 has been released with the following updates:
+• Optional backup to your own Google Drive. Connect your Drive once in the new Settings tab and finished recordings can upload themselves to a private screensnap folder, or send single clips from the recording-done card and the editor. Off by default, and nothing else leaves your machine.
+• Upload an edited MP4 to Drive straight from the editor's Export menu.
+• A guided Cloud setup window, plus live upload progress on the done card and in the editor.
+
+v1.3.1 added:
 • Undo in the editor. Ctrl+Z (cmd+Z on Mac) reverts an accidental move, resize, or delete, and shift redoes it.
 • Tab recordings now survive going fullscreen mid-take.
 • Starting a second recording right after the first now works cleanly.
@@ -17,7 +22,7 @@ v1.3 added:
 • Audio editing on the timeline. Mute regions without cutting the picture, adjust the volume, or mix in a voiceover or music track from a file.
 • New 720p and 1080p export presets that genuinely shrink file sizes.
 
-Screen recording shouldn't cost money, put a watermark on your video, or make you sign up. screensnap records your screen and takes screenshots for free. There's no time limit, no account, and no cloud. Everything stays on your machine, and all of it is open source. Feature requests are welcome on GitHub.
+Screen recording shouldn't cost money, put a watermark on your video, or make you sign up. screensnap records your screen and takes screenshots for free. There's no time limit, no account, and no forced cloud. Everything stays on your machine unless you turn on the optional backup to your own Google Drive, and all of it is open source. Feature requests are welcome on GitHub.
 
 RECORD ANYTHING, FREE AND UNLIMITED
 • Your whole screen, any app window, or a single browser tab, saved as native MP4 (H.264/AAC).
@@ -43,9 +48,15 @@ SCREENSHOTS
 • Crop, reorder layers, add an image or logo, and come back later to re-edit your text.
 • Add a padded backdrop, then copy to the clipboard or save to your computer.
 
+OPTIONAL CLOUD BACKUP (YOUR DRIVE, NOT OURS)
+• Connect your own Google Drive and finished recordings can upload themselves to a private screensnap folder, with progress shown as they go.
+• Or upload one clip at a time from the recording-done card or the editor's Export menu.
+• Straight from your browser to Google. No screensnap servers, no middleman, no account with us, and it only uses Google's narrowest Drive permission, so screensnap can only ever see the files it created.
+• Off by default. Disconnect anytime and the access is revoked at Google.
+
 PRIVATE BY DESIGN
-• Capture, processing, and storage all happen locally. Nothing leaves your device.
-• No servers, no telemetry, no analytics, and zero network calls.
+• Capture, processing, and storage all happen locally. Nothing leaves your device unless you connect the optional Google Drive backup.
+• No screensnap servers, no telemetry, no analytics. The only network calls are the uploads you choose to send to your own Drive.
 • Minimal permissions. Screen and window sharing use Chrome's own picker, and screensnap only touches the tab you point it at. It has no background access to your browsing.
 
 Free forever, and open source.

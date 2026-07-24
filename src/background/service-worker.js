@@ -2,6 +2,8 @@
 // video-circle recording run in the offscreen document. Recordings save as native MP4 (no transcoding).
 import { MSG, TARGET, PHASE, SOURCE, getSettings, setSettings, restartOptions, stamp, elapsedMs } from "../lib/messages.js";
 import { preparePageForCapture, gotoTile, restorePageAfterCapture } from "../content/fullpage.js";
+import { driveConnect, driveDisconnect, driveStatus, uploadToDrive } from "../lib/drive.js";
+import { getBlob } from "../editor/idb.js";
 
 const STATE_KEY = "recordingState";
 const DL_DIR = "screensnap";
@@ -52,6 +54,25 @@ async function handle(msg, sender) {
       return editorSave(msg);
     case MSG.EDITOR_CANCEL:
       return editorCancel();
+
+    // ── opt-in Google Drive backup ──
+    case MSG.DRIVE_CONNECT: {
+      // Runs here, not in the popup: the consent window steals focus and closes the popup, which
+      // would kill an in-popup flow mid-dance. The next popup open reads the stored account.
+      const account = await driveConnect();
+      return { ok: true, account };
+    }
+    case MSG.DRIVE_DISCONNECT:
+      await driveDisconnect();
+      await setState({ drive: null });
+      return { ok: true };
+    case MSG.DRIVE_UPLOAD_CLIP:
+      // Fire-and-forget: progress/result land in state.drive via setState, and the chunked fetches
+      // inside uploadToDrive keep this worker alive for the duration.
+      void uploadClip(msg.clipId, msg.fileName);
+      return { ok: true };
+    case MSG.DRIVE_OPEN_SETUP:
+      return openCloudSetup();
 
     case MSG.START_RECORDING: {
       // Refuse to start over an active take: re-entering here mid-recording (a stale popup view, a
@@ -125,6 +146,9 @@ async function handle(msg, sender) {
       await closePreviewWindow();
       // Land the finished recording in the editor, where the user can Download it as-is or edit it.
       if (msg.clipId) await openEditor(msg.clipId);
+      // Opt-in cloud backup: push the finished take to the user's Google Drive in the background.
+      // Not awaited — the editor/popup follow along via state.drive, and a failure only marks state.
+      if (msg.clipId) void maybeAutoUpload(msg.clipId, msg.filename);
       return { ok: true };
     case MSG.REC_ERROR:
       startInFlight = false;
@@ -266,6 +290,60 @@ async function editorSave(msg) {
 }
 async function editorCancel() { pendingCapture = null; return { ok: true }; }
 
+// ── Google Drive backup (opt-in) ─────────────────────────────────────────────
+// The Cloud setup window: a small dedicated page that owns connect/disconnect. A window (not the
+// popup) because Google's consent window steals focus, which closes a popup mid-flow. Single
+// instance: re-clicking focuses the existing window instead of stacking a second one.
+let cloudWinId = null;
+async function openCloudSetup() {
+  if (cloudWinId != null) {
+    const w = await chrome.windows.get(cloudWinId).catch(() => null);
+    if (w) { await chrome.windows.update(cloudWinId, { focused: true }).catch(() => {}); return { ok: true }; }
+    cloudWinId = null;
+  }
+  const w = await chrome.windows.create({ url: chrome.runtime.getURL("src/cloud/cloud.html"), type: "popup", width: 430, height: 600, focused: true }).catch(() => null);
+  cloudWinId = w ? w.id : null;
+  return { ok: !!w };
+}
+chrome.windows.onRemoved.addListener((id) => { if (id === cloudWinId) cloudWinId = null; });
+
+// Auto-upload gate for a just-finished recording: only when the user flipped the setting on AND
+// connected an account. Everything else is a silent no-op — the default build never touches the network.
+async function maybeAutoUpload(clipId, fileName) {
+  try {
+    const [settings, status] = await Promise.all([getSettings(), driveStatus()]);
+    if (!settings.driveAutoUpload || !status.connected || !status.configured) return;
+    await uploadClip(clipId, fileName);
+  } catch {}
+}
+
+// Read the stashed clip back out of IndexedDB and push it to Drive, mirroring progress into
+// state.drive ({ status: uploading|done|error, pct, fileName, link?, error? }) so the popup and
+// done-card can render it live. Progress ticks arrive per 8 MiB chunk, so setState stays cheap.
+async function uploadClip(clipId, fileName) {
+  if (!clipId) return;
+  const name = (fileName || "recording.mp4").split("/").pop();
+  try {
+    const clip = await getBlob(clipId);
+    if (!clip || !clip.blob) throw new Error("Recording not found — it may have been cleared.");
+    await setState({ drive: { status: "uploading", pct: 0, fileName: name } });
+    let lastPct = -1;
+    const res = await uploadToDrive(clip.blob, name, {
+      onProgress: (done, total) => {
+        // Clamp to 99: the final tick's setState is fire-and-forget and could land AFTER the
+        // "done" write below, leaving state stuck on "uploading 100%". Done is the done-write's job.
+        const pct = Math.min(99, total ? Math.round((done / total) * 100) : 0);
+        if (pct === lastPct) return;
+        lastPct = pct;
+        void setState({ drive: { status: "uploading", pct, fileName: name } });
+      },
+    });
+    await setState({ drive: { status: "done", pct: 100, fileName: name, link: res.webViewLink || null } });
+  } catch (e) {
+    await setState({ drive: { status: "error", fileName: name, error: String((e && e.message) || e) } });
+  }
+}
+
 async function captureFullPage(tab) {
   const run = (func, args = []) => chrome.scripting.executeScript({ target: { tabId: tab.id }, func, args }).then((r) => r[0]?.result);
   const m = await run(preparePageForCapture);
@@ -359,7 +437,7 @@ async function startRecording(options) {
     recordingTabId: tab.id, controlInjectable: isInjectable(tab.url),
     // startedAt is cleared here (it's only set on REC_STARTED): a previous take's value leaking into
     // this one made every timer surface show already-elapsed time before recording even began.
-    startedAt: null, paused: false, pausedAt: null, pausedTotalMs: 0, recordedDurationMs: 0, error: null, note: null, lastSaved: null,
+    startedAt: null, paused: false, pausedAt: null, pausedTotalMs: 0, recordedDurationMs: 0, error: null, note: null, lastSaved: null, drive: null,
   });
   await injectFile(tab.id, "src/content/recorder-control.js");
   return { ok: true };
@@ -395,7 +473,7 @@ async function startScreenRecording(opts) {
     recordingTabId: tab ? tab.id : null, controlInjectable: tab ? isInjectable(tab.url) : false,
     // startedAt cleared for the same reason as the tab path: a stale value from the previous take made
     // the PiP strip / popup timers show elapsed time while this take was still setting up.
-    startedAt: null, paused: false, pausedAt: null, pausedTotalMs: 0, recordedDurationMs: 0, error: null, note: null, lastSaved: null,
+    startedAt: null, paused: false, pausedAt: null, pausedTotalMs: 0, recordedDurationMs: 0, error: null, note: null, lastSaved: null, drive: null,
   });
 
   // Screen + Cam: open the "set up your camera" window first. Its "Start recording" click pops the floating

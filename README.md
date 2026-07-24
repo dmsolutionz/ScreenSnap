@@ -56,6 +56,15 @@ Built because being nagged to log in just to save a screenshot is miserable.
 - **Export** a native **MP4** (bitrate scales with resolution, so 720p/1080p genuinely shrink files)
   or an animated **GIF** — or download the original clip untouched
 
+**Google Drive backup** (optional, off by default)
+- Connect **your own Google Drive** in the popup and screensnap can **auto-upload finished
+  recordings** to a private "screensnap" folder — or upload one-off from the done card / the
+  editor's export menu
+- Direct browser-to-Google only (narrow `drive.file` scope: screensnap can only see files it
+  created). **No screensnap servers, no proxy, no account with us** — disconnect revokes access.
+  Until you connect it, the extension makes no network requests at all. Maintainer setup:
+  [docs/DRIVE_SETUP.md](docs/DRIVE_SETUP.md)
+
 ## MP4, natively — no transcoding
 
 `MediaRecorder` records **H.264 MP4 directly** on modern Chrome, so there's **no ffmpeg, no WASM, no
@@ -107,7 +116,10 @@ mid-recording. The popup, recorder window, and overlays all reflect it live via 
 uses the standard **`getDisplayMedia()`** Web API from the offscreen document — it needs **no extra
 permission** and shows nothing until you start a Screen / Window recording and pick a source (no background
 screen access). Screen + Cam additionally uses your webcam via standard `getUserMedia` (one-time browser
-prompt) — also no manifest permission.
+prompt) — also no manifest permission. For the optional Google Drive backup, `identity` ships in the
+manifest (it is warning-free and inert until you connect — Chrome can't reliably expose a
+runtime-granted API to a running service worker, so it can't be optional), while `googleapis.com`
+host access **is** optional and requested only when you click Connect.
 
 ## Known limitations
 

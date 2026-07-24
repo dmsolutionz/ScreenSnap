@@ -2,6 +2,7 @@
 // DOM. All capture/record work happens in the service worker + offscreen document; the popup just
 // reflects live state (GET_STATE / STATE_CHANGED) and can close at any time without interrupting.
 import { MSG, PHASE, SOURCE, getSettings, setSettings, elapsedMs, fmtClock } from "../lib/messages.js";
+import { driveStatus } from "../lib/drive.js";
 
 const app = document.getElementById("app");
 const send = (m) => chrome.runtime.sendMessage(m);
@@ -13,6 +14,7 @@ let captured = null;
 let doneInfo = null;
 let capturing = null;
 let bubPos = "br";
+let drive = { supported: false, configured: false, connected: false, account: null };
 let prevPhase = PHASE.IDLE;
 let timer = null;
 
@@ -48,6 +50,7 @@ const P = {
   pencil: '<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/>',
   copy: '<rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
   down: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+  cloud: '<path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>',
 };
 const ico = (n, { sz = 16, c = "currentColor", sw = 1.75 } = {}) =>
   `<svg width="${sz}" height="${sz}" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round">${P[n]}</svg>`;
@@ -75,7 +78,7 @@ function pingDot(s = 8) {
 }
 function tabsBar() {
   return `<div style="display:flex;padding:0 16px;border-bottom:1px solid ${C.line}">
-    ${["capture", "record"]
+    ${["capture", "record", "settings"]
       .map((t) => `<button class="tab-t" data-act="tab" data-tab="${t}" style="font-family:${MONO};font-size:12px;text-transform:uppercase;letter-spacing:0.08em;color:${localTab === t ? C.fg : C.faint};background:none;border:none;padding:11px 0;margin-right:22px;cursor:pointer;border-bottom:2px solid ${localTab === t ? C.green : "transparent"};margin-bottom:-1px">${t}</button>`)
       .join("")}
   </div>`;
@@ -148,6 +151,34 @@ function recordTab() {
       <div style="display:flex;align-items:center;gap:11px;margin-top:11px">
         <span style="flex:1;font-size:13px;color:${C.fg2}">Mirror camera</span>${toggle(!!settings.camMirror, "camMirror")}
       </div>
+    </div>
+  </div>`;
+}
+// Settings tab. Leads with Cloud backup: the row opens the dedicated Cloud setup window (the
+// consent flow can't live in a popup — it closes on blur), and once connected the quick controls
+// (auto-upload toggle, disconnect) live right here too.
+function settingsTab() {
+  let cloud;
+  if (!drive.supported || !drive.configured) {
+    cloud = `<div style="padding:0 16px 6px;font-size:12px;line-height:1.5;color:${C.muted}">Cloud backup isn't available in this build${drive.supported ? " — it needs a Google OAuth client id (see docs/DRIVE_SETUP.md)" : ""}.</div>`;
+  } else if (!drive.connected) {
+    cloud = `${navRow(`data-act="drive-setup"`, "cloud", "Google Drive", "Not connected · set up", false)}
+      <div style="padding:0 16px 6px;font-size:11px;line-height:1.6;color:${C.faint}">Optional. Back up recordings to a private folder in your own Drive — nothing else ever leaves this device.</div>`;
+  } else {
+    cloud = `${navRow(`data-act="drive-setup"`, "cloud", "Google Drive", esc(drive.account || "connected"), true)}
+      <div style="padding:2px 16px 6px">
+        <div style="display:flex;align-items:center;gap:11px;margin-bottom:9px">
+          <span style="flex:1;font-size:14px;color:${C.fg2}">Auto-upload recordings</span>${toggle(!!settings.driveAutoUpload, "driveAutoUpload")}
+        </div>
+        <button class="ghost-b" data-act="drive-disconnect" style="padding:5px 0;background:none;border:none;color:${C.faint};font-size:12px;cursor:pointer;border-radius:6px">Disconnect</button>
+      </div>`;
+  }
+  return `<div style="padding-top:13px;padding-bottom:5px">
+    <div style="padding:0 16px">${sectionLabel("Cloud backup")}</div>
+    ${cloud}
+    <div style="padding:13px 16px;border-top:1px solid ${C.line}">
+      ${sectionLabel("About")}
+      <div style="font-family:${MONO};font-size:11px;line-height:1.7;color:${C.muted}">screensnap ${esc(chrome.runtime.getManifest().version)} · free &amp; open source<br/>Everything stays on this device unless you connect Drive.</div>
     </div>
   </div>`;
 }
@@ -239,13 +270,29 @@ function savingView() {
     <div style="font-family:${MONO};font-size:11px;color:${C.faint};text-transform:uppercase;letter-spacing:0.05em">Writing native MP4 to Downloads…</div>
   </div>`;
 }
+// The Drive line on the done card: live upload progress / result from state.drive, or a manual
+// "Upload to Drive" button when connected and no upload has been attempted for this take.
+function driveDoneRow() {
+  const d = rec.drive;
+  const line = (color, text) => `<div style="font-family:${MONO};font-size:11px;color:${color};margin-top:9px;text-align:center;max-width:260px">${text}</div>`;
+  if (d && d.status === "uploading") return line(C.muted, `Uploading to Drive… ${d.pct || 0}%`);
+  if (d && d.status === "done") return line(C.green, `Uploaded to Drive ✓${d.link ? ` &nbsp;<a href="${esc(d.link)}" target="_blank" style="color:${C.muted}">Open</a>` : ""}`);
+  if (d && d.status === "error") return line(C.red, `Drive upload failed — ${esc(d.error || "unknown error")}`);
+  if (drive.connected && drive.configured && doneInfo.clipId) {
+    return `<button class="ghost-b" data-act="drive-upload" style="margin-top:12px;padding:8px 18px;background:#fff;border:1px solid ${C.boxLine};border-radius:9px;color:${C.fg2};font-size:12px;font-weight:500;cursor:pointer">Upload to Drive</button>`;
+  }
+  if (drive.supported && drive.configured && doneInfo.clipId) {
+    return `<button class="ghost-b" data-act="drive-setup" style="margin-top:12px;padding:8px 18px;background:none;border:none;color:${C.faint};font-size:12px;cursor:pointer;border-radius:8px">Back up to Drive: set up</button>`;
+  }
+  return "";
+}
 function doneView() {
   const note = doneInfo.note ? `<div style="font-family:${MONO};font-size:11px;color:${C.amber};margin-top:7px;text-align:center;max-width:260px">${esc(doneInfo.note)}</div>` : "";
   return `<div style="padding:38px 20px 30px;display:flex;flex-direction:column;align-items:center">
     <div style="width:46px;height:46px;border-radius:50%;background:${C.greenTint};border:1px solid ${C.greenLine};display:flex;align-items:center;justify-content:center">${ico("check", { sz: 22, c: C.green })}</div>
     <div style="font-size:15px;font-weight:500;color:${C.fg};margin-top:15px">Saved to Downloads</div>
     <div style="font-family:${MONO};font-size:11px;color:${C.muted};margin-top:6px">${esc(shortName(doneInfo.filename))}</div>
-    <div style="font-family:${MONO};font-size:11px;color:${C.faint};margin-top:3px">${clockStr(doneInfo.durationMs)} · ${shortName(doneInfo.filename).endsWith(".mp4") ? "H.264 + AAC" : "VP9 + Opus"}</div>${note}
+    <div style="font-family:${MONO};font-size:11px;color:${C.faint};margin-top:3px">${clockStr(doneInfo.durationMs)} · ${shortName(doneInfo.filename).endsWith(".mp4") ? "H.264 + AAC" : "VP9 + Opus"}</div>${note}${driveDoneRow()}
     <button class="prim-b" data-act="done" style="margin-top:20px;padding:11px 30px;background:${C.green};border:none;border-radius:9px;color:#fff;font-size:13px;font-weight:600;cursor:pointer">Done</button>
     ${doneInfo.clipId ? `<button class="ghost-b" data-act="edit-video" style="margin-top:10px;padding:9px 22px;background:#fff;border:1px solid ${C.boxLine};border-radius:9px;color:${C.fg};font-size:12px;font-weight:500;cursor:pointer;display:flex;align-items:center;gap:7px">${ico("video", { sz: 13, c: C.muted })}Edit video</button>` : ""}
   </div>`;
@@ -263,6 +310,7 @@ function render() {
   else if (recording) body = rec.source === SOURCE.VIDEO_CIRCLE ? recVideoCircle() : recRegular();
   else if (captured && localTab === "capture") body = capturedView();
   else if (localTab === "capture") body = captureTab();
+  else if (localTab === "settings") body = settingsTab();
   else body = recordTab();
 
   app.innerHTML = `<div class="sheet">
@@ -306,6 +354,14 @@ app.addEventListener("click", async (e) => {
   if (act === "shot-discard") { await send({ type: MSG.SHOT_DISCARD }); captured = null; return render(); }
   if (act === "done") { doneInfo = null; localTab = "record"; return render(); }
   if (act === "edit-video") { if (doneInfo && doneInfo.clipId) send({ type: MSG.EDITOR_OPEN_CLIP, clipId: doneInfo.clipId }); window.close(); return; }
+  if (act === "drive-setup") { send({ type: MSG.DRIVE_OPEN_SETUP }); window.close(); return; }
+  if (act === "drive-disconnect") { await send({ type: MSG.DRIVE_DISCONNECT }).catch(() => {}); drive = await driveStatus(); return render(); }
+  if (act === "drive-upload") {
+    node.textContent = "Starting…";
+    node.style.pointerEvents = "none"; // progress takes over via STATE_CHANGED → rec.drive
+    send({ type: MSG.DRIVE_UPLOAD_CLIP, clipId: doneInfo && doneInfo.clipId, fileName: doneInfo && doneInfo.filename });
+    return;
+  }
 });
 
 async function doCapture(mode) {
@@ -375,8 +431,16 @@ function onState(state) {
 
 async function init() {
   settings = await getSettings();
+  drive = await driveStatus().catch(() => drive);
   bubPos = settings.bubbleCorner || "br";
   chrome.runtime.onMessage.addListener((msg, sender) => { if (sender.id === chrome.runtime.id && msg && msg.type === MSG.STATE_CHANGED) onState(msg.state); });
+  // Live-refresh when the Cloud setup window (or another surface) connects/disconnects Drive or
+  // flips a setting while this popup is open.
+  chrome.storage.onChanged.addListener((ch, area) => {
+    if (area !== "local") return;
+    if (ch.driveAccount) driveStatus().then((d) => { drive = d; render(); });
+    if (ch.settings) getSettings().then((s) => { settings = s; render(); });
+  });
   try {
     const res = await send({ type: MSG.GET_STATE });
     rec = res?.state || { phase: PHASE.IDLE };
