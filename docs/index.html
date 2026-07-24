@@ -56,9 +56,9 @@
   <main class="wrap">
     <div class="eyebrow">Privacy-first · No cloud</div>
     <h1>Privacy Policy</h1>
-    <p class="updated">Last updated: 1 July 2026</p>
+    <p class="updated">Last updated: 24 July 2026</p>
 
-    <p class="lede"><strong>screensnap collects no data.</strong> None of your activity, captures, or recordings ever leave your computer.</p>
+    <p class="lede"><strong>screensnap collects no data.</strong> None of your activity, captures, or recordings leave your computer, unless you explicitly connect your own Google Drive for backups, in which case only the recordings you upload go there, directly, and nowhere else.</p>
 
     <h2>What screensnap does</h2>
     <p>screensnap captures screenshots and screen / window / tab recordings and lets you annotate and edit them — trim, cut, crop, zoom, beautify with a backdrop, add layers, and export to MP4 or GIF. Every part of this — capture, the webcam bubble, annotation, editing, video encoding, and saving — happens <strong>entirely on your own machine, inside your browser</strong>.</p>
@@ -68,8 +68,8 @@
     <ul>
       <li><strong>No servers.</strong> There is no backend; the extension never sends your data anywhere.</li>
       <li><strong>No telemetry or analytics.</strong> We do not track usage, clicks, or any behavior.</li>
-      <li><strong>No accounts or sign-in.</strong> There is nothing to log in to.</li>
-      <li><strong>No network requests at runtime.</strong> The extension and its one bundled library (Mediabunny, for local video encoding) ship inside the extension; nothing is fetched from the internet while you use it.</li>
+      <li><strong>No accounts or sign-in.</strong> There is no screensnap account. The optional Google Drive backup uses your own Google sign-in, handled by Google.</li>
+      <li><strong>No network requests at runtime.</strong> The extension and its one bundled library (Mediabunny, for local video encoding) ship inside the extension; nothing is fetched from the internet while you use it. The one exception is the optional Google Drive backup below, which is off until you connect it and only ever talks to Google's own API.</li>
     </ul>
 
     <h2>Where your captures and recordings go</h2>
@@ -77,6 +77,17 @@
       <li><strong>Screenshots and recordings</strong> are saved to your browser's <strong>Downloads</strong> folder, like any other file. They are never uploaded.</li>
       <li>A just-finished recording is held <strong>temporarily in your browser's local storage (IndexedDB)</strong> only so the editor can open it; it stays on your device.</li>
       <li><strong>Settings</strong> (e.g. audio/format preferences) are stored locally via Chrome's <code>storage</code> API on your device.</li>
+    </ul>
+
+    <h2>Optional Google Drive backup (off by default)</h2>
+    <p>If you choose to connect Google Drive in the extension, screensnap can upload recordings to a private "screensnap" folder in <strong>your own</strong> Google Drive:</p>
+    <ul>
+      <li>It is <strong>opt-in twice over</strong>: nothing happens until you click Connect and approve Google's consent screen, and auto-upload is a separate toggle that starts off.</li>
+      <li>Uploads go <strong>directly from your browser to Google's Drive API</strong>. There is no screensnap server, no proxy, and no intermediary of any kind; we never receive, store, or see your files or your Google account data.</li>
+      <li>screensnap uses the narrowest Drive permission Google offers (<code>drive.file</code>): it can only see the files it created itself, never the rest of your Drive.</li>
+      <li>Uploaded files are <strong>private to your Google account</strong> by default; sharing them is entirely under your control in Google Drive.</li>
+      <li>Disconnecting in the extension revokes screensnap's access at Google and deletes everything it stored about the connection. You can also revoke access anytime at <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.</li>
+      <li>screensnap's use of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the <strong>Limited Use</strong> requirements: Google user data is used only to provide the user-facing backup feature described here, and is never transferred, sold, used for advertising, or read by humans.</li>
     </ul>
 
     <h2>Permissions and why they are needed</h2>
@@ -87,6 +98,8 @@
       <li><code>downloads</code> — to save your screenshots and recordings to your Downloads folder.</li>
       <li><code>storage</code> — to remember your preferences locally.</li>
       <li><strong>Camera / microphone</strong> (requested only when you choose them) — to include your webcam and voice in a recording. These streams are processed locally and never transmitted.</li>
+      <li><code>identity</code> — Chrome's sign-in plumbing for the optional Google Drive backup. It sits unused, and causes no Google traffic at all, until you click Connect.</li>
+      <li><strong>Access to <code>googleapis.com</code></strong> (optional) — requested only when you connect Google Drive, to upload recordings to your own Drive. Never requested otherwise.</li>
     </ul>
 
     <h2>Children's privacy</h2>
