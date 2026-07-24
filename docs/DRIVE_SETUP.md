@@ -35,6 +35,8 @@ Until the placeholder client id is replaced, the popup shows the Drive section a
 - Uploads go to a "screensnap" folder in My Drive, private to the user's account.
 - Auth and uploads talk directly to `googleapis.com` from the user's browser. There is no
   intermediary server and nothing is proxied.
-- The `identity` permission and the `https://*.googleapis.com/*` host permission are optional and
-  only requested when the user clicks Connect. Disconnecting revokes the grant at Google and
-  clears everything local.
+- The `identity` permission ships in the manifest (Chrome shows no warning for it, and it grants
+  nothing by itself; it cannot be an optional permission because Chrome doesn't reliably expose a
+  runtime-granted API namespace to a running service worker). The `https://*.googleapis.com/*`
+  host permission is optional and only requested when the user clicks Connect. Disconnecting
+  revokes the grant at Google and clears everything local.

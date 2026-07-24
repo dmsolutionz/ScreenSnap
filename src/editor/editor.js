@@ -12,6 +12,7 @@ import { createTimeline } from "./timeline.js";
 import { createAnnotator } from "./annotate.js";
 import { runExport, runGifExport } from "./export.js";
 import { driveStatus, uploadToDrive } from "../lib/drive.js";
+import { MSG } from "../lib/messages.js";
 import { createCropOverlay } from "./crop-overlay.js";
 import { createZoomOverlay } from "./zoom-overlay.js";
 import { createSelectionOverlay } from "./selection-overlay.js";
@@ -345,11 +346,7 @@ function buildToolbar(el, transforms) {
       <button data-exp="drive" id="ss-exp-drive" hidden>Upload MP4 to Drive</button>
     </div>`;
 
-  // The Drive item only appears when the user connected Google Drive in the popup (opt-in backup);
-  // for everyone else the menu is exactly the local-only menu it always was.
-  driveStatus()
-    .then((d) => { if (d.supported && d.configured && d.connected) el.querySelector("#ss-exp-drive").hidden = false; })
-    .catch(() => {});
+  refreshDriveMenuItem();
 
   // ── popovers ──────────────────────────────────────────────────────────────────────────────────
   const closePopovers = (except) => {
@@ -437,7 +434,12 @@ function buildToolbar(el, transforms) {
     const b = e.target.closest("[data-exp]"); if (!b) return;
     closePopovers();
     if (b.dataset.exp === "orig") downloadOriginal();
-    else if (b.dataset.exp === "drive") driveExport(el.querySelector("#ss-export"));
+    else if (b.dataset.exp === "drive") {
+      // Not connected yet: the item reads "Set up Drive upload" and opens the Cloud setup window
+      // (storage.onChanged flips it to the real upload action once connected).
+      if (b.dataset.connected) driveExport(el.querySelector("#ss-export"));
+      else chrome.runtime.sendMessage({ type: MSG.DRIVE_OPEN_SETUP }).catch(() => {});
+    }
     else doExport(el.querySelector("#ss-export"), b.dataset.exp === "gif" ? "gif" : undefined);
   });
   el.querySelector("#ss-close").addEventListener("click", () => closeEditor());
@@ -935,8 +937,45 @@ async function doExport(btn, format) {
   }
 }
 
+// Keep the export menu's Drive item current: hidden when the build can't do Drive at all,
+// "Set up Drive upload" before the user connects, "Upload MP4 to Drive" after. Reacts live to
+// the Cloud setup window connecting/disconnecting via chrome.storage.onChanged below.
+function refreshDriveMenuItem() {
+  const item = document.getElementById("ss-exp-drive");
+  if (!item) return;
+  driveStatus()
+    .then((d) => {
+      if (!d.supported || !d.configured) { item.hidden = true; return; }
+      item.hidden = false;
+      item.dataset.connected = d.connected ? "1" : "";
+      item.textContent = d.connected ? "Upload MP4 to Drive" : "Set up Drive upload";
+    })
+    .catch(() => {});
+}
+chrome.storage?.onChanged?.addListener((ch, area) => {
+  if (area === "local" && ch.driveAccount) refreshDriveMenuItem();
+});
+
+// Surface the service worker's auto-backup of the raw recording (state.drive) in the status bar,
+// so an upload the user asked for isn't invisible while they edit. Transient by design: the next
+// setStatus from an edit overwrites it, and the "done" note restores the normal line after a beat.
+chrome.runtime?.onMessage?.addListener((m, sender) => {
+  if (sender.id !== chrome.runtime.id || !m || m.type !== MSG.STATE_CHANGED) return;
+  const d = m.state && m.state.drive;
+  if (!d || !session) return;
+  const el = session.shell.statusEl;
+  if (d.status === "uploading") { el.classList.remove("ss-status-err"); el.textContent = `Backing up original to Drive ${d.pct || 0}%`; }
+  else if (d.status === "done") {
+    el.classList.remove("ss-status-err");
+    el.textContent = "Original backed up to Drive";
+    setTimeout(() => { if (session) setStatus(el, session.meta, session.transforms); }, 4000);
+  } else if (d.status === "error") {
+    setStatus(el, session.meta, session.transforms, "Drive backup failed: " + (d.error || "unknown error"));
+  }
+});
+
 // Export the edited MP4 and push it straight to the user's Google Drive instead of saving locally.
-// Only reachable when Drive is connected (the menu item stays hidden otherwise); the upload runs
+// Only reachable when Drive is connected (the menu item reads "Set up" otherwise); the upload runs
 // here in the editor page, so progress lives on the button and closing the tab cancels it.
 async function driveExport(btn) {
   if (!session) return;

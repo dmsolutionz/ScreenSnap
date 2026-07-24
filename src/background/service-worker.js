@@ -71,6 +71,8 @@ async function handle(msg, sender) {
       // inside uploadToDrive keep this worker alive for the duration.
       void uploadClip(msg.clipId, msg.fileName);
       return { ok: true };
+    case MSG.DRIVE_OPEN_SETUP:
+      return openCloudSetup();
 
     case MSG.START_RECORDING: {
       // Refuse to start over an active take: re-entering here mid-recording (a stale popup view, a
@@ -289,6 +291,22 @@ async function editorSave(msg) {
 async function editorCancel() { pendingCapture = null; return { ok: true }; }
 
 // ── Google Drive backup (opt-in) ─────────────────────────────────────────────
+// The Cloud setup window: a small dedicated page that owns connect/disconnect. A window (not the
+// popup) because Google's consent window steals focus, which closes a popup mid-flow. Single
+// instance: re-clicking focuses the existing window instead of stacking a second one.
+let cloudWinId = null;
+async function openCloudSetup() {
+  if (cloudWinId != null) {
+    const w = await chrome.windows.get(cloudWinId).catch(() => null);
+    if (w) { await chrome.windows.update(cloudWinId, { focused: true }).catch(() => {}); return { ok: true }; }
+    cloudWinId = null;
+  }
+  const w = await chrome.windows.create({ url: chrome.runtime.getURL("src/cloud/cloud.html"), type: "popup", width: 430, height: 600, focused: true }).catch(() => null);
+  cloudWinId = w ? w.id : null;
+  return { ok: !!w };
+}
+chrome.windows.onRemoved.addListener((id) => { if (id === cloudWinId) cloudWinId = null; });
+
 // Auto-upload gate for a just-finished recording: only when the user flipped the setting on AND
 // connected an account. Everything else is a silent no-op — the default build never touches the network.
 async function maybeAutoUpload(clipId, fileName) {

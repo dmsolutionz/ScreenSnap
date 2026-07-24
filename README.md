@@ -116,8 +116,10 @@ mid-recording. The popup, recorder window, and overlays all reflect it live via 
 uses the standard **`getDisplayMedia()`** Web API from the offscreen document — it needs **no extra
 permission** and shows nothing until you start a Screen / Window recording and pick a source (no background
 screen access). Screen + Cam additionally uses your webcam via standard `getUserMedia` (one-time browser
-prompt) — also no manifest permission. The Google Drive backup's `identity` permission and
-`googleapis.com` host access are **optional** and requested only when you click Connect.
+prompt) — also no manifest permission. For the optional Google Drive backup, `identity` ships in the
+manifest (it is warning-free and inert until you connect — Chrome can't reliably expose a
+runtime-granted API to a running service worker, so it can't be optional), while `googleapis.com`
+host access **is** optional and requested only when you click Connect.
 
 ## Known limitations
 

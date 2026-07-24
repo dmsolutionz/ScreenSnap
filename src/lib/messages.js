@@ -66,6 +66,9 @@ export const MSG = Object.freeze({
   DRIVE_CONNECT: "drive-connect",
   DRIVE_DISCONNECT: "drive-disconnect",
   DRIVE_UPLOAD_CLIP: "drive-upload-clip", // {clipId, fileName}
+  // any surface -> service worker: open the Cloud setup window (src/cloud/). A dedicated window
+  // because the popup closes the instant Google's consent window takes focus.
+  DRIVE_OPEN_SETUP: "drive-open-setup",
 });
 
 export const TARGET = Object.freeze({ SW: "sw", OFFSCREEN: "offscreen" });

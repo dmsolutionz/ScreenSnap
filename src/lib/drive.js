@@ -50,9 +50,10 @@ function tokenFromResult(r) {
 }
 
 async function getToken(interactive) {
-  // The optional identity permission materializes the chrome.identity namespace when granted; if
-  // it's missing here the user revoked it (or the grant click never happened).
-  if (!chrome.identity?.getAuthToken) throw new Error("Google Drive is not connected — connect it in the popup.");
+  // identity is a required (warning-free) manifest permission, so this only trips on a build for a
+  // browser without getAuthToken (Firefox). It was optional once: Chrome doesn't reliably expose a
+  // runtime-granted API namespace to an already-running service worker, which broke Connect.
+  if (!chrome.identity?.getAuthToken) throw new Error("Google sign-in isn't available in this browser.");
   const result = await chrome.identity.getAuthToken({ interactive: !!interactive });
   const token = tokenFromResult(result);
   if (!token) throw new Error("Google sign-in was not completed.");

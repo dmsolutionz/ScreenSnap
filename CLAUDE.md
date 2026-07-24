@@ -25,10 +25,13 @@ These are hard rules for anyone — human or AI — working in this project.
 - Privacy-first and fully local: all capture, processing, and storage stay on the user's machine. No external
   servers, no telemetry, no analytics, no runtime network calls. The single sanctioned exception is the
   **opt-in Google Drive backup** (`src/lib/drive.js`): off by default, inert until the user clicks Connect
-  (the `identity` permission and googleapis host permission are optional and requested with that click),
-  talks only to Google's Drive API directly from the browser (scope `drive.file`, no intermediary, no
-  screensnap server), and disconnect revokes the grant. Any future cloud feature must meet the same bar:
-  user-initiated, direct-to-their-own-account, zero third-party middlemen, zero network when not connected.
+  in the Cloud setup window. The `identity` permission is required-but-warning-free in the manifest (it was
+  optional once, but Chrome doesn't reliably expose a runtime-granted API namespace to an already-running
+  service worker, which broke Connect — do not move it back); the googleapis host permission stays optional
+  and is requested at Connect. Talks only to Google's Drive API directly from the browser (scope
+  `drive.file`, no intermediary, no screensnap server), and disconnect revokes the grant. Any future cloud
+  feature must meet the same bar: user-initiated, direct-to-their-own-account, zero third-party middlemen,
+  zero network when not connected.
 - No "Awesome Screenshot" antipatterns: no mandatory cloud hosting, no upsell. (Opening the local video editor in a
   tab after a recording is fine — it is on-device and the editor's **Download** button saves the clip as-is.)
 
@@ -72,5 +75,9 @@ time-scoped overlay layers, a left tool rail with draw-once tools, snapping, and
 clip as-is). All surfaces reflect state live via `STATE_CHANGED` (the editor itself runs standalone off IndexedDB).
 The **opt-in Google Drive backup** (`src/lib/drive.js`, plain fetch against the Drive v3 REST API, resumable chunked
 uploads) hangs off this flow: the service worker auto-uploads a finished clip from IndexedDB after `REC_DONE` (when
-the user enabled it), mirroring progress into `state.drive`; the popup owns connect/disconnect + the auto-upload
-toggle, and the editor's export menu can upload an edited MP4 directly. OAuth setup: `docs/DRIVE_SETUP.md`.
+the user enabled it), mirroring progress into `state.drive`. Connect/disconnect live in the **Cloud setup window**
+(`src/cloud/`, opened via `DRIVE_OPEN_SETUP`) — a dedicated window because the popup dies when Google's consent
+window takes focus; the popup's **settings tab** holds the auto-upload toggle and entry point, the recording-done
+card offers one-off upload/setup, and the editor's export menu uploads an edited MP4 directly (its Drive item reads
+"Set up Drive upload" until connected, and the editor's status bar mirrors auto-backup progress). OAuth setup:
+`docs/DRIVE_SETUP.md`.

@@ -42,8 +42,8 @@ your browser**.
 If you choose to connect Google Drive in the popup, screensnap can upload
 recordings to a private "screensnap" folder in **your own** Google Drive:
 
-- It is **opt-in twice over**: nothing happens until you click Connect and grant
-  the permissions, and auto-upload is a separate toggle that starts off.
+- It is **opt-in twice over**: nothing happens until you click Connect and approve
+  Google's consent screen, and auto-upload is a separate toggle that starts off.
 - Uploads go **directly from your browser to Google's Drive API**. There is no
   screensnap server, no proxy, no intermediary of any kind, and we never see your
   files or your account.
@@ -66,9 +66,12 @@ recordings to a private "screensnap" folder in **your own** Google Drive:
 - **Camera / microphone** (requested only when you choose them) — to include your
   webcam and voice in a recording. These streams are processed locally and never
   transmitted.
-- **`identity` + access to `googleapis.com`** (optional, requested only if you
-  connect Google Drive) — to sign in to your Google account and upload recordings
-  to your own Drive. Never requested otherwise.
+- **`identity`** — Chrome's sign-in plumbing for the optional Google Drive backup.
+  It sits unused (and causes no Google traffic at all) until you click Connect;
+  Chrome shows no permission warning for it because by itself it grants access to
+  nothing.
+- **Access to `googleapis.com`** (optional) — requested only when you connect
+  Google Drive, to upload recordings to your own Drive. Never requested otherwise.
 
 ## Children's privacy
 
