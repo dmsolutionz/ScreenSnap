@@ -32,9 +32,19 @@
     "downloads",
     "storage"
   ],
-  "optional_host_permissions": [
-    "<all_urls>"
+  "optional_permissions": [
+    "identity"
   ],
+  "optional_host_permissions": [
+    "<all_urls>",
+    "https://*.googleapis.com/*"
+  ],
+  "oauth2": {
+    "client_id": "REPLACE_WITH_OAUTH_CLIENT_ID.apps.googleusercontent.com",
+    "scopes": [
+      "https://www.googleapis.com/auth/drive.file"
+    ]
+  },
   "commands": {
     "stop-recording": {
       "suggested_key": { "default": "Alt+Shift+S" },

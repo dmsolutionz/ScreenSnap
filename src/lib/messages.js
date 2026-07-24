@@ -59,6 +59,13 @@ export const MSG = Object.freeze({
 
   // popup -> service worker: open the just-recorded clip in the video editor
   EDITOR_OPEN_CLIP: "editor-open-clip",
+
+  // popup -> service worker: opt-in Google Drive backup (src/lib/drive.js). Connect runs the OAuth
+  // consent flow in the service worker (the popup closes when the consent window takes focus);
+  // upload-clip pushes a stashed IndexedDB clip to Drive, progress lands in state.drive.
+  DRIVE_CONNECT: "drive-connect",
+  DRIVE_DISCONNECT: "drive-disconnect",
+  DRIVE_UPLOAD_CLIP: "drive-upload-clip", // {clipId, fileName}
 });
 
 export const TARGET = Object.freeze({ SW: "sw", OFFSCREEN: "offscreen" });
@@ -87,6 +94,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   bubbleSize: "md", // sm | md | lg
   bubbleCorner: "br", // tl | tr | bl | br — which corner the composited camera sits in
   camMirror: true, // mirror the camera (self-view); off = text behind you reads correctly
+  driveAutoUpload: false, // upload finished recordings to Google Drive (only while connected; opt-in)
 });
 
 // Allowed values + pure normalizers for the new live controls, so the popup, overlays, and tests agree.

@@ -23,7 +23,12 @@ These are hard rules for anyone — human or AI — working in this project.
 ## Product principles (do not regress)
 - Completely free and unrestricted: no paywalls, no watermarks, no forced sign-ups, no upsell prompts.
 - Privacy-first and fully local: all capture, processing, and storage stay on the user's machine. No external
-  servers, no telemetry, no analytics, no runtime network calls.
+  servers, no telemetry, no analytics, no runtime network calls. The single sanctioned exception is the
+  **opt-in Google Drive backup** (`src/lib/drive.js`): off by default, inert until the user clicks Connect
+  (the `identity` permission and googleapis host permission are optional and requested with that click),
+  talks only to Google's Drive API directly from the browser (scope `drive.file`, no intermediary, no
+  screensnap server), and disconnect revokes the grant. Any future cloud feature must meet the same bar:
+  user-initiated, direct-to-their-own-account, zero third-party middlemen, zero network when not connected.
 - No "Awesome Screenshot" antipatterns: no mandatory cloud hosting, no upsell. (Opening the local video editor in a
   tab after a recording is fine — it is on-device and the editor's **Download** button saves the clip as-is.)
 
@@ -65,3 +70,7 @@ track, then a track per overlay layer, audio with mute regions, and an optional 
 in via `OfflineAudioContext` at export) with trim / cuts / crop / zoom blocks / speed / resolution, resizable +
 time-scoped overlay layers, a left tool rail with draw-once tools, snapping, and MP4 / GIF export (or Download the
 clip as-is). All surfaces reflect state live via `STATE_CHANGED` (the editor itself runs standalone off IndexedDB).
+The **opt-in Google Drive backup** (`src/lib/drive.js`, plain fetch against the Drive v3 REST API, resumable chunked
+uploads) hangs off this flow: the service worker auto-uploads a finished clip from IndexedDB after `REC_DONE` (when
+the user enabled it), mirroring progress into `state.drive`; the popup owns connect/disconnect + the auto-upload
+toggle, and the editor's export menu can upload an edited MP4 directly. OAuth setup: `docs/DRIVE_SETUP.md`.

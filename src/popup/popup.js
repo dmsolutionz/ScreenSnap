@@ -2,6 +2,7 @@
 // DOM. All capture/record work happens in the service worker + offscreen document; the popup just
 // reflects live state (GET_STATE / STATE_CHANGED) and can close at any time without interrupting.
 import { MSG, PHASE, SOURCE, getSettings, setSettings, elapsedMs, fmtClock } from "../lib/messages.js";
+import { driveStatus, DRIVE_ORIGINS } from "../lib/drive.js";
 
 const app = document.getElementById("app");
 const send = (m) => chrome.runtime.sendMessage(m);
@@ -13,6 +14,7 @@ let captured = null;
 let doneInfo = null;
 let capturing = null;
 let bubPos = "br";
+let drive = { supported: false, configured: false, connected: false, account: null };
 let prevPhase = PHASE.IDLE;
 let timer = null;
 
@@ -149,7 +151,30 @@ function recordTab() {
         <span style="flex:1;font-size:13px;color:${C.fg2}">Mirror camera</span>${toggle(!!settings.camMirror, "camMirror")}
       </div>
     </div>
+    ${driveSection()}
   </div>`;
+}
+// Opt-in Google Drive backup. Hidden entirely where the OAuth flow can't run (the Firefox build);
+// shows a maintainer hint until an OAuth client id is wired up (docs/DRIVE_SETUP.md). Everything
+// stays local unless the user connects here.
+function driveSection() {
+  if (!drive.supported) return "";
+  let body;
+  if (!drive.configured) {
+    body = `<div style="font-size:12px;line-height:1.5;color:${C.muted}">Not available in this build — it needs a Google OAuth client id (see docs/DRIVE_SETUP.md).</div>`;
+  } else if (!drive.connected) {
+    body = `<button class="ghost-b" data-act="drive-connect" style="width:100%;padding:10px;background:#fff;border:1px solid ${C.boxLine};border-radius:9px;color:${C.fg};font-size:13px;font-weight:500;cursor:pointer">Connect Google Drive</button>
+      <div style="font-size:11px;line-height:1.5;color:${C.faint};margin-top:8px">Optional. Uploads go to a private screensnap folder in your own Drive — no other servers involved.</div>`;
+  } else {
+    body = `<div style="display:flex;align-items:center;gap:11px;margin-bottom:11px">
+        <span style="flex:1;font-size:14px;color:${C.fg2}">Auto-upload recordings</span>${toggle(!!settings.driveAutoUpload, "driveAutoUpload")}
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:${MONO};font-size:11px;color:${C.muted}">${esc(drive.account || "")}</span>
+        <button class="ghost-b" data-act="drive-disconnect" style="padding:5px 10px;background:none;border:none;color:${C.faint};font-size:12px;cursor:pointer;border-radius:6px;flex-shrink:0">Disconnect</button>
+      </div>`;
+  }
+  return `<div style="padding:13px 16px;border-top:1px solid ${C.line}">${sectionLabel("Google Drive backup")}${body}</div>`;
 }
 function capturedView() {
   return `<div style="padding:14px 16px 18px">
@@ -239,13 +264,26 @@ function savingView() {
     <div style="font-family:${MONO};font-size:11px;color:${C.faint};text-transform:uppercase;letter-spacing:0.05em">Writing native MP4 to Downloads…</div>
   </div>`;
 }
+// The Drive line on the done card: live upload progress / result from state.drive, or a manual
+// "Upload to Drive" button when connected and no upload has been attempted for this take.
+function driveDoneRow() {
+  const d = rec.drive;
+  const line = (color, text) => `<div style="font-family:${MONO};font-size:11px;color:${color};margin-top:9px;text-align:center;max-width:260px">${text}</div>`;
+  if (d && d.status === "uploading") return line(C.muted, `Uploading to Drive… ${d.pct || 0}%`);
+  if (d && d.status === "done") return line(C.green, `Uploaded to Drive ✓${d.link ? ` &nbsp;<a href="${esc(d.link)}" target="_blank" style="color:${C.muted}">Open</a>` : ""}`);
+  if (d && d.status === "error") return line(C.red, `Drive upload failed — ${esc(d.error || "unknown error")}`);
+  if (drive.connected && drive.configured && doneInfo.clipId) {
+    return `<button class="ghost-b" data-act="drive-upload" style="margin-top:12px;padding:8px 18px;background:#fff;border:1px solid ${C.boxLine};border-radius:9px;color:${C.fg2};font-size:12px;font-weight:500;cursor:pointer">Upload to Drive</button>`;
+  }
+  return "";
+}
 function doneView() {
   const note = doneInfo.note ? `<div style="font-family:${MONO};font-size:11px;color:${C.amber};margin-top:7px;text-align:center;max-width:260px">${esc(doneInfo.note)}</div>` : "";
   return `<div style="padding:38px 20px 30px;display:flex;flex-direction:column;align-items:center">
     <div style="width:46px;height:46px;border-radius:50%;background:${C.greenTint};border:1px solid ${C.greenLine};display:flex;align-items:center;justify-content:center">${ico("check", { sz: 22, c: C.green })}</div>
     <div style="font-size:15px;font-weight:500;color:${C.fg};margin-top:15px">Saved to Downloads</div>
     <div style="font-family:${MONO};font-size:11px;color:${C.muted};margin-top:6px">${esc(shortName(doneInfo.filename))}</div>
-    <div style="font-family:${MONO};font-size:11px;color:${C.faint};margin-top:3px">${clockStr(doneInfo.durationMs)} · ${shortName(doneInfo.filename).endsWith(".mp4") ? "H.264 + AAC" : "VP9 + Opus"}</div>${note}
+    <div style="font-family:${MONO};font-size:11px;color:${C.faint};margin-top:3px">${clockStr(doneInfo.durationMs)} · ${shortName(doneInfo.filename).endsWith(".mp4") ? "H.264 + AAC" : "VP9 + Opus"}</div>${note}${driveDoneRow()}
     <button class="prim-b" data-act="done" style="margin-top:20px;padding:11px 30px;background:${C.green};border:none;border-radius:9px;color:#fff;font-size:13px;font-weight:600;cursor:pointer">Done</button>
     ${doneInfo.clipId ? `<button class="ghost-b" data-act="edit-video" style="margin-top:10px;padding:9px 22px;background:#fff;border:1px solid ${C.boxLine};border-radius:9px;color:${C.fg};font-size:12px;font-weight:500;cursor:pointer;display:flex;align-items:center;gap:7px">${ico("video", { sz: 13, c: C.muted })}Edit video</button>` : ""}
   </div>`;
@@ -306,7 +344,36 @@ app.addEventListener("click", async (e) => {
   if (act === "shot-discard") { await send({ type: MSG.SHOT_DISCARD }); captured = null; return render(); }
   if (act === "done") { doneInfo = null; localTab = "record"; return render(); }
   if (act === "edit-video") { if (doneInfo && doneInfo.clipId) send({ type: MSG.EDITOR_OPEN_CLIP, clipId: doneInfo.clipId }); window.close(); return; }
+  if (act === "drive-connect") return doDriveConnect(node);
+  if (act === "drive-disconnect") { await send({ type: MSG.DRIVE_DISCONNECT }).catch(() => {}); drive = await driveStatus(); return render(); }
+  if (act === "drive-upload") {
+    node.textContent = "Starting…";
+    node.style.pointerEvents = "none"; // progress takes over via STATE_CHANGED → rec.drive
+    send({ type: MSG.DRIVE_UPLOAD_CLIP, clipId: doneInfo && doneInfo.clipId, fileName: doneInfo && doneInfo.filename });
+    return;
+  }
 });
+
+// Connect Google Drive: the optional identity permission + googleapis host need this click's
+// gesture; the consent window then steals focus and closes the popup, so the service worker owns
+// the rest of the flow — the next popup open (or this one, if it survives) shows the account.
+async function doDriveConnect(btn) {
+  try {
+    const granted = await chrome.permissions.request({ permissions: ["identity"], origins: DRIVE_ORIGINS });
+    if (!granted) return flashError("Google Drive needs those permissions to connect.");
+  } catch (e) {
+    return flashError(String((e && e.message) || e));
+  }
+  btn.textContent = "Opening Google sign-in…";
+  try {
+    const res = await send({ type: MSG.DRIVE_CONNECT });
+    if (res && res.ok === false) return flashError(res.error || "Couldn't connect Google Drive.");
+    drive = await driveStatus();
+    render();
+  } catch (e) {
+    flashError(String((e && e.message) || e));
+  }
+}
 
 async function doCapture(mode) {
   capturing = mode;
@@ -375,6 +442,7 @@ function onState(state) {
 
 async function init() {
   settings = await getSettings();
+  drive = await driveStatus().catch(() => drive);
   bubPos = settings.bubbleCorner || "br";
   chrome.runtime.onMessage.addListener((msg, sender) => { if (sender.id === chrome.runtime.id && msg && msg.type === MSG.STATE_CHANGED) onState(msg.state); });
   try {

@@ -11,6 +11,7 @@ import { createPreview } from "./preview.js";
 import { createTimeline } from "./timeline.js";
 import { createAnnotator } from "./annotate.js";
 import { runExport, runGifExport } from "./export.js";
+import { driveStatus, uploadToDrive } from "../lib/drive.js";
 import { createCropOverlay } from "./crop-overlay.js";
 import { createZoomOverlay } from "./zoom-overlay.js";
 import { createSelectionOverlay } from "./selection-overlay.js";
@@ -341,7 +342,14 @@ function buildToolbar(el, transforms) {
       <button data-exp="mp4">Export MP4</button>
       <button data-exp="gif">Export GIF</button>
       <button data-exp="orig">Download original</button>
+      <button data-exp="drive" id="ss-exp-drive" hidden>Upload MP4 to Drive</button>
     </div>`;
+
+  // The Drive item only appears when the user connected Google Drive in the popup (opt-in backup);
+  // for everyone else the menu is exactly the local-only menu it always was.
+  driveStatus()
+    .then((d) => { if (d.supported && d.configured && d.connected) el.querySelector("#ss-exp-drive").hidden = false; })
+    .catch(() => {});
 
   // ── popovers ──────────────────────────────────────────────────────────────────────────────────
   const closePopovers = (except) => {
@@ -429,6 +437,7 @@ function buildToolbar(el, transforms) {
     const b = e.target.closest("[data-exp]"); if (!b) return;
     closePopovers();
     if (b.dataset.exp === "orig") downloadOriginal();
+    else if (b.dataset.exp === "drive") driveExport(el.querySelector("#ss-export"));
     else doExport(el.querySelector("#ss-export"), b.dataset.exp === "gif" ? "gif" : undefined);
   });
   el.querySelector("#ss-close").addEventListener("click", () => closeEditor());
@@ -921,6 +930,38 @@ async function doExport(btn, format) {
     setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 1800);
   } catch (err) {
     btn.textContent = "Export failed";
+    setStatus(session.shell.statusEl, session.meta, session.transforms, String((err && err.message) || err));
+    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2600);
+  }
+}
+
+// Export the edited MP4 and push it straight to the user's Google Drive instead of saving locally.
+// Only reachable when Drive is connected (the menu item stays hidden otherwise); the upload runs
+// here in the editor page, so progress lives on the button and closing the tab cancels it.
+async function driveExport(btn) {
+  if (!session) return;
+  const orig = btn.textContent;
+  btn.disabled = true;
+  session.preview.pause();
+  updateTransport();
+  try {
+    const { blob, fileName } = await runExport({
+      input: session.input,
+      transforms: session.transforms,
+      store: session.store,
+      fileName: session.fileName,
+      extraAudioInput: session.extraAudioInput,
+      onProgress: (frac) => { btn.textContent = `Exporting ${Math.round(frac * 100)}%`; },
+      download: false,
+    });
+    btn.textContent = "Uploading 0%";
+    await uploadToDrive(blob, fileName, {
+      onProgress: (done, total) => { btn.textContent = `Uploading ${total ? Math.round((done / total) * 100) : 0}%`; },
+    });
+    btn.textContent = "Uploaded ✓";
+    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 1800);
+  } catch (err) {
+    btn.textContent = "Upload failed";
     setStatus(session.shell.statusEl, session.meta, session.transforms, String((err && err.message) || err));
     setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2600);
   }
