@@ -28,7 +28,7 @@ export function driveSupported() {
   return !!chrome.runtime.getManifest().oauth2;
 }
 
-// True when the manifest carries a real OAuth client id (see docs/DRIVE_SETUP.md).
+// True when the manifest carries a real OAuth client id.
 export function driveConfigured() {
   const id = chrome.runtime.getManifest().oauth2?.client_id || "";
   return !!id && !id.includes("REPLACE");

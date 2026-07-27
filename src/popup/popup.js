@@ -160,7 +160,7 @@ function recordTab() {
 function settingsTab() {
   let cloud;
   if (!drive.supported || !drive.configured) {
-    cloud = `<div style="padding:0 16px 6px;font-size:12px;line-height:1.5;color:${C.muted}">Cloud backup isn't available in this build${drive.supported ? " — it needs a Google OAuth client id (see docs/DRIVE_SETUP.md)" : ""}.</div>`;
+    cloud = `<div style="padding:0 16px 6px;font-size:12px;line-height:1.5;color:${C.muted}">Cloud backup isn't available in this build${drive.supported ? ", it needs a Google OAuth client id" : ""}.</div>`;
   } else if (!drive.connected) {
     cloud = `${navRow(`data-act="drive-setup"`, "cloud", "Google Drive", "Not connected · set up", false)}
       <div style="padding:0 16px 6px;font-size:11px;line-height:1.6;color:${C.faint}">Optional. Back up recordings to a private folder in your own Drive — nothing else ever leaves this device.</div>`;

@@ -34,7 +34,7 @@ const bullet = (t) => `<div style="display:flex;gap:9px;align-items:flex-start;m
 
 function body() {
   if (!drive.supported || !drive.configured) {
-    return `<div style="font-size:13px;line-height:1.6;color:${C.muted}">Cloud backup isn't available in this build${drive.supported ? " — it needs a Google OAuth client id (see docs/DRIVE_SETUP.md)" : ""}.</div>`;
+    return `<div style="font-size:13px;line-height:1.6;color:${C.muted}">Cloud backup isn't available in this build${drive.supported ? ", it needs a Google OAuth client id" : ""}.</div>`;
   }
   if (!drive.connected) {
     return `

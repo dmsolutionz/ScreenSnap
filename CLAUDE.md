@@ -79,5 +79,4 @@ the user enabled it), mirroring progress into `state.drive`. Connect/disconnect 
 (`src/cloud/`, opened via `DRIVE_OPEN_SETUP`) — a dedicated window because the popup dies when Google's consent
 window takes focus; the popup's **settings tab** holds the auto-upload toggle and entry point, the recording-done
 card offers one-off upload/setup, and the editor's export menu uploads an edited MP4 directly (its Drive item reads
-"Set up Drive upload" until connected, and the editor's status bar mirrors auto-backup progress). OAuth setup:
-`docs/DRIVE_SETUP.md`.
+"Set up Drive upload" until connected, and the editor's status bar mirrors auto-backup progress).

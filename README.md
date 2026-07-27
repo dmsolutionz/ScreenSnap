@@ -62,8 +62,7 @@ Built because being nagged to log in just to save a screenshot is miserable.
   editor's export menu
 - Direct browser-to-Google only (narrow `drive.file` scope: screensnap can only see files it
   created). **No screensnap servers, no proxy, no account with us** — disconnect revokes access.
-  Until you connect it, the extension makes no network requests at all. Maintainer setup:
-  [docs/DRIVE_SETUP.md](docs/DRIVE_SETUP.md)
+  Until you connect it, the extension makes no network requests at all.
 
 ## MP4, natively — no transcoding
 
