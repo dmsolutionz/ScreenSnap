@@ -5,6 +5,10 @@ Plain text only: no markdown, no emojis, no em dashes.
 
 ---
 
+v1.5 has been released with the following updates:
+• Share a recording with a link. From the recording-done card or the editor's Export menu, screensnap uploads the clip to your own Google Drive, marks it "anyone with the link", and gives you a share page that plays it back. Sharing is per recording and opt-in, so your other recordings stay private.
+• A branded share page at screensnap.xyz that plays your recording for anyone you send the link to. Nothing is hosted by screensnap; the video streams from your own Drive.
+
 v1.4 has been released with the following updates:
 • Optional backup to your own Google Drive. Connect your Drive once in the new Settings tab and finished recordings can upload themselves to a private screensnap folder, or send single clips from the recording-done card and the editor. Off by default, and nothing else leaves your machine.
 • Upload an edited MP4 to Drive straight from the editor's Export menu.

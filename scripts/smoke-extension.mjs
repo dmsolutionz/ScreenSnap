@@ -125,10 +125,12 @@ try {
   await swEval(`chrome.tabs.update(${tab.id},{url:chrome.runtime.getURL('src/editor/editor.html?clipId=live')})`);
   for (let i = 0; i < 40; i++) { if (ed.state.loads > before) break; await sleep(150); }
   await sleep(2200);
-  const ui = await evaluate(ed.sessionId, `(()=>{const q=id=>!!document.getElementById(id);return {toolbar:q('ss-toolbar'),crop:q('ss-crop-btn'),zoomAdd:q('ss-zoom-add'),backdrop:q('ss-bd-btn'),exportGif:q('ss-export-gif'),zoomLane:q('ss-tl-zblocks')};})()`);
+  const ui = await evaluate(ed.sessionId, `(()=>{const q=s=>!!document.querySelector(s);return {toolbar:q('#ss-toolbar'),crop:q('#ss-crop-btn'),zoomAdd:q('#ss-zoom-add'),backdrop:q('#ss-backdrop-pop'),exportGif:q('#ss-pop-export [data-exp=gif]'),zoomLane:q('.ss-tl-ztime')};})()`);
   log("  ui: " + JSON.stringify(ui));
   await shot(ed.sessionId, "video-loaded");
-  await evaluate(ed.sessionId, `document.getElementById('ss-bd-btn').click()`); await sleep(300);
+  // Backdrop moved into a popover: open it, then enable the backdrop to exercise that render path.
+  await evaluate(ed.sessionId, `document.getElementById('ss-backdrop-pop').click()`); await sleep(150);
+  await evaluate(ed.sessionId, `(()=>{const c=document.getElementById('ss-bd-on');c.checked=true;c.dispatchEvent(new Event('change',{bubbles:true}));})()`); await sleep(300);
   await evaluate(ed.sessionId, `document.getElementById('ss-zoom-add').click()`); await sleep(300);
   const zoom = await evaluate(ed.sessionId, `({focusBox:!!document.querySelector('.ss-zfocus'),block:!!document.querySelector('.ss-tl-zblock')})`);
   log("  zoom: " + JSON.stringify(zoom));

@@ -11,7 +11,7 @@ import { createPreview } from "./preview.js";
 import { createTimeline } from "./timeline.js";
 import { createAnnotator } from "./annotate.js";
 import { runExport, runGifExport } from "./export.js";
-import { driveStatus, uploadToDrive } from "../lib/drive.js";
+import { driveStatus, uploadToDrive, makeShareable, shareUrl } from "../lib/drive.js";
 import { MSG } from "../lib/messages.js";
 import { createCropOverlay } from "./crop-overlay.js";
 import { createZoomOverlay } from "./zoom-overlay.js";
@@ -344,6 +344,7 @@ function buildToolbar(el, transforms) {
       <button data-exp="gif">Export GIF</button>
       <button data-exp="orig">Download original</button>
       <button data-exp="drive" id="ss-exp-drive" hidden>Upload MP4 to Drive</button>
+      <button data-exp="share" id="ss-exp-share" hidden>Get share link</button>
     </div>`;
 
   refreshDriveMenuItem();
@@ -440,6 +441,7 @@ function buildToolbar(el, transforms) {
       if (b.dataset.connected) driveExport(el.querySelector("#ss-export"));
       else chrome.runtime.sendMessage({ type: MSG.DRIVE_OPEN_SETUP }).catch(() => {});
     }
+    else if (b.dataset.exp === "share") shareExport(el.querySelector("#ss-export"));
     else doExport(el.querySelector("#ss-export"), b.dataset.exp === "gif" ? "gif" : undefined);
   });
   el.querySelector("#ss-close").addEventListener("click", () => closeEditor());
@@ -942,13 +944,15 @@ async function doExport(btn, format) {
 // the Cloud setup window connecting/disconnecting via chrome.storage.onChanged below.
 function refreshDriveMenuItem() {
   const item = document.getElementById("ss-exp-drive");
+  const share = document.getElementById("ss-exp-share");
   if (!item) return;
   driveStatus()
     .then((d) => {
-      if (!d.supported || !d.configured) { item.hidden = true; return; }
+      if (!d.supported || !d.configured) { item.hidden = true; if (share) share.hidden = true; return; }
       item.hidden = false;
       item.dataset.connected = d.connected ? "1" : "";
       item.textContent = d.connected ? "Upload MP4 to Drive" : "Set up Drive upload";
+      if (share) share.hidden = !d.connected; // sharing needs a connected account
     })
     .catch(() => {});
 }
@@ -1001,6 +1005,48 @@ async function driveExport(btn) {
     setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 1800);
   } catch (err) {
     btn.textContent = "Upload failed";
+    setStatus(session.shell.statusEl, session.meta, session.transforms, String((err && err.message) || err));
+    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2600);
+  }
+}
+
+// Export the edited MP4, push it to Drive, make it "anyone with link", and hand back a screensnap
+// share URL: opened in a new tab (so the user lands on the branded player) and copied to the clipboard.
+async function shareExport(btn) {
+  if (!session) return;
+  const orig = btn.textContent;
+  btn.disabled = true;
+  session.preview.pause();
+  updateTransport();
+  try {
+    const { blob, fileName } = await runExport({
+      input: session.input,
+      transforms: session.transforms,
+      store: session.store,
+      fileName: session.fileName,
+      extraAudioInput: session.extraAudioInput,
+      onProgress: (frac) => { btn.textContent = `Exporting ${Math.round(frac * 100)}%`; },
+      download: false,
+    });
+    btn.textContent = "Uploading 0%";
+    const res = await uploadToDrive(blob, fileName, {
+      onProgress: (done, total) => { btn.textContent = `Uploading ${total ? Math.round((done / total) * 100) : 0}%`; },
+    });
+    btn.textContent = "Creating link…";
+    await makeShareable(res.id);
+    const url = shareUrl(res.id, fileName);
+    navigator.clipboard?.writeText(url).catch(() => {});
+    // chrome.tabs.create works from an extension page without a fresh user gesture (window.open would
+    // be blocked after the long export/upload), so the link reliably opens on the branded player.
+    if (chrome.tabs?.create) chrome.tabs.create({ url });
+    else window.open(url, "_blank", "noopener");
+    btn.textContent = "Link ready ✓";
+    const el = session.shell.statusEl;
+    el.classList.remove("ss-status-err");
+    el.textContent = "Share link copied to clipboard";
+    setTimeout(() => { if (session) setStatus(el, session.meta, session.transforms); btn.textContent = orig; btn.disabled = false; }, 3200);
+  } catch (err) {
+    btn.textContent = "Share failed";
     setStatus(session.shell.statusEl, session.meta, session.transforms, String((err && err.message) || err));
     setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2600);
   }

@@ -94,6 +94,28 @@ export async function driveDisconnect() {
   await chrome.storage.local.remove(["driveAccount", "driveFolderId"]);
 }
 
+// Base URL of the screensnap share player (docs/v/). The file id (and optional title) ride in the
+// URL fragment, so they are never sent to the static host that serves the page.
+export const SHARE_BASE = "https://screensnap.xyz/v/";
+
+// Build the share-player URL for a Drive file id, carrying the file name as a title.
+export function shareUrl(fileId, name) {
+  const title = name ? "&title=" + encodeURIComponent(String(name).replace(/\.[^.]+$/, "")) : "";
+  return `${SHARE_BASE}#id=${fileId}${title}`;
+}
+
+// Make an app-created file link-shareable: "anyone with the link" can view it, unlisted (not
+// searchable). Within the drive.file scope because the extension created the file itself. Idempotent
+// enough — re-granting the same public permission is a harmless no-op on Drive's side.
+export async function makeShareable(fileId) {
+  const token = await getToken(false);
+  await driveFetch(token, `${API}/files/${fileId}/permissions?fields=id`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json; charset=UTF-8" },
+    body: JSON.stringify({ role: "reader", type: "anyone", allowFileDiscovery: false }),
+  });
+}
+
 // fetch wrapper that retries exactly once on 401 with a freshly minted token (cached tokens
 // expire after an hour; removeCachedAuthToken + silent getAuthToken transparently renews).
 async function driveFetch(token, url, init = {}, isRetry = false) {

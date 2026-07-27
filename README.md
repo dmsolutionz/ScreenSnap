@@ -60,6 +60,9 @@ Built because being nagged to log in just to save a screenshot is miserable.
 - Connect **your own Google Drive** in the popup and screensnap can **auto-upload finished
   recordings** to a private "screensnap" folder — or upload one-off from the done card / the
   editor's export menu
+- **Share a recording with a link.** From the done card or the editor, screensnap marks that clip
+  "anyone with the link" and hands you a branded share page at **screensnap.xyz/v/** that plays it back.
+  Sharing is per-recording and opt-in, so your other recordings stay private.
 - Direct browser-to-Google only (narrow `drive.file` scope: screensnap can only see files it
   created). **No screensnap servers, no proxy, no account with us** — disconnect revokes access.
   Until you connect it, the extension makes no network requests at all.
