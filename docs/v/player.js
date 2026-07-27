@@ -41,6 +41,11 @@
     '<svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" ' +
     'stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 7.5l3.2 3.2L12 3.5"></path></svg>';
 
+  // The recording id lives in the URL fragment, so navigating between share links (and back/forward)
+  // only changes the hash, which never reloads the page. Force a reload so the new recording loads
+  // instead of the page appearing to do nothing.
+  window.addEventListener("hashchange", () => location.reload());
+
   // ---- Link parameters + shared state -------------------------------------
 
   const params = new URLSearchParams(location.hash.replace(/^#/, ""));

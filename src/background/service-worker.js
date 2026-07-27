@@ -2,7 +2,7 @@
 // video-circle recording run in the offscreen document. Recordings save as native MP4 (no transcoding).
 import { MSG, TARGET, PHASE, SOURCE, getSettings, setSettings, restartOptions, stamp, elapsedMs } from "../lib/messages.js";
 import { preparePageForCapture, gotoTile, restorePageAfterCapture } from "../content/fullpage.js";
-import { driveConnect, driveDisconnect, driveStatus, uploadToDrive } from "../lib/drive.js";
+import { driveConnect, driveDisconnect, driveStatus, uploadToDrive, makeShareable, shareUrl } from "../lib/drive.js";
 import { getBlob } from "../editor/idb.js";
 
 const STATE_KEY = "recordingState";
@@ -73,6 +73,11 @@ async function handle(msg, sender) {
       return { ok: true };
     case MSG.DRIVE_OPEN_SETUP:
       return openCloudSetup();
+    case MSG.DRIVE_SHARE_CLIP:
+      // Fire-and-forget like upload: uploads the clip first if needed, sets "anyone with link", and
+      // the resulting screensnap share URL lands in state.drive.shareUrl for the popup to show + copy.
+      void shareClip(msg.clipId, msg.fileName);
+      return { ok: true };
 
     case MSG.START_RECORDING: {
       // Refuse to start over an active take: re-entering here mid-recording (a stale popup view, a
@@ -338,9 +343,32 @@ async function uploadClip(clipId, fileName) {
         void setState({ drive: { status: "uploading", pct, fileName: name } });
       },
     });
-    await setState({ drive: { status: "done", pct: 100, fileName: name, link: res.webViewLink || null } });
+    await setState({ drive: { status: "done", pct: 100, fileName: name, fileId: res.id || null, link: res.webViewLink || null } });
   } catch (e) {
     await setState({ drive: { status: "error", fileName: name, error: String((e && e.message) || e) } });
+  }
+}
+
+// "Get share link": ensure the take is on Drive (upload if it isn't), flip it to "anyone with link",
+// and mint the screensnap.xyz/v/ share URL into state.drive.shareUrl. Fire-and-forget from the message
+// handler; the popup follows along via STATE_CHANGED and copies the URL when it appears.
+async function shareClip(clipId, fileName) {
+  const name = (fileName || "recording.mp4").split("/").pop();
+  try {
+    let drive = (await getState()).drive;
+    let fileId = drive && drive.status === "done" ? drive.fileId : null;
+    if (!fileId) {
+      await uploadClip(clipId, name); // sets state.drive to done (with fileId) or error
+      drive = (await getState()).drive;
+      if (!drive || drive.status !== "done" || !drive.fileId) return; // uploadClip already surfaced the error
+      fileId = drive.fileId;
+    }
+    await setState({ drive: { ...drive, sharing: true, shareError: null } });
+    await makeShareable(fileId);
+    await setState({ drive: { ...(await getState()).drive, sharing: false, shareUrl: shareUrl(fileId, name) } });
+  } catch (e) {
+    const cur = (await getState()).drive || {};
+    await setState({ drive: { ...cur, sharing: false, shareError: String((e && e.message) || e) } });
   }
 }
 

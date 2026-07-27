@@ -274,15 +274,33 @@ function savingView() {
 // "Upload to Drive" button when connected and no upload has been attempted for this take.
 function driveDoneRow() {
   const d = rec.drive;
-  const line = (color, text) => `<div style="font-family:${MONO};font-size:11px;color:${color};margin-top:9px;text-align:center;max-width:260px">${text}</div>`;
+  const line = (color, text) => `<div style="font-family:${MONO};font-size:11px;color:${color};margin-top:9px;text-align:center;max-width:270px">${text}</div>`;
+
+  // A public share link is ready — show it with one-click copy.
+  if (d && d.shareUrl) {
+    return `<div style="margin-top:13px;width:100%;max-width:280px;display:flex;flex-direction:column;align-items:center;gap:7px">
+      <div style="font-family:${MONO};font-size:11px;color:${C.green}">Share link ready · anyone with the link</div>
+      <div style="display:flex;width:100%;gap:6px">
+        <input readonly value="${esc(d.shareUrl)}" style="flex:1;min-width:0;font-family:${MONO};font-size:11px;padding:8px 10px;border:1px solid ${C.boxLine};border-radius:8px;background:#fff;color:${C.fg2}" />
+        <button class="ghost-b" data-act="copy-share" data-url="${esc(d.shareUrl)}" style="padding:8px 14px;background:${C.green};border:none;border-radius:8px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap">Copy</button>
+      </div>
+    </div>`;
+  }
+  if (d && d.sharing) return line(C.muted, "Preparing share link…");
   if (d && d.status === "uploading") return line(C.muted, `Uploading to Drive… ${d.pct || 0}%`);
-  if (d && d.status === "done") return line(C.green, `Uploaded to Drive ✓${d.link ? ` &nbsp;<a href="${esc(d.link)}" target="_blank" style="color:${C.muted}">Open</a>` : ""}`);
+  if (d && d.shareError) return line(C.red, `Couldn't create the link — ${esc(d.shareError)}`);
   if (d && d.status === "error") return line(C.red, `Drive upload failed — ${esc(d.error || "unknown error")}`);
+
+  // Connected: the primary action is sharing (it uploads first if needed); keep a plain Drive link once uploaded.
   if (drive.connected && drive.configured && doneInfo.clipId) {
-    return `<button class="ghost-b" data-act="drive-upload" style="margin-top:12px;padding:8px 18px;background:#fff;border:1px solid ${C.boxLine};border-radius:9px;color:${C.fg2};font-size:12px;font-weight:500;cursor:pointer">Upload to Drive</button>`;
+    const open = d && d.status === "done" && d.link ? `<a href="${esc(d.link)}" target="_blank" style="font-family:${MONO};font-size:11px;color:${C.muted};text-decoration:none">Open in Drive</a>` : "";
+    return `<div style="margin-top:12px;display:flex;flex-direction:column;align-items:center;gap:7px">
+      <button class="ghost-b" data-act="drive-share" style="padding:8px 18px;background:#fff;border:1px solid ${C.boxLine};border-radius:9px;color:${C.fg2};font-size:12px;font-weight:600;cursor:pointer">Get share link</button>
+      ${open}
+    </div>`;
   }
   if (drive.supported && drive.configured && doneInfo.clipId) {
-    return `<button class="ghost-b" data-act="drive-setup" style="margin-top:12px;padding:8px 18px;background:none;border:none;color:${C.faint};font-size:12px;cursor:pointer;border-radius:8px">Back up to Drive: set up</button>`;
+    return `<button class="ghost-b" data-act="drive-setup" style="margin-top:12px;padding:8px 18px;background:none;border:none;color:${C.faint};font-size:12px;cursor:pointer;border-radius:8px">Share via Drive: set up</button>`;
   }
   return "";
 }
@@ -360,6 +378,23 @@ app.addEventListener("click", async (e) => {
     node.textContent = "Starting…";
     node.style.pointerEvents = "none"; // progress takes over via STATE_CHANGED → rec.drive
     send({ type: MSG.DRIVE_UPLOAD_CLIP, clipId: doneInfo && doneInfo.clipId, fileName: doneInfo && doneInfo.filename });
+    return;
+  }
+  if (act === "drive-share") {
+    node.textContent = "Preparing…";
+    node.style.pointerEvents = "none"; // the share URL takes over via STATE_CHANGED → rec.drive.shareUrl
+    send({ type: MSG.DRIVE_SHARE_CLIP, clipId: doneInfo && doneInfo.clipId, fileName: doneInfo && doneInfo.filename });
+    return;
+  }
+  if (act === "copy-share") {
+    try {
+      await navigator.clipboard.writeText(node.dataset.url);
+      node.textContent = "Copied";
+      setTimeout(() => { node.textContent = "Copy"; }, 1400);
+    } catch {
+      const inp = node.parentElement && node.parentElement.querySelector("input");
+      if (inp) { inp.focus(); inp.select(); }
+    }
     return;
   }
 });
