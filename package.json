@@ -9,7 +9,9 @@
     "make:icons": "node scripts/make-icons.mjs",
     "package": "node scripts/package.mjs",
     "lint": "eslint src",
+    "preview": "node scripts/serve-docs.mjs",
     "smoke": "node scripts/smoke-extension.mjs",
+    "smoke:share": "node scripts/smoke-share-player.mjs",
     "test": "node --test"
   },
   "devDependencies": {

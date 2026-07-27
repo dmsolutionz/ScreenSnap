@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Shared with screensnap</title>
+  <meta name="description" content="A screen recording shared with screensnap, the free and local screen recorder for Chrome." />
+  <!-- Share pages are per-recording and private-by-link; keep them out of the index. -->
+  <meta name="robots" content="noindex" />
+
+  <!-- Social unfurl. The Drive file id lives in the URL fragment, which crawlers and unfurlers
+       never receive, so every share shows the same generic branded card and no link leaks which
+       video is being watched. -->
+  <meta property="og:title" content="A recording shared with screensnap" />
+  <meta property="og:description" content="Watch a screen recording shared with screensnap, the free and local screen recorder for Chrome." />
+  <meta property="og:image" content="https://screensnap.xyz/media/poster.png" />
+  <meta property="og:url" content="https://screensnap.xyz/v/" />
+  <meta property="og:site_name" content="screensnap" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="A recording shared with screensnap" />
+  <meta name="twitter:description" content="Watch a screen recording shared with screensnap, the free and local screen recorder for Chrome." />
+  <meta name="twitter:image" content="https://screensnap.xyz/media/poster.png" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <meta name="theme-color" content="#f2f2f0" />
+
+  <style>
+    /* Design "Chrome extension player refinement" (Share Player.dc.html), implemented as vanilla
+       JS in player.js. The design specified Plus Jakarta Sans via the Google Fonts CDN; the repo's
+       zero-network rule forbids runtime font fetches, so we use the site's vendored Archivo instead.
+       JetBrains Mono (already vendored, and used by the design) carries the mono details. */
+    @font-face{font-family:'Archivo';font-weight:400;font-display:swap;src:url('../fonts/archivo-400.woff2') format('woff2')}
+    @font-face{font-family:'Archivo';font-weight:500;font-display:swap;src:url('../fonts/archivo-500.woff2') format('woff2')}
+    @font-face{font-family:'Archivo';font-weight:600;font-display:swap;src:url('../fonts/archivo-600.woff2') format('woff2')}
+    @font-face{font-family:'Archivo';font-weight:700;font-display:swap;src:url('../fonts/archivo-700.woff2') format('woff2')}
+    @font-face{font-family:'Archivo';font-weight:800;font-display:swap;src:url('../fonts/archivo-800.woff2') format('woff2')}
+    @font-face{font-family:'JetBrains Mono';font-weight:400;font-display:swap;src:url('../fonts/jetbrains-mono-400.woff2') format('woff2')}
+    @font-face{font-family:'JetBrains Mono';font-weight:500;font-display:swap;src:url('../fonts/jetbrains-mono-500.woff2') format('woff2')}
+
+    :root{
+      --page:#f2f2f0; --card:#f8f8f6; --line:#e2e3df; --ink:#141714; --body:#4a4f48;
+      --muted:#a0a49d; --footmuted:#9aa096; --btn-line:#dcded8;
+      --green:#15753f; --green-press:#0f6033; --link-hover:#0d5a2f;
+      --play:#22c46e; --dot:#7ee2a8; --stage:#0b0d0b;
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0}
+    /* the hidden attribute must win over the display:flex on the overlays below,
+       otherwise setting element.hidden = true does nothing and the controls stay painted */
+    [hidden]{ display:none !important; }
+    body{ background:var(--page); color:var(--body); font-family:'Archivo',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif; -webkit-font-smoothing:antialiased; }
+    .mono{font-family:'JetBrains Mono',ui-monospace,monospace}
+    a{color:var(--green);text-decoration:none}
+    a:hover{color:var(--link-hover);text-decoration:underline}
+
+    .page{ min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:48px 32px 72px; }
+    .card{ width:100%; max-width:1180px; background:var(--card); border:1px solid var(--line); border-radius:14px; overflow:hidden; box-shadow:0 24px 60px -32px rgba(20,26,20,.35); }
+
+    /* header */
+    .head{ display:flex; align-items:center; justify-content:space-between; gap:24px; padding:16px 28px; }
+    .brand{ display:flex; align-items:center; gap:11px; color:var(--ink); }
+    .brand:hover{text-decoration:none}
+    .brand .sq{ width:26px; height:26px; border-radius:8px; background:var(--ink); display:flex; align-items:center; justify-content:center; flex:none; }
+    .brand .sq i{ width:12px; height:9px; border:2px solid #fff; border-radius:3px; display:block; }
+    .brand .name{ font-size:17px; font-weight:700; letter-spacing:-.02em; color:var(--ink); }
+    .brand .kind{ font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); margin-left:6px; }
+    .actions{ display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
+    .btn{ display:inline-flex; align-items:center; gap:8px; font-family:inherit; font-size:13.5px; font-weight:600; padding:9px 15px; border-radius:8px; cursor:pointer; border:1px solid var(--btn-line); background:#fff; color:var(--ink); text-decoration:none; }
+    .btn:hover{ border-color:var(--ink); text-decoration:none; color:var(--ink); }
+    .btn.green{ background:var(--green); color:#fff; border-color:var(--green); }
+    .btn.green:hover{ background:var(--green-press); border-color:var(--green-press); color:#fff; }
+    .btn.green .d{ width:5px; height:5px; border-radius:50%; background:var(--dot); }
+    .btn.copied{ background:var(--green); border-color:var(--green); color:#fff; }
+    .btn.copied svg{ stroke:#fff; }
+
+    /* player stage */
+    .stagewrap{ position:relative; background:var(--stage); }
+    .stage{ position:relative; aspect-ratio:16/9; overflow:hidden; background:var(--stage); }
+    /* placeholder shown until media paints */
+    .stage.empty-bg{ background:repeating-linear-gradient(135deg,#191c19 0 8px,#151815 8px 16px); }
+    .media{ position:absolute; inset:0; width:100%; height:100%; }
+    video.media{ object-fit:contain; background:var(--stage); display:block; }
+    iframe.media{ border:0; }
+    .clicklayer{ position:absolute; inset:0; cursor:pointer; }
+    /* overlay auto-hide during playback, so controls never cover the footage */
+    .ovl-top, .ovl-bot{ transition:opacity .22s ease; }
+    .stage.hide-ui .ovl-top, .stage.hide-ui .ovl-bot{ opacity:0; pointer-events:none; }
+    .stage.hide-ui{ cursor:none; }
+
+    .ovl-top{ position:absolute; top:0; left:0; right:0; padding:24px 30px 60px; background:linear-gradient(to bottom,rgba(8,10,8,.78),rgba(8,10,8,0)); display:flex; align-items:flex-start; justify-content:space-between; gap:24px; pointer-events:none; }
+    .vtitle{ margin:0; font-size:27px; font-weight:700; letter-spacing:-.02em; color:#fff; word-break:break-word; }
+    .vmeta{ display:flex; gap:14px; margin-top:8px; font-size:11.5px; color:#a8ada6; flex-wrap:wrap; }
+    .pill{ display:flex; align-items:center; gap:7px; padding:7px 11px; border-radius:8px; background:rgba(255,255,255,.1); font-size:11px; color:#cfd3cd; white-space:nowrap; flex:none; }
+    .pill .d{ width:5px; height:5px; border-radius:50%; background:var(--dot); }
+
+    .bigplay{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; cursor:pointer; }
+    .bigplay .circle{ width:92px; height:92px; border-radius:50%; background:rgba(34,196,110,.95); display:flex; align-items:center; justify-content:center; box-shadow:0 16px 50px -10px rgba(34,196,110,.55); transition:transform .12s ease; }
+    .bigplay:hover .circle{ transform:scale(1.05); }
+
+    .ovl-bot{ position:absolute; left:0; right:0; bottom:0; padding:60px 30px 20px; background:linear-gradient(to top,rgba(6,8,6,.9),rgba(6,8,6,0)); display:flex; flex-direction:column; gap:14px; pointer-events:none; }
+    .ovl-bot .scrub, .ovl-bot .ctrls{ pointer-events:auto; }
+    .scrub{ position:relative; height:14px; display:flex; align-items:center; cursor:pointer; touch-action:none; }
+    .scrub .track{ position:absolute; left:0; right:0; height:3px; border-radius:3px; background:rgba(255,255,255,.22); }
+    .scrub .fill{ position:absolute; left:0; height:3px; border-radius:3px; background:#fff; width:0%; }
+    .scrub .knob{ position:absolute; width:11px; height:11px; border-radius:50%; background:var(--play); margin-left:-5px; left:0%; }
+    .ctrls{ display:flex; align-items:center; gap:18px; }
+    .icbtn{ display:flex; align-items:center; justify-content:center; cursor:pointer; background:none; border:0; padding:0; }
+    .icbtn.play{ width:30px; }
+    .ctime{ font-size:12.5px; color:#fff; }
+    .ctime .dim{ color:#7f857e; }
+    .grow{ flex:1; }
+    .chip{ font-size:12px; color:#fff; padding:6px 10px; border-radius:7px; border:1px solid rgba(255,255,255,.28); cursor:pointer; background:none; }
+    .chip:hover{ background:rgba(255,255,255,.14); }
+    .chip.stamp{ color:#cfd3cd; }
+    .chip.copied{ background:var(--play); border-color:var(--play); color:#08170e; }
+    .vol{ display:flex; align-items:flex-end; gap:2px; cursor:pointer; padding:0 6px; }
+    .vol b{ width:3px; border-radius:1px; background:#fff; display:block; }
+    .vol b:nth-child(1){ height:6px } .vol b:nth-child(2){ height:11px } .vol b:nth-child(3){ height:16px }
+
+    /* footer */
+    .foot{ display:flex; align-items:center; justify-content:space-between; gap:28px; padding:20px 28px; }
+    .foot .note{ font-size:14px; color:var(--body); line-height:1.5; }
+    .foot .note strong{ font-weight:700; color:var(--ink); }
+    .foot .links{ display:flex; gap:8px; font-size:12px; color:var(--footmuted); align-items:center; }
+    .foot .links a{ color:var(--footmuted); }
+    .foot .links a:hover{ color:var(--ink); }
+
+    /* copy-confirmation toast */
+    .toast{ position:fixed; left:50%; bottom:28px; transform:translate(-50%,12px); background:var(--ink); color:#fff; font-family:'Archivo',system-ui,sans-serif; font-size:13.5px; font-weight:600; padding:11px 18px; border-radius:10px; box-shadow:0 12px 30px -10px rgba(0,0,0,.45); opacity:0; pointer-events:none; z-index:50; transition:opacity .18s ease, transform .18s ease; }
+    .toast.show{ opacity:1; transform:translate(-50%,0); }
+
+    /* empty state */
+    .emptycard{ width:100%; max-width:560px; text-align:center; padding:52px 40px 46px; }
+    .emptycard .sq{ width:34px; height:34px; border-radius:10px; background:var(--ink); display:inline-flex; align-items:center; justify-content:center; margin-bottom:20px; }
+    .emptycard .sq i{ width:15px; height:11px; border:2px solid #fff; border-radius:3px; display:block; }
+    .emptycard h1{ font-size:26px; letter-spacing:-.02em; color:var(--ink); margin:0 0 10px; }
+    .emptycard p{ max-width:420px; margin:0 auto 24px; color:var(--body); line-height:1.55; }
+
+    @media (max-width:720px){
+      .page{ padding:20px 14px 44px; }
+      .head{ flex-direction:column; align-items:stretch; gap:14px; }
+      .actions{ justify-content:flex-start; }
+      .brand .kind{ display:none; }
+      .vtitle{ font-size:20px; }
+      .ovl-top{ padding:16px 18px 44px; }
+      .ovl-bot{ padding:44px 18px 14px; }
+      .ctrls{ gap:12px; }
+      .chip.stamp{ display:none; }
+      .foot{ flex-direction:column; align-items:flex-start; gap:12px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+
+    <!-- ============ PLAYER (shown when the link carries a valid id or src) ============ -->
+    <div class="card" id="card" hidden>
+      <div class="head">
+        <a class="brand" href="https://screensnap.xyz/">
+          <span class="sq"><i></i></span>
+          <span class="name">screensnap</span>
+          <span class="kind mono">shared recording</span>
+        </a>
+        <div class="actions">
+          <a class="btn" id="download" href="#">
+            <svg width="13" height="14" viewBox="0 0 13 14" stroke="#141714" stroke-width="1.8" fill="none"><path d="M6.5 0v9"></path><path d="M2.5 6l4 4 4-4"></path><path d="M0 13.2h13"></path></svg>
+            Download
+          </a>
+          <button class="btn" id="copy" type="button">Copy link</button>
+          <a class="btn green" href="https://chromewebstore.google.com/detail/screensnap/hadhpopgpoejimciiihfffdmiihffkcl">
+            <span class="d"></span>Add to Chrome
+          </a>
+        </div>
+      </div>
+
+      <div class="stagewrap">
+        <div class="stage empty-bg" id="stage">
+          <!-- media (video for native mode, iframe for embed fallback) is inserted here by player.js -->
+          <div class="clicklayer" id="clicklayer" hidden></div>
+
+          <div class="ovl-top">
+            <div>
+              <h1 class="vtitle" id="vtitle">Screen recording</h1>
+              <div class="vmeta mono" id="vmeta"></div>
+            </div>
+            <div class="pill mono"><span class="d"></span>sharer's Drive</div>
+          </div>
+
+          <div class="bigplay" id="bigplay" hidden>
+            <div class="circle"><svg width="28" height="32" viewBox="0 0 28 32"><polygon points="3,1 27,16 3,31" fill="#08170e"></polygon></svg></div>
+          </div>
+
+          <div class="ovl-bot" id="controls" hidden>
+            <div class="scrub" id="scrub">
+              <div class="track"></div>
+              <div class="fill" id="fill"></div>
+              <div class="knob" id="knob"></div>
+            </div>
+            <div class="ctrls">
+              <button class="icbtn play" id="playToggle" type="button" aria-label="Play or pause">
+                <svg id="ic-play" width="13" height="15" viewBox="0 0 13 15"><polygon points="1,0 13,7.5 1,15" fill="#fff"></polygon></svg>
+                <svg id="ic-pause" width="12" height="15" viewBox="0 0 12 15" style="display:none"><rect x="0" y="0" width="4" height="15" fill="#fff"></rect><rect x="7" y="0" width="4" height="15" fill="#fff"></rect></svg>
+              </button>
+              <div class="ctime mono"><span id="cur">0:00</span><span class="dim"> / <span id="dur">0:00</span></span></div>
+              <div class="grow"></div>
+              <button class="chip mono" id="speed" type="button">1×</button>
+              <button class="chip mono stamp" id="stamp" type="button">link @ 0:00</button>
+              <div class="vol" id="mute" role="button" aria-label="Mute"><b></b><b></b><b></b></div>
+              <button class="icbtn" id="fs" type="button" aria-label="Fullscreen">
+                <svg width="14" height="14" viewBox="0 0 14 14" stroke="#fff" stroke-width="1.7" fill="none"><path d="M1 5V1h4"></path><path d="M13 9v4H9"></path><path d="M9 1h4v4"></path><path d="M5 13H1V9"></path></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="foot">
+        <div class="note"><strong>Recorded with screensnap.</strong> Free, local, no watermark. <a id="openDrive" href="#" target="_blank" rel="noopener">Open in Google Drive</a></div>
+        <div class="links mono"><a href="https://screensnap.xyz/privacy.html">privacy</a><span>·</span><a href="https://screensnap.xyz/terms.html">terms</a><span>·</span><span>on-device by design</span></div>
+      </div>
+    </div>
+
+    <!-- ============ EMPTY STATE (no recording in the link) ============ -->
+    <div class="card emptycard" id="empty" hidden>
+      <span class="sq"><i></i></span>
+      <h1>Recordings shared with screensnap open here</h1>
+      <p>This page plays a screen recording shared with a screensnap link. There is no recording in this one.</p>
+      <a class="btn green" href="https://chromewebstore.google.com/detail/screensnap/hadhpopgpoejimciiihfffdmiihffkcl" style="font-size:15px;padding:13px 20px"><span class="d"></span>Add screensnap to Chrome, it's free</a>
+    </div>
+
+  </div>
+
+  <script src="./player.js" defer></script>
+</body>
+</html>
