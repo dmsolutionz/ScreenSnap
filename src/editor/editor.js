@@ -320,6 +320,7 @@ function buildToolbar(el, transforms) {
       <button class="ss-tool" data-pop="project" id="ss-project-pop" title="Resolution, speed, audio">Project ▾</button>
     </div>
     <div class="ss-tb-group ss-tb-right">
+      <button class="ss-btn ss-btn-ghost" id="ss-share-btn" title="Upload to Drive and copy a share link" hidden>Share</button>
       <span class="ss-export-split">
         <button class="ss-btn ss-btn-primary" id="ss-export" title="Export MP4">Export</button>
         <button class="ss-btn ss-btn-primary ss-export-caret" data-pop="export" id="ss-export-caret" title="Export options">▾</button>
@@ -445,6 +446,12 @@ function buildToolbar(el, transforms) {
     else doExport(el.querySelector("#ss-export"), b.dataset.exp === "gif" ? "gif" : undefined);
   });
   el.querySelector("#ss-close").addEventListener("click", () => closeEditor());
+  const shareBtn = el.querySelector("#ss-share-btn");
+  if (shareBtn)
+    shareBtn.addEventListener("click", () => {
+      if (shareBtn.dataset.connected) shareExport(shareBtn);
+      else chrome.runtime.sendMessage({ type: MSG.DRIVE_OPEN_SETUP }).catch(() => {});
+    });
 }
 
 // Switch the active drawing tool, updating the rail highlight. `lock` keeps the tool armed after a
@@ -945,14 +952,19 @@ async function doExport(btn, format) {
 function refreshDriveMenuItem() {
   const item = document.getElementById("ss-exp-drive");
   const share = document.getElementById("ss-exp-share");
+  const shareBtn = document.getElementById("ss-share-btn");
   if (!item) return;
   driveStatus()
     .then((d) => {
-      if (!d.supported || !d.configured) { item.hidden = true; if (share) share.hidden = true; return; }
+      const on = d.supported && d.configured;
+      if (!on) { item.hidden = true; if (share) share.hidden = true; if (shareBtn) shareBtn.hidden = true; return; }
       item.hidden = false;
       item.dataset.connected = d.connected ? "1" : "";
       item.textContent = d.connected ? "Upload MP4 to Drive" : "Set up Drive upload";
-      if (share) share.hidden = !d.connected; // sharing needs a connected account
+      if (share) share.hidden = !d.connected; // menu item only makes sense once connected
+      // The toolbar Share button stays visible whenever Drive is available, so it's discoverable
+      // without opening the export menu; when not connected it routes to Cloud setup.
+      if (shareBtn) { shareBtn.hidden = false; shareBtn.dataset.connected = d.connected ? "1" : ""; }
     })
     .catch(() => {});
 }

@@ -62,5 +62,3 @@ PRIVATE BY DESIGN
 • Capture, processing, and storage all happen locally. Nothing leaves your device unless you connect the optional Google Drive backup.
 • No screensnap servers, no telemetry, no analytics. The only network calls are the uploads you choose to send to your own Drive.
 • Minimal permissions. Screen and window sharing use Chrome's own picker, and screensnap only touches the tab you point it at. It has no background access to your browsing.
-
-Free forever, and open source.

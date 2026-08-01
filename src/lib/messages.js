@@ -101,6 +101,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   bubbleCorner: "br", // tl | tr | bl | br — which corner the composited camera sits in
   camMirror: true, // mirror the camera (self-view); off = text behind you reads correctly
   driveAutoUpload: false, // upload finished recordings to Google Drive (only while connected; opt-in)
+  driveFolderName: "screensnap", // destination folder in the user's Drive; screensnap manages it, renameable in settings
 });
 
 // Allowed values + pure normalizers for the new live controls, so the popup, overlays, and tests agree.

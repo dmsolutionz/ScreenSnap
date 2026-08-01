@@ -4,6 +4,7 @@
   "version": "1.5.0",
   "description": "Free, local, watermark-free screen recorder & screenshots. Timeline editor: trim, zoom, audio, annotate. Export native MP4 or GIF.",
   "minimum_chrome_version": "124",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA27TPgDuvizKR7NAfwGvijKdQx9GzUUxDUudD6Hgf7Nax6zUHvOjaQbi5KCxmglwyUWnwSYyIsr7tX1ptQ1/fzO5q+NKHmKsHrx3sYpNzTK9ycj+63UwzqK2OPfLQdQr8WG7kzxrbx51miQnfv/fIjTpra3CBFJizzB4YNDJtI/NgxHoJ3GDFgwgjQxhgxh0pLxeRTCK8SxFHOVDIRDBsbDZnv65/anfQqO6XRhZKgAF4XmvbF7JoXK8Eh7V+GdfyyRyXklefSnHwYYuf3emeozM9EGxbFeratX+FtsOjOepdF2dyLSeD8Gx4PCF4ASd/YV1GC+y0TWrn9Aqn1+x+cwIDAQAB",
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",

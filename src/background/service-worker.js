@@ -343,7 +343,7 @@ async function uploadClip(clipId, fileName) {
         void setState({ drive: { status: "uploading", pct, fileName: name } });
       },
     });
-    await setState({ drive: { status: "done", pct: 100, fileName: name, fileId: res.id || null, link: res.webViewLink || null } });
+    await setState({ drive: { status: "done", pct: 100, fileName: name, fileId: res.id || null, link: res.webViewLink || null, folderId: res.folderId || null, folderName: res.folderName || null } });
   } catch (e) {
     await setState({ drive: { status: "error", fileName: name, error: String((e && e.message) || e) } });
   }
