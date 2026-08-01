@@ -170,6 +170,11 @@ function settingsTab() {
         <div style="display:flex;align-items:center;gap:11px;margin-bottom:9px">
           <span style="flex:1;font-size:14px;color:${C.fg2}">Auto-upload recordings</span>${toggle(!!settings.driveAutoUpload, "driveAutoUpload")}
         </div>
+        <div style="display:flex;align-items:center;gap:9px;margin-bottom:5px">
+          <span style="flex:none;font-size:14px;color:${C.fg2}">Folder</span>
+          <input data-setting="driveFolderName" value="${esc(settings.driveFolderName || "screensnap")}" spellcheck="false" style="flex:1;min-width:0;font-family:${MONO};font-size:12px;padding:6px 9px;border:1px solid ${C.boxLine};border-radius:7px;background:#fff;color:${C.fg2}" />
+        </div>
+        <div style="font-size:11px;line-height:1.5;color:${C.faint};margin-bottom:9px">Uploads go here in your Drive. screensnap manages this folder, so it can't point at one you made elsewhere.</div>
         <button class="ghost-b" data-act="drive-disconnect" style="padding:5px 0;background:none;border:none;color:${C.faint};font-size:12px;cursor:pointer;border-radius:6px">Disconnect</button>
       </div>`;
   }
@@ -275,32 +280,54 @@ function savingView() {
 function driveDoneRow() {
   const d = rec.drive;
   const line = (color, text) => `<div style="font-family:${MONO};font-size:11px;color:${color};margin-top:9px;text-align:center;max-width:270px">${text}</div>`;
+  const folder = (d && d.folderName) || settings.driveFolderName || "screensnap";
+  const savedHeader = `<div style="font-family:${MONO};font-size:11px;color:${C.green}">Saved to your Drive · ${esc(folder)}</div>`;
+  const openLinks = () => {
+    const parts = [];
+    if (d && d.link) parts.push(`<a href="${esc(d.link)}" target="_blank" style="color:${C.green};text-decoration:none">Open file</a>`);
+    if (d && d.folderId) parts.push(`<a href="https://drive.google.com/drive/folders/${esc(d.folderId)}" target="_blank" style="color:${C.green};text-decoration:none">Open folder</a>`);
+    return parts.length ? `<div style="font-family:${MONO};font-size:11px;color:${C.muted}">${parts.join(" &nbsp;·&nbsp; ")}</div>` : "";
+  };
 
-  // A public share link is ready — show it with one-click copy.
+  if (d && d.status === "uploading") return line(C.muted, `Uploading to Drive… ${d.pct || 0}%`);
+  if (d && d.sharing) return line(C.muted, "Preparing share link…");
+  if (d && d.status === "error") return line(C.red, `Drive upload failed — ${esc(d.error || "unknown error")}`);
+
+  // Uploaded and a public share link is ready.
   if (d && d.shareUrl) {
     return `<div style="margin-top:13px;width:100%;max-width:280px;display:flex;flex-direction:column;align-items:center;gap:7px">
-      <div style="font-family:${MONO};font-size:11px;color:${C.green}">Share link ready · anyone with the link</div>
+      ${savedHeader}
       <div style="display:flex;width:100%;gap:6px">
         <input readonly value="${esc(d.shareUrl)}" style="flex:1;min-width:0;font-family:${MONO};font-size:11px;padding:8px 10px;border:1px solid ${C.boxLine};border-radius:8px;background:#fff;color:${C.fg2}" />
         <button class="ghost-b" data-act="copy-share" data-url="${esc(d.shareUrl)}" style="padding:8px 14px;background:${C.green};border:none;border-radius:8px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap">Copy</button>
       </div>
+      ${openLinks()}
     </div>`;
   }
-  if (d && d.sharing) return line(C.muted, "Preparing share link…");
-  if (d && d.status === "uploading") return line(C.muted, `Uploading to Drive… ${d.pct || 0}%`);
-  if (d && d.shareError) return line(C.red, `Couldn't create the link — ${esc(d.shareError)}`);
-  if (d && d.status === "error") return line(C.red, `Drive upload failed — ${esc(d.error || "unknown error")}`);
 
-  // Connected: the primary action is sharing (it uploads first if needed); keep a plain Drive link once uploaded.
+  // Uploaded (auto or manual), not shared yet: confirmation of where it went + option to make a link.
+  if (d && d.status === "done") {
+    const shareErr = d.shareError ? `<div style="font-family:${MONO};font-size:11px;color:${C.red}">Couldn't create link — ${esc(d.shareError)}</div>` : "";
+    return `<div style="margin-top:13px;display:flex;flex-direction:column;align-items:center;gap:7px">
+      ${savedHeader}
+      ${openLinks()}
+      <button class="ghost-b" data-act="drive-share" style="margin-top:2px;padding:8px 18px;background:${C.green};border:none;border-radius:9px;color:#fff;font-size:12px;font-weight:600;cursor:pointer">Get share link</button>
+      ${shareErr}
+    </div>`;
+  }
+
+  // Connected but nothing uploaded yet: back up privately, or share (uploads then makes a link).
   if (drive.connected && drive.configured && doneInfo.clipId) {
-    const open = d && d.status === "done" && d.link ? `<a href="${esc(d.link)}" target="_blank" style="font-family:${MONO};font-size:11px;color:${C.muted};text-decoration:none">Open in Drive</a>` : "";
-    return `<div style="margin-top:12px;display:flex;flex-direction:column;align-items:center;gap:7px">
-      <button class="ghost-b" data-act="drive-share" style="padding:8px 18px;background:#fff;border:1px solid ${C.boxLine};border-radius:9px;color:${C.fg2};font-size:12px;font-weight:600;cursor:pointer">Get share link</button>
-      ${open}
+    return `<div style="margin-top:12px;display:flex;flex-direction:column;align-items:center;gap:8px">
+      <div style="display:flex;gap:8px">
+        <button class="ghost-b" data-act="drive-upload" style="padding:8px 16px;background:#fff;border:1px solid ${C.boxLine};border-radius:9px;color:${C.fg2};font-size:12px;font-weight:600;cursor:pointer">Save to Drive</button>
+        <button class="ghost-b" data-act="drive-share" style="padding:8px 16px;background:${C.green};border:none;border-radius:9px;color:#fff;font-size:12px;font-weight:600;cursor:pointer">Get share link</button>
+      </div>
+      <div style="font-family:${MONO};font-size:10.5px;color:${C.faint}">into your ${esc(folder)} folder · private until you share</div>
     </div>`;
   }
   if (drive.supported && drive.configured && doneInfo.clipId) {
-    return `<button class="ghost-b" data-act="drive-setup" style="margin-top:12px;padding:8px 18px;background:none;border:none;color:${C.faint};font-size:12px;cursor:pointer;border-radius:8px">Share via Drive: set up</button>`;
+    return `<button class="ghost-b" data-act="drive-setup" style="margin-top:12px;padding:8px 18px;background:none;border:none;color:${C.faint};font-size:12px;cursor:pointer;border-radius:8px">Back up &amp; share via Drive: set up</button>`;
   }
   return "";
 }
@@ -396,6 +423,17 @@ app.addEventListener("click", async (e) => {
       if (inp) { inp.focus(); inp.select(); }
     }
     return;
+  }
+});
+
+// Settings inputs (currently just the Drive folder name) save on change/blur.
+app.addEventListener("change", async (e) => {
+  const node = e.target.closest("[data-setting]");
+  if (!node) return;
+  if (node.dataset.setting === "driveFolderName") {
+    const val = (node.value || "").trim() || "screensnap";
+    settings = await setSettings({ driveFolderName: val });
+    node.value = val;
   }
 });
 

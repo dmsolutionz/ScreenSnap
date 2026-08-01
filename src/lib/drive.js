@@ -91,7 +91,7 @@ export async function driveDisconnect() {
   } catch {
     // Revoke is best-effort: local state is cleared regardless.
   }
-  await chrome.storage.local.remove(["driveAccount", "driveFolderId"]);
+  await chrome.storage.local.remove(["driveAccount", "driveFolderId", "driveFolderName"]);
 }
 
 // Base URL of the screensnap share player (docs/v/). The file id (and optional title) ride in the
@@ -134,40 +134,46 @@ async function driveFetch(token, url, init = {}, isRetry = false) {
   return res;
 }
 
-// Find-or-create the "screensnap" folder in My Drive. The id is cached and re-validated so a
-// user deleting the folder in Drive just gets a fresh one on the next upload.
+// The destination folder name: the user's configured driveFolderName, defaulting to "screensnap".
+async function destinationFolderName() {
+  const { settings } = await chrome.storage.local.get("settings");
+  const name = ((settings && settings.driveFolderName) || DRIVE_FOLDER_NAME).trim();
+  return name || DRIVE_FOLDER_NAME;
+}
+
+// Find-or-create the destination folder in My Drive, by its configured name. Under drive.file the
+// query only ever sees folders screensnap created itself, so renaming to a folder made elsewhere
+// makes a fresh one rather than merging into it. The id is cached per name and re-validated, so
+// deleting the folder or changing the name just re-resolves on the next upload. Returns { id, name }.
 async function ensureFolder(token) {
-  const { driveFolderId } = await chrome.storage.local.get("driveFolderId");
-  if (driveFolderId) {
-    const res = await fetch(`${API}/files/${driveFolderId}?fields=id,trashed`, {
+  const name = await destinationFolderName();
+  const cache = await chrome.storage.local.get(["driveFolderId", "driveFolderName"]);
+  if (cache.driveFolderId && cache.driveFolderName === name) {
+    const res = await fetch(`${API}/files/${cache.driveFolderId}?fields=id,trashed`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (res.ok) {
       const meta = await res.json();
-      if (!meta.trashed) return driveFolderId;
+      if (!meta.trashed) return { id: cache.driveFolderId, name };
     }
   }
+  const escaped = name.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
   const q = encodeURIComponent(
-    `name = '${DRIVE_FOLDER_NAME}' and mimeType = 'application/vnd.google-apps.folder' ` +
+    `name = '${escaped}' and mimeType = 'application/vnd.google-apps.folder' ` +
       `and trashed = false and 'root' in parents`
   );
-  const found = await driveFetch(token, `${API}/files?q=${q}&fields=files(id)`).then((r) =>
-    r.json()
-  );
+  const found = await driveFetch(token, `${API}/files?q=${q}&fields=files(id)`).then((r) => r.json());
   let id = found?.files?.[0]?.id;
   if (!id) {
     const created = await driveFetch(token, `${API}/files?fields=id`, {
       method: "POST",
       headers: { "Content-Type": "application/json; charset=UTF-8" },
-      body: JSON.stringify({
-        name: DRIVE_FOLDER_NAME,
-        mimeType: "application/vnd.google-apps.folder",
-      }),
+      body: JSON.stringify({ name, mimeType: "application/vnd.google-apps.folder" }),
     }).then((r) => r.json());
     id = created.id;
   }
-  await chrome.storage.local.set({ driveFolderId: id });
-  return id;
+  await chrome.storage.local.set({ driveFolderId: id, driveFolderName: name });
+  return { id, name };
 }
 
 // Upload a Blob into the screensnap folder via the resumable protocol, in CHUNK-sized PUTs so
@@ -176,7 +182,8 @@ async function ensureFolder(token) {
 // Resolves to { id, name, webViewLink }.
 export async function uploadToDrive(blob, name, { onProgress } = {}) {
   const token = await getToken(false);
-  const folderId = await ensureFolder(token);
+  const folder = await ensureFolder(token);
+  const folderId = folder.id;
   const mime = blob.type || "video/mp4";
 
   const start = await driveFetch(
@@ -220,7 +227,8 @@ export async function uploadToDrive(blob, name, { onProgress } = {}) {
       onProgress?.(offset, blob.size);
     } else if (res.ok) {
       onProgress?.(blob.size, blob.size);
-      return res.json();
+      const meta = await res.json();
+      return { ...meta, folderId, folderName: folder.name };
     } else if (res.status >= 500 && ++attempts <= 5) {
       await new Promise((r) => setTimeout(r, 1000 * attempts));
       offset = await queryResumeOffset(session, blob.size);
