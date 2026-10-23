@@ -1,18 +1,19 @@
 #!/usr/bin/env node
 // Final audio mix for the launch film: the synthesized music bed + the sound-effect cue sheet that
-// render-film.mjs wrote (sfx-cues.json), summed at sample-accurate positions. The music ducks briefly under
-// each effect (so clicks and impacts cut through without the track being turned down overall), then the mix
+// render-film.mjs wrote (sfx-cues.json) + the voiceover (narrate.mjs's vo-cues.json), summed at sample-accurate
+// positions. The music ducks briefly under each effect and, more deeply and smoothly, under the narration, so
+// the voice always sits on top; then the mix
 // is loudness-normalised in two passes with ffmpeg's loudnorm to YouTube's reference: -14 LUFS integrated,
 // true peak <= -1.5 dBTP (aimed at -2).
 //
-//   node scripts/media/mix-audio.mjs --audio <dir with music.wav + sfx/> --cues sfx-cues.json --out mix.wav
+//   node scripts/media/mix-audio.mjs --audio <dir with music.wav + sfx/> --cues sfx-cues.json [--voice vo-cues.json] --out mix.wav
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const argv = Object.fromEntries(process.argv.slice(2).reduce((a, x, i, all) => (x.startsWith("--") ? [...a, [x.slice(2), all[i + 1]]] : a), []));
 if (!argv.audio || !argv.cues || !argv.out) { console.error("usage: mix-audio.mjs --audio <dir> --cues sfx-cues.json --out mix.wav"); process.exit(2); }
-const SR = 48000, DURATION = 88;
+const SR = 48000;
 
 // ── tiny WAV I/O (PCM 16/24/32 + float32) ──
 function readWav(file) {
@@ -44,8 +45,8 @@ function writeWavF32(file, [l, r]) {
   writeFileSync(file, out);
 }
 
-const N = SR * DURATION;
-const music = readWav(join(argv.audio, "music.wav")).map((c) => { const o = new Float32Array(N); o.set(c.subarray(0, N)); return o; });
+const music = readWav(join(argv.audio, "music.wav")); // the film is exactly as long as its music bed
+const N = music[0].length;
 
 // ── sound-effect bus ──
 const cues = JSON.parse(readFileSync(argv.cues, "utf8"));
@@ -57,16 +58,33 @@ for (const cue of cues) {
   for (let c = 0; c < 2; c++) for (let i = 0; i < wav[c].length && at + i < N; i++) if (at + i >= 0) bus[c][at + i] += wav[c][i] * g;
 }
 
-// ── duck the music under the effects: fast attack, slow release, at most about -4 dB ──
+// ── voiceover bus ──
+const voice = [new Float32Array(N), new Float32Array(N)];
+const lines = argv.voice ? JSON.parse(readFileSync(argv.voice, "utf8")) : [];
+for (const l of lines) {
+  const wav = readWav(l.file), at = Math.round(l.t * SR);
+  for (let c = 0; c < 2; c++) for (let i = 0; i < wav[c].length && at + i < N; i++) if (at + i >= 0) voice[c][at + i] += wav[c][i];
+}
+// Where speech is: 1 inside a line, 0 outside, with 120 ms ramps — the music fades down before the first word
+// and back up after the last, instead of pumping on every syllable.
+const speaking = new Float32Array(N);
+for (const l of lines) { const a = Math.round(l.t * SR), b = Math.min(N, Math.round((l.t + l.dur) * SR)); for (let i = Math.max(0, a); i < b; i++) speaking[i] = 1; }
+const ramp = Math.round(0.12 * SR);
+const smooth = new Float32Array(N);
+for (let i = 0, run = 0; i < N; i++) { run = speaking[i] ? Math.min(ramp, run + 1) : Math.max(0, run - 1); smooth[i] = run / ramp; }
+for (let i = N - 2, run = 0; i >= 0; i--) { run = speaking[i] ? ramp : Math.max(0, run - 1); smooth[i] = Math.max(smooth[i], run / ramp); } // pre-roll
+
+// ── duck the music under the effects (fast, at most about -4 dB) and the voice (smooth, about -9 dB) ──
 const attack = Math.exp(-1 / (0.004 * SR)), release = Math.exp(-1 / (0.22 * SR));
+const VOICE_DUCK = 1 - Math.pow(10, -9 / 20);
 let env = 0;
 const mix = [new Float32Array(N), new Float32Array(N)];
 for (let i = 0; i < N; i++) {
   const x = Math.max(Math.abs(bus[0][i]), Math.abs(bus[1][i]));
   env = x > env ? attack * env + (1 - attack) * x : release * env; // peak follower
-  const duck = 1 - 0.38 * Math.min(1, env / 0.2);
-  mix[0][i] = music[0][i] * duck + bus[0][i];
-  mix[1][i] = music[1][i] * duck + bus[1][i];
+  const duck = (1 - 0.38 * Math.min(1, env / 0.2)) * (1 - VOICE_DUCK * smooth[i]);
+  mix[0][i] = music[0][i] * duck + bus[0][i] + voice[0][i];
+  mix[1][i] = music[1][i] * duck + bus[1][i] + voice[1][i];
 }
 const pre = argv.out.replace(/\.wav$/, "") + ".pre.wav";
 writeWavF32(pre, mix);
@@ -80,5 +98,5 @@ const p2 = spawnSync("ffmpeg", ["-y", "-hide_banner", "-i", pre, "-af", `${af},a
 if (p2.status !== 0) { console.error(p2.stderr); process.exit(1); }
 const chk = spawnSync("ffmpeg", ["-hide_banner", "-i", argv.out, "-af", "ebur128=peak=true", "-f", "null", "-"], { encoding: "utf8" }).stderr;
 const sum = chk.slice(chk.lastIndexOf("Integrated loudness"));
-console.log(`${cues.length} effects placed · measured before: ${m.input_i} LUFS / ${m.input_tp} dBTP`);
+console.log(`${cues.length} effects + ${lines.length} voice lines placed · measured before: ${m.input_i} LUFS / ${m.input_tp} dBTP`);
 console.log(sum.split("\n").filter((l) => /I:|LRA:|Peak:/.test(l)).map((l) => "  " + l.trim()).join("\n"));

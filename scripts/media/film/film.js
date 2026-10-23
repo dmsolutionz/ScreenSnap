@@ -20,8 +20,11 @@ const P = (t, a, b, e = E.out3) => e(clamp((t - a) / (b - a)));
 const BEAT = 0.5;
 
 // ── timeline (seconds) ──
-export const T = { s1: [0, 4], s2: [4, 12], s3: [12, 24], s4: [24, 54], s5: [54, 66], s6: [66, 74], s7: [74, 88] };
-export const DURATION = 88;
+// Every UI clip plays at real speed — each step slow enough to follow — so the film is long by design.
+// (music-structure.json mirrors these section times for synth-audio.mjs)
+export const T = { s1: [0, 4], s2: [4, 12], s3: [12, 34], s4: [34, 186], s5: [186, 212], s6: [212, 224], s7: [224, 238] };
+export const DURATION = 238;
+const FINAL = T.s7[0] + 10; // the last big hit
 const FPS = 30;
 
 // ── element helpers ──
@@ -43,7 +46,7 @@ function sceneFx(el, t, win, { enter = true, exit = true, inDur, outDur } = {}) 
 }
 
 // ── assets & manifests ──
-const base = { editor: "/work/editor/main", popup: "/work/popup", shots: "/work/shots" };
+const base = { editor: "/work/editor/slow", popup: "/work/popup-slow", shots: "/work/shots-slow" };
 const frameUrl = (set, i) => `${base[set]}/frames/${String(i).padStart(6, "0")}.png`;
 async function manifest(set) { try { return await (await fetch(`${base[set]}/manifest.json`)).json(); } catch { return null; } }
 const M = { editor: await manifest("editor"), popup: await manifest("popup"), shots: await manifest("shots") };
@@ -51,9 +54,9 @@ const mk = (set, name, fallback = 0) => (M[set] && M[set].marks && M[set].marks[
 
 // footage → film time. Each clip plays from `t0` at `speed`x; the mapping is shared by captions and key-caps.
 const FOOT = {
-  editor: { t0: 24.55, speed: 1.5 },
-  popup: { t0: 12.9, speed: 1.0 },
-  shots: { t0: 54.4, speed: 1.45 },
+  editor: { t0: T.s4[0] + 0.6, speed: 1 },
+  popup: { t0: T.s3[0] + 0.9, speed: 1 },
+  shots: { t0: T.s5[0] + 0.5, speed: 1 },
 };
 const fT = (set, mark) => FOOT[set].t0 + mk(set, mark) / FOOT[set].speed;
 const fFrame = (set, t) => {
@@ -62,34 +65,36 @@ const fFrame = (set, t) => {
 };
 
 // ── captions ──  (*word* = highlighted). srtOnly lines are spoken by the kinetic type on screen.
-const C = (t0, t1, text, srtOnly = false) => ({ t0, t1, text, srtOnly });
+// `speak` overrides what the voiceover says and when ([[t, words], …]); by default it reads the caption at t0.
+const C = (t0, t1, text, srtOnly = false, speak = null) => ({ t0, t1, text, srtOnly, speak });
+// The editor's captions come from the capture itself (director.say), so each one starts on its step.
+const KEY_LABEL = { S: "Split", "⌫": "Delete", "⌘Z": "Undo", "⇧⌘Z": "Redo", M: "Marker", Z: "Zoom", C: "Crop", "↵": "Apply", A: "Arrow", R: "Box" };
+const editorSteps = ((M.editor && M.editor.captions) || []).map((c, i, all) => ({
+  t0: FOOT.editor.t0 + c.t,
+  t1: (i + 1 < all.length ? FOOT.editor.t0 + all[i + 1].t : T.s4[1] - 0.4) - 0.12,
+  text: c.text, key: c.key || null,
+}));
+const S3 = T.s3[0], S5 = T.s5[0], S6 = T.s6[0], S7 = T.s7[0];
 export const captions = [
-  C(0.4, 3.9, "screensnap. Record. Edit. Keep it.", true),
-  C(4.0, 10.0, "Subscriptions? Watermarks? Sign-ups?", true),
-  C(10.1, 11.9, "screensnap is free. No paywall, no watermark, no account.", true),
-  C(12.55, 15.9, "Record a *tab*, a *window*, or your whole *screen*."),
-  C(16.1, 19.8, "System audio, your mic, and a camera bubble."),
-  C(20.0, 23.7, "Saved as native *MP4*. No time limit."),
-  C(24.5, fT("editor", "scrub") + 0.9, "Then edit it in a *real* timeline."),
-  C(fT("editor", "scrub") + 0.95, fT("editor", "trim") - 0.05, "Scrub and zoom the timeline."),
-  C(fT("editor", "trim"), fT("editor", "cut") - 0.05, "Trim the ends."),
-  C(fT("editor", "cut"), fT("editor", "zoom") - 0.05, "Cut out the boring bits."),
-  C(fT("editor", "zoom"), fT("editor", "crop") - 0.05, "Zoom in on what *matters*."),
-  C(fT("editor", "crop"), fT("editor", "annotate") - 0.05, "Crop with real handles. Any ratio."),
-  C(fT("editor", "annotate"), fT("editor", "audio") - 0.05, "Annotate, then time it."),
-  C(fT("editor", "audio"), fT("editor", "backdrop") - 0.05, "Mute any region."),
-  C(fT("editor", "backdrop"), fT("editor", "export") - 0.05, "Wrap it in a *backdrop*."),
-  C(fT("editor", "export"), 53.7, "Export MP4. Encoded on *your* device."),
-  C(54.6, fT("shots", "steps") - 0.05, "Screenshots too. Draw an *arrow*."),
-  C(fT("shots", "steps"), fT("shots", "spotlight") - 0.05, "Number your *steps*."),
-  C(fT("shots", "spotlight"), fT("shots", "text") - 0.05, "Spotlight what *matters*."),
-  C(fT("shots", "text"), fT("shots", "crop") - 0.05, "Add *text* wherever you need it."),
-  C(fT("shots", "crop"), 65.4, "Crop, add a backdrop, re-edit any time."),
-  C(66.4, 69.0, "*Nothing* leaves your device."),
-  C(69.1, 71.2, "No servers. No telemetry. No accounts."),
-  C(71.3, 73.8, "Optional backup to *your* Drive, not ours."),
-  C(76.6, 80.4, "Free. Open source. *No catch.*"),
-  C(84.4, 87.6, "Get it on the *Chrome Web Store*."),
+  C(0.4, 3.9, "screensnap. Record. Edit. Keep it.", true, [[2.1, "screensnap."]]),
+  C(4.0, 10.0, "Subscriptions? Watermarks? Sign-ups?", true, [[4.05, "Subscriptions?"], [6.05, "Watermarks?"], [8.05, "Sign-ups?"]]),
+  C(10.1, 11.9, "screensnap is free. No paywall, no watermark, no account.", true, [[10.1, "screensnap is free."]]),
+  C(S3 + 0.55, fT("popup", "audio") - 0.1, "Record a *tab*, a *window*, or your whole *screen*."),
+  C(fT("popup", "audio"), fT("popup", "quality") - 0.1, "Record system audio and your mic."),
+  C(fT("popup", "quality"), fT("popup", "cam-options") - 0.1, "Pick the quality and a countdown."),
+  C(fT("popup", "cam-options"), fT("popup", "settings") - 0.1, "Screen + Cam adds a camera bubble."),
+  C(fT("popup", "settings"), T.s3[1] - 0.3, "Recordings save as native *MP4*. No time limit."),
+  ...editorSteps.map((c) => C(c.t0, c.t1, c.text)),
+  C(S5 + 0.6, fT("shots", "steps") - 0.1, "Screenshots too. Draw an *arrow*."),
+  C(fT("shots", "steps"), fT("shots", "spotlight") - 0.1, "Number your *steps*."),
+  C(fT("shots", "spotlight"), fT("shots", "text") - 0.1, "Spotlight what *matters*."),
+  C(fT("shots", "text"), fT("shots", "crop") - 0.1, "Add *text* wherever you need it."),
+  C(fT("shots", "crop"), T.s5[1] - 0.4, "Crop, add a backdrop, re-edit any time."),
+  C(S6 + 0.4, S6 + 2.9, "*Nothing* leaves your device."),
+  C(S6 + 3.0, S6 + 7.9, "No servers. No telemetry. No accounts.", false, [[S6 + 3.0, "No servers, no telemetry, no accounts."]]),
+  C(S6 + 8.0, T.s6[1] - 0.2, "Optional backup to *your* Drive, not ours."),
+  C(S7 + 2.6, S7 + 7.4, "Free. Open source. *No catch.*"),
+  C(FINAL + 0.4, T.s7[1] - 0.4, "Get it on the *Chrome Web Store*."),
 ];
 
 // ── element refs ──
@@ -194,18 +199,19 @@ function s3(t) {
 function editorCam() {
   const k = (name, dt = 0) => fT("editor", name) + dt;
   return [
-    [24.0, 0.5, 0.5, 1.0],
-    [k("open", 0.9), 0.5, 0.5, 1.04],
-    [k("scrub", 0.1), 0.5, 0.62, 1.12],
+    [T.s4[0], 0.5, 0.5, 1.0],
+    [k("open", 1.0), 0.5, 0.5, 1.04],
+    [k("scrub", 0.2), 0.5, 0.62, 1.12],
     [k("trim", 0.0), 0.5, 0.62, 1.12],
-    [k("cut", 0.0), 0.5, 0.55, 1.08],
+    [k("cut", 0.0), 0.5, 0.6, 1.1],
+    [k("undo", 0.0), 0.5, 0.6, 1.1],
     [k("zoom", 0.3), 0.5, 0.5, 1.08],
     [k("crop", -0.1), 0.5, 0.45, 1.08],
     [k("annotate", 0.1), 0.5, 0.5, 1.1],
     [k("audio", 0.0), 0.5, 0.62, 1.12],
     [k("backdrop", 0.0), 0.5, 0.5, 1.06],
     [k("export", 0.5), 0.5, 0.5, 1.03],
-    [54.0, 0.5, 0.5, 1.0],
+    [T.s4[1], 0.5, 0.5, 1.0],
   ];
 }
 function cam(t, keys, w, h, ox, oy) {
@@ -216,7 +222,7 @@ function cam(t, keys, w, h, ox, oy) {
   return { tx: 960 - px * s, ty: 540 - py * s, s };
 }
 const EDCAM = editorCam();
-const KEYCAPS = [["crop", "C", "Crop"], ["cut", "X", "Cut"], ["zoom", "Z", "Zoom"], ["annotate", "A", "Arrow"]];
+const KEYCAPS = editorSteps.filter((c) => c.key).map((c) => ({ t: c.t0, k: c.key, lbl: KEY_LABEL[c.key] || "", end: Math.min(c.t1, c.t0 + 2.2) }));
 
 function s4(t) {
   const on = inWin(t, T.s4, 0.3);
@@ -224,12 +230,12 @@ function s4(t) {
   const { i, o } = env(t, T.s4, 0.7, 0.45);
   put(el.s4, { o: i * (1 - o), blur: (1 - i) * 10 + o * 12, s: lerp(1, 0.97, o) });
   const c = cam(t, EDCAM, 1360, 36 + 1360 * 0.625, 280, 40);
-  const ein = P(t, 24.0, 24.75, E.out5);
+  const ein = P(t, T.s4[0], T.s4[0] + 0.75, E.out5);
   put(el["ed-cam"], { x: c.tx, y: c.ty + (1 - ein) * 150, s: c.s * lerp(0.93, 1, ein) });
   el["ed-cam"].style.transform = `translate(${c.tx}px, ${c.ty + (1 - ein) * 150}px) scale(${c.s * lerp(0.93, 1, ein)})`;
   // a key-cap announces the shortcut for the tool being used
   let cap = null;
-  for (const [m, k, lbl] of KEYCAPS) { const a = fT("editor", m); if (t >= a - 0.05 && t < a + 1.5) cap = { k, lbl, u: P(t, a, a + 0.3, E.outBack), o: 1 - P(t, a + 1.2, a + 1.5) }; }
+  for (const kc of KEYCAPS) if (t >= kc.t - 0.05 && t < kc.end) cap = { k: kc.k, lbl: kc.lbl, u: P(t, kc.t, kc.t + 0.3, E.outBack), o: 1 - P(t, kc.end - 0.3, kc.end) };
   vis(el["ed-key"], !!cap);
   if (cap) {
     el["ed-kbd"].textContent = cap.k; el["ed-keylbl"].textContent = cap.lbl;
@@ -283,32 +289,33 @@ function s6(t) {
 function s7(t) {
   const on = inWin(t, T.s7, 0.3);
   vis(el.s7, on); if (!on) return;
-  const fadeOut = P(t, 87.0, 88.0, E.io3);
-  const [sx, sy] = shake(t, 84.0, 18, 0.4);
-  put(el.s7, { x: sx, y: sy, s: lerp(1.05, 1, P(t, 74, 74.55, E.out5)), o: P(t, 74, 74.4) * (1 - fadeOut), blur: (1 - P(t, 74, 74.55)) * 22 });
-  const w = P(t, 74.25, 75.0, E.outExpo);
+  const b = T.s7[0];
+  const fadeOut = P(t, T.s7[1] - 1.0, T.s7[1], E.io3);
+  const [sx, sy] = shake(t, FINAL, 18, 0.4);
+  put(el.s7, { x: sx, y: sy, s: lerp(1.05, 1, P(t, b, b + 0.55, E.out5)), o: P(t, b, b + 0.4) * (1 - fadeOut), blur: (1 - P(t, b, b + 0.55)) * 22 });
+  const w = P(t, b + 0.25, b + 1.0, E.outExpo);
   put(el["s7-word"], { y: (1 - w) * 80, s: lerp(1.3, 1, w), o: w, blur: (1 - w) * 20 });
-  const sub = P(t, 75.0, 75.7, E.out5);
+  const sub = P(t, b + 1.0, b + 1.7, E.out5);
   put(el["s7-sub"], { y: (1 - sub) * 40, o: sub });
-  const b = P(t, 77.2, 77.9, E.outBack);
-  const hit = t >= 84 ? 1 + 0.09 * Math.pow(1 - P(t, 84.0, 84.5, E.out3), 1) : 1;
-  put(el["s7-btn"], { y: (1 - b) * 70, s: lerp(0.8, 1, b) * hit, o: P(t, 77.2, 77.5) });
-  const f = P(t, 78.0, 78.6, E.out5);
+  const bt = P(t, b + 3.2, b + 3.9, E.outBack);
+  const hit = t >= FINAL ? 1 + 0.09 * (1 - P(t, FINAL, FINAL + 0.5, E.out3)) : 1;
+  put(el["s7-btn"], { y: (1 - bt) * 70, s: lerp(0.8, 1, bt) * hit, o: P(t, b + 3.2, b + 3.5) });
+  const f = P(t, b + 4.0, b + 4.6, E.out5);
   put(el["s7-foot"], { y: (1 - f) * 30, o: f });
 }
 
 // transitions: a green light-sweep across the frame between scenes, and a white flash on the big hits
-const SWEEPS = [11.75, 23.75, 53.75, 65.75, 73.75];
-const FLASHES = [[2.0, 0.34, 0.2], [4.0, 0.1, 0.15], [24.0, 0.16, 0.2], [84.0, 0.4, 0.3]];
+const SWEEPS = [T.s3[0], T.s4[0], T.s5[0], T.s6[0], T.s7[0]].map((x) => x - 0.25);
+const FLASHES = [[2.0, 0.34, 0.2], [4.0, 0.1, 0.15], [T.s4[0], 0.16, 0.2], [FINAL, 0.4, 0.3]];
 function overlays(t) {
   let sw = 0, x = -700;
   for (const s0 of SWEEPS) if (t >= s0 && t < s0 + 0.6) { const u = (t - s0) / 0.6; sw = Math.sin(Math.PI * u); x = lerp(-700, 2100, E.io3(u)); }
   put(el.sweep, { x, o: sw * 0.9 });
   let fl = 0; for (const [t0, a, d] of FLASHES) if (t >= t0 && t < t0 + d) fl = Math.max(fl, a * Math.pow(1 - (t - t0) / d, 2));
   el.flash.style.opacity = String(fl);
-  el.fade.style.opacity = String(Math.max(P(t, 0, 0.25, E.lin) < 1 ? 1 - P(t, 0, 0.25, E.lin) : 0, t > 87.4 ? P(t, 87.4, 88.0, E.lin) : 0));
+  el.fade.style.opacity = String(Math.max(P(t, 0, 0.25, E.lin) < 1 ? 1 - P(t, 0, 0.25, E.lin) : 0, t > DURATION - 0.6 ? P(t, DURATION - 0.6, DURATION, E.lin) : 0));
   // wordmark in the corner for the product scenes
-  put(el.hud, { o: Math.max(P(t, 12.4, 12.9) * (1 - P(t, 23.4, 23.8)), P(t, 66.4, 66.9) * (1 - P(t, 73.5, 73.9))) * 0.92 });
+  put(el.hud, { o: Math.max(P(t, T.s3[0] + 0.4, T.s3[0] + 0.9) * (1 - P(t, T.s3[1] - 0.6, T.s3[1] - 0.2)), P(t, T.s6[0] + 0.4, T.s6[0] + 0.9) * (1 - P(t, T.s6[1] - 0.5, T.s6[1] - 0.1))) * 0.92 });
 }
 
 // captions: words rise in one by one, the whole line fades at the end
@@ -363,18 +370,19 @@ export const sfx = (() => {
   [4, 6, 8].forEach((b) => add(b, "thud_soft", -8)); [5, 7, 9].forEach((b) => add(b, "strike", -9));
   add(9.95, "whoosh_slow", -11); add(10.1, "swoosh_in", -9); [10.75, 11.15, 11.55].forEach((b) => add(b, "pop_up", -11));
   SWEEPS.forEach((s0) => add(s0 - 0.05, "whoosh_fast", -10));
-  add(12.25, "swoosh_in", -10); add(24.0, "swoosh_in", -9);
+  add(T.s3[0] + 0.25, "swoosh_in", -10); add(T.s4[0], "swoosh_in", -9);
   const clicks = (set, db) => ((M[set] && M[set].clicks) || []).forEach((c) => add(FOOT[set].t0 + c.t / FOOT[set].speed, "click", db));
   clicks("popup", -12); clicks("editor", -12); clicks("shots", -12);
-  KEYCAPS.forEach(([m]) => add(fT("editor", m) + 0.02, "pop_up", -13));
-  add(fT("editor", "backdrop") + 0.9, "toggle_on", -12);
+  KEYCAPS.forEach((kc) => add(kc.t + 0.02, "pop_up", -14));
+  add(fT("editor", "backdrop") + 2.0, "toggle_on", -12);
   add(fT("editor", "export") + 0.6, "riser_2s", -22);
   add(fT("editor", "saved") + 0.05, "chime_success", -9);
   add(FOOT.shots.t0 + 0.0, "shutter", -9);
   add(T.s6[0] + 0.2, "swoosh_in", -10);
   ZEROS.forEach(([, t0]) => { for (let k = 0; k < 7; k++) add(t0 + k * 0.1, "tick", -19); add(t0 + 0.75, "thud_soft", -9); add(t0 + 0.77, "pop_up", -12); });
-  add(T.s6[0] + 4.0, "swoosh_in", -11); add(74.25, "impact_low", -9); add(77.2, "pop_up", -11);
-  add(84.0, "impact_low", -3); add(84.02, "sparkle", -10);
+  add(T.s6[0] + 4.0, "swoosh_in", -11);
+  add(T.s7[0] + 0.25, "impact_low", -9); add(T.s7[0] + 3.2, "pop_up", -11);
+  add(FINAL, "impact_low", -3); add(FINAL + 0.02, "sparkle", -10);
   return q.sort((a, b) => a.t - b.t);
 })();
 window.__sfx = () => sfx;
@@ -386,4 +394,11 @@ window.__render = async (t) => {
   return true;
 };
 window.__captions = () => captions;
+// The voiceover script: one line per caption (or its `speak` parts), each with the time it may run until —
+// the start of the next line — so narrate.mjs can make sure no line talks over the next.
+window.__voice = () => {
+  const lines = captions.flatMap((c) => (c.speak || [[c.t0, c.text]]).map(([t, words]) => ({ t, text: words.replace(/\*/g, "") })));
+  return lines.map((l, i) => ({ ...l, until: i + 1 < lines.length ? lines[i + 1].t : DURATION - 0.5 }));
+};
+window.__duration = DURATION;
 window.__ready = true;

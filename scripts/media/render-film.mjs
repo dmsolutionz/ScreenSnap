@@ -5,11 +5,11 @@
 // how long any one capture takes.
 //
 //   node scripts/media/render-film.mjs --work <media-work dir> --out <dir> [--dsf 2] [--fps 30] [--workers 6]
-//        [--from 0 --to 88]            seconds range to render
+//        [--from 0 --to <end>]         seconds range to render (default: the whole film)
 //        [--at 2.0,12.5,30]            stills only (design review) → <out>/still-<t>.png
-//        [--captions]                  also write <out>/captions.srt
+//        [--captions]                  also write <out>/captions.srt, sfx-cues.json and voice.json
 import { createServer } from "node:http";
-import { createReadStream, existsSync, statSync, mkdirSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, statSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve, join, extname } from "node:path";
 import { launchChrome } from "./lib/chrome.mjs";
@@ -20,7 +20,9 @@ const argv = Object.fromEntries(process.argv.slice(2).reduce((a, x, i, all) => (
 const WORK = resolve(argv.work || ""), OUT = resolve(argv.out || "");
 if (!argv.work || !argv.out) { console.error("usage: render-film.mjs --work <media-work> --out <dir> [--at t,t] [--from s --to s]"); process.exit(2); }
 const DSF = Number(argv.dsf || 2), FPS = Number(argv.fps || 30), WORKERS = Number(argv.workers || 6);
-const FROM = Number(argv.from || 0), TO = Number(argv.to || 88);
+// the film's length comes from film.js (export const DURATION)
+const DURATION = Number((readFileSync(join(HERE, "film", "film.js"), "utf8").match(/export const DURATION = ([\d.]+)/) || [])[1]);
+const FROM = Number(argv.from || 0), TO = Number(argv.to || DURATION);
 
 const ROOTS = { "/film/": join(HERE, "film"), "/work/": WORK, "/fonts/": join(REPO, "src", "popup", "fonts"), "/site/": join(REPO, "docs") };
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".json": "application/json", ".png": "image/png", ".woff2": "font/woff2" };
@@ -62,7 +64,7 @@ if (argv.at) {
   console.log(`wrote ${ts.length} stills to ${OUT}`);
 } else {
   mkdirSync(join(OUT, "frames"), { recursive: true });
-  const first = Math.round(FROM * FPS), last = Math.min(Math.round(TO * FPS), Math.round(88 * FPS)) - 1;
+  const first = Math.round(FROM * FPS), last = Math.min(Math.round(TO * FPS), Math.round(DURATION * FPS)) - 1;
   const total = last - first + 1;
   const per = Math.ceil(total / WORKERS);
   let done = 0; const t0 = Date.now();
@@ -82,8 +84,9 @@ if (argv.captions) {
   const srt = caps.map((c, i) => `${i + 1}\n${ts(c.t0)} --> ${ts(c.t1)}\n${c.text.replace(/\*/g, "")}\n`).join("\n");
   writeFileSync(join(OUT, "captions.srt"), srt);
   writeFileSync(join(OUT, "sfx-cues.json"), JSON.stringify(await page.evaluate("window.__sfx()"), null, 1));
+  writeFileSync(join(OUT, "voice.json"), JSON.stringify(await page.evaluate("window.__voice()"), null, 1));
   await chrome.close();
-  console.log(`wrote ${caps.length} captions → ${OUT}/captions.srt + sfx-cues.json`);
+  console.log(`wrote ${caps.length} captions → ${OUT}/captions.srt + sfx-cues.json + voice.json`);
 }
 server.close();
 process.exit(0);

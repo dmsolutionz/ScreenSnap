@@ -5,11 +5,13 @@
 //                              re-encodes anyway, so feed it the best source), closed GOP of 15 frames with 2 B-frames
 //                              and bt709 colour tags as YouTube recommends, AAC-LC 384 kbps / 48 kHz, faststart.
 //   captions.srt               copied alongside, for YouTube's subtitle upload (the captions are also burned in).
-//   site/screensnap-demo.mp4   the website loop: the video-editor section only, 1280x720, muted, faded in and out.
+//   site/screensnap-demo.mp4   the website video: the video-editor walkthrough only, 1920x1080, muted, high quality
+//                              (CRF 18 — it is the page's centrepiece, so it is not squeezed for size).
 //   site/screensnap-demo.gif   a small GIF fallback for the <video>.
 //   site/poster.png            a still for the poster / og:image.
 //
 //   node scripts/media/encode-film.mjs --frames <dir with %06d.png> --audio mix.wav --captions captions.srt --out <dir>
+//        [--site-from 34.3 --site-to 179.6] [--poster-at 130]   (film seconds)
 import { mkdirSync, copyFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -46,13 +48,13 @@ run("4K master", [
 console.log("  ", master, mb(master));
 if (argv.captions) copyFileSync(argv.captions, join(OUT, "captions.srt"));
 
-// 2 ── the website loop: only the editor section (24.3 s → 53.6 s), muted, 720p
-const A = 24.3, B = 53.6, DUR = B - A;
+// 2 ── the website video: only the editor section, muted, 1080p
+const A = Number(argv["site-from"] || 34.3), B = Number(argv["site-to"] || 179.6), DUR = B - A;
 const demo = join(SITE, "screensnap-demo.mp4");
 run("site demo", [
   ...seq(A), "-t", String(DUR), "-an",
-  "-vf", `scale=1280:720:flags=lanczos,fade=t=in:st=0:d=0.4,fade=t=out:st=${DUR - 0.5}:d=0.5,format=yuv420p`,
-  "-c:v", "libx264", "-preset", "slow", "-crf", "24", "-profile:v", "high", "-movflags", "+faststart", ...tags, demo,
+  "-vf", `scale=1920:1080:flags=lanczos,fade=t=in:st=0:d=0.4,fade=t=out:st=${DUR - 0.5}:d=0.5,format=yuv420p`,
+  "-c:v", "libx264", "-preset", "slow", "-crf", "18", "-profile:v", "high", "-movflags", "+faststart", ...tags, demo,
 ]);
 console.log("  ", demo, mb(demo));
 
@@ -67,5 +69,5 @@ console.log("  ", gif, mb(gif));
 
 // 4 ── poster: the crop box with its handles (after its key-cap has faded)
 const poster = join(SITE, "poster.png");
-run("poster", [...seq(42.0), "-frames:v", "1", "-vf", "scale=1280:720:flags=lanczos", poster]);
+run("poster", [...seq(Number(argv["poster-at"] || 130)), "-frames:v", "1", "-vf", "scale=1920:1080:flags=lanczos", poster]);
 console.log("  ", poster, mb(poster));

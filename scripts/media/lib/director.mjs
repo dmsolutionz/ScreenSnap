@@ -22,14 +22,17 @@ const ease = {
 };
 
 // cursorScale shrinks/grows the synthetic cursor + ripple (1 = a 28px arrow; ~0.6 suits a 340px-wide popup).
-export function createDirector(page, { fps = 30, outDir, cursor = true, start = [80, 80], cursorScale = 1 } = {}) {
+// pace stretches every duration (2 = everything takes twice as long) to slow a whole scripted tour down.
+// speech: { [caption text]: seconds } — how long the voiceover takes to say each say() line; the next line (and so
+// the next step) waits until the previous one has been spoken, plus a breath, so the narration never has to rush.
+export function createDirector(page, { fps = 30, outDir, cursor = true, start = [80, 80], cursorScale = 1, pace = 1, speech = null } = {}) {
   mkdirSync(join(outDir, "frames"), { recursive: true });
   let frameNo = 0;
   let pos = { x: start[0], y: start[1] };
   let down = false;
   let rippleAge = null; // seconds since the last press, or null
   let lastFile = null, dirty = true;
-  const marks = {}, clicks = [];
+  const marks = {}, clicks = [], captions = [];
 
   const t = () => frameNo / fps;
   const name = (n) => join(outDir, "frames", `${String(n).padStart(6, "0")}.png`);
@@ -75,7 +78,7 @@ export function createDirector(page, { fps = 30, outDir, cursor = true, start = 
     if (rippleAge != null) { rippleAge += 1 / fps; if (rippleAge > 0.5) rippleAge = null; }
   }
 
-  const frames = (sec) => Math.max(1, Math.round(sec * fps));
+  const frames = (sec) => Math.max(1, Math.round(sec * pace * fps));
   const buttons = () => (down ? 1 : 0);
   async function moveTo(x, y) { pos = { x, y }; dirty = true; await page.mouse("mouseMoved", x, y, { buttons: buttons() }); }
 
@@ -83,6 +86,14 @@ export function createDirector(page, { fps = 30, outDir, cursor = true, start = 
     install, t, fps, marks, clicks,
     get pos() { return { ...pos }; },
     mark(label) { marks[label] = t(); return marks[label]; },
+    // A caption for the film from this moment until the next one (and, optionally, the key-cap for a
+    // shortcut being used), recorded on the same clock as the frames so it can never drift off its step.
+    async say(text, key = null) {
+      const prev = captions[captions.length - 1];
+      const need = prev && speech && speech[prev.text] ? prev.t + speech[prev.text] + 0.45 : 0;
+      if (t() < need) await api.hold((need - t()) / pace);
+      captions.push({ t: t(), text, ...(key ? { key } : {}) });
+    },
     // A still beat: the first frame is captured, the rest repeat it (unless a ripple is still animating).
     async hold(sec) { for (let i = 0; i < frames(sec); i++) await snap(); },
     // Run page-side work, then let the result show up in the very next frame.
@@ -150,7 +161,7 @@ export function createDirector(page, { fps = 30, outDir, cursor = true, start = 
     },
     frameCount: () => frameNo,
     async finish(extra = {}) {
-      const manifest = { fps, frames: frameNo, duration: frameNo / fps, marks, clicks, ...extra };
+      const manifest = { fps, frames: frameNo, duration: frameNo / fps, marks, clicks, captions, ...extra };
       writeFileSync(join(outDir, "manifest.json"), JSON.stringify(manifest, null, 2));
       return manifest;
     },

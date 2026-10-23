@@ -1,14 +1,17 @@
 #!/usr/bin/env node
 /**
- * synth-audio.mjs - procedural soundtrack + SFX for the screensnap launch film.
+ * synth-audio.mjs - procedural soundtrack + SFX for the screensnap launch / walkthrough films.
  *
  * Everything is synthesised from scratch (no samples, no network, zero npm deps) and is fully
  * deterministic (seeded PRNG). Usage:
  *
- *   node scripts/media/synth-audio.mjs --out <dir> [--skip-sfx] [--skip-analysis]
+ *   node scripts/media/synth-audio.mjs --out <dir> [--structure <name|file.json>] [--lufs -17] [--skip-sfx] [--skip-analysis]
+ *
+ * --structure picks the song form: `launch` (default, the 88 s launch film), `walkthrough` (the 232 s
+ * tutorial cut) or a JSON file shaped like the STRUCTURES entries below.
  *
  * Writes into <dir>:
- *   music.wav            88.000 s, stereo, 48 kHz, 32-bit float, ~-17 LUFS, true peak <= -1.5 dBTP
+ *   music.wav            full length, stereo, 48 kHz, 32-bit float, ~-17 LUFS, true peak <= -1.5 dBTP
  *   stems/*.wav          drums, bass, chords, arp, lead, fx - same format; they already carry the master
  *                        gain curve, so summing them reproduces music.wav exactly
  *   sfx/*.wav            one-shot UI / transition sounds, 24-bit, peak -3 dBFS
@@ -16,7 +19,7 @@
  *   analysis/            spectrogram PNGs, loudness tables, checks.json (needs ffmpeg for the images)
  *
  * Timing: 120 BPM at 48 kHz means one 16th note is exactly 6000 samples, so every event sits on an
- * integer sample and nothing drifts. Key A minor, Am - F - C - G (see BAR_CHORDS for the deviations).
+ * integer sample and nothing drifts. Key A minor, Am - F - C - G (see generateChords for the turnarounds).
  *
  * Layout of this file: 1 grid + arrangement data, 2 DSP utilities, 3 instruments, 4 effects,
  * 5 arrangement/rendering, 6 master bus, 7 SFX, 8 I/O, 9 analysis, 10 main.
@@ -32,38 +35,146 @@ const BPM = 120;
 const BEAT = 60 / BPM; // 0.5 s
 const STEP = (SR * BEAT) / 4; // one 16th note = 6000 samples
 const BAR = STEP * 16; // 96000 samples = 2.0 s
-const BARS = 44;
-const N = BAR * BARS; // 4 224 000 samples = 88.000 s
 if (!Number.isInteger(STEP)) throw new Error('tempo/sample-rate combination is not sample-exact');
 
 const sec = s => Math.round(s * SR); // seconds -> sample index
 const atStep = k => k * STEP; // 16th-note step (fractions of 0.5 = 32nds are still integers) -> sample
+const range = (a, b) => Array.from({ length: b - a }, (_, i) => a + i);
 
-/** Storyboard sections. `id` is the musical role used throughout the arrangement code. */
-const SECTIONS = [
-  { id: 'intro', name: 'Intro / logo reveal', music: 'pad swell + riser, big impact at 2.0, drums pause until 4.0', start: 0, end: 4 },
-  { id: 'hook', name: 'Hook: free, no paywall', music: 'light groove: soft kick, off-beat hats, sub bass, pad', start: 4, end: 12 },
-  { id: 'build', name: 'Record anything (popup)', music: 'build: arp + claps enter at 12.0, hats open up, snare roll + riser into the drop', start: 12, end: 24 },
-  { id: 'drop', name: 'Video editor (the star)', music: 'FULL drop at 24.0: kick, claps, rolling bass, pads, arp, lead hook', start: 24, end: 52 },
-  { id: 'breakdown', name: 'Screenshots', music: 'breakdown: thin drums, pads + arp, snare roll + riser into 62.0', start: 52, end: 62 },
-  { id: 'drop2', name: 'Private by design', music: 'FULL again at 62.0 with an octave-bounce bass pattern', start: 62, end: 74 },
-  { id: 'finale', name: 'Outro / call to action', music: 'biggest section: everything + octave lead, roll into the final hit', start: 74, end: 84 },
-  { id: 'tail', name: 'Tail', music: 'final hit at 84.0, long reverb ring-out to silence', start: 84, end: 88 },
-];
-const BAR_ROLE = Array.from({ length: BARS }, (_, b) => SECTIONS.find(s => b * 2 >= s.start && b * 2 < s.end).id);
+/**
+ * Song structures. Sections are contiguous, start at 0 and sit on bar lines (multiples of 2 s); the
+ * first is an `intro` (impact at 2.0 s) and the last a `tail` (final hit on its first downbeat). `role`
+ * drives the arrangement:
+ *   intro, hook (light groove), build (arp + claps), drop / drop2 (full), bed (calm groove under
+ *   captions), breakdown (thin, riser out), finale (biggest), tail (final hit + ring-out).
+ * Optional per-section keys: `lead` (bool, overrides the role default), `lift` ([from, to] seconds of
+ * brighter 16th-hat groove inside a bed), `db` ({ stem: [startDb, endDb] } overrides SECTION_DB),
+ * `gainDb` ([startDb, endDb] applied to every stem - the quickest way to shape the energy map).
+ * `chords` (one per bar) is optional; otherwise Am-F-C-G restarts per section and pulls to G at the end.
+ * `energyOrder` lists [quieter id, louder id] pairs that the analysis asserts.
+ * Pass a built-in name or a JSON file of the same shape with --structure.
+ */
+const STRUCTURES = {
+  launch: {
+    sections: [
+      { id: 'intro', role: 'intro', name: 'Intro / logo reveal', start: 0, end: 4 },
+      { id: 'hook', role: 'hook', name: 'Hook: free, no paywall', start: 4, end: 12 },
+      { id: 'build', role: 'build', name: 'Record anything (popup)', start: 12, end: 24 },
+      { id: 'drop', role: 'drop', name: 'Video editor (the star)', start: 24, end: 52 },
+      { id: 'breakdown', role: 'breakdown', name: 'Screenshots', start: 52, end: 62 },
+      { id: 'drop2', role: 'drop2', name: 'Private by design', start: 62, end: 74 },
+      { id: 'finale', role: 'finale', name: 'Outro / call to action', start: 74, end: 84 },
+      { id: 'tail', role: 'tail', name: 'Tail', start: 84, end: 88 },
+    ],
+    chords: 'Am Am  Am F C G  Am F C G F G  Am F C G Am F C G Am F C G C G  Am F C F G  Am F C G C G  Am F C G G  Am Am',
+    energyOrder: [['intro', 'hook'], ['hook', 'build'], ['build', 'drop'], ['breakdown', 'drop'], ['drop', 'finale'], ['breakdown', 'drop2']],
+  },
+  walkthrough: {
+    sections: [
+      { id: 'intro', role: 'intro', name: 'Intro / logo reveal', start: 0, end: 4, gainDb: [-1, -1] },
+      { id: 'hook', role: 'hook', name: 'Hook', start: 4, end: 12, gainDb: [-3, -3] },
+      { id: 'build', role: 'build', name: 'Build (arp + claps enter)', start: 12, end: 34, gainDb: [-4, -2.5] },
+      { id: 'editor', role: 'bed', name: 'Editor walkthrough (under captions)', start: 34, end: 180, lift: [98, 130] },
+      { id: 'screenshots', role: 'breakdown', name: 'Screenshots', start: 180, end: 206, gainDb: [-3, -2] },
+      { id: 'private', role: 'drop2', name: 'Private by design', start: 206, end: 218, lead: false, gainDb: [-1.8, -1.8] },
+      { id: 'finale', role: 'finale', name: 'Outro / call to action', start: 218, end: 228, gainDb: [-2.2, -2.2] },
+      { id: 'tail', role: 'tail', name: 'Final hit + ring-out', start: 228, end: 232, gainDb: [-1.5, -1.5] },
+    ],
+    energyOrder: [['intro', 'hook'], ['hook', 'editor'], ['screenshots', 'editor'], ['screenshots', 'private'], ['editor', 'private'], ['private', 'finale']],
+  },
+};
 
-/** One chord per bar. Sections restart on Am; pre-drop bars end on G (or F-G) to pull into the Am downbeat. */
-const BAR_CHORDS = [
-  'Am Am', // intro (swell on Am, impact lands on the tonic)
-  'Am F C G', // hook
-  'Am F C G F G', // build
-  'Am F C G Am F C G Am F C G C G', // drop
-  'Am F C F G', // breakdown
-  'Am F C G C G', // drop 2
-  'Am F C G G', // finale (last bar = roll into the final hit)
-  'Am Am', // tail
-].join(' ').split(' ');
-if (BAR_CHORDS.length !== BARS) throw new Error(`BAR_CHORDS has ${BAR_CHORDS.length} bars, expected ${BARS}`);
+const ROLE_TEXT = {
+  intro: 'pad swell + riser, big impact at 2.0, drums pause until 4.0',
+  hook: 'light groove: soft kick, off-beat hats, sub bass, pad',
+  build: 'arp + claps enter, hats open up, riser into the next section',
+  drop: 'FULL: kick, claps, rolling bass, pads, arp, lead hook',
+  bed: 'calm bed under captions: soft kick, light hats, pads + arp; a variation every 16 bars',
+  breakdown: 'thin drums, pads + arp, snare roll + riser out',
+  drop2: 'full groove again with an octave-bounce bass',
+  finale: 'biggest section, roll into the final hit',
+  tail: 'final hit, long reverb ring-out to silence',
+};
+const PROGRESSION = ['Am', 'F', 'C', 'G'];
+const FULL_ROLES = new Set(['drop', 'drop2', 'finale']);
+const IMPACT_TIME = 2; // seconds into the intro
+
+/* Derived arrangement state, filled in by configure() for the chosen structure. */
+let STRUCTURE;
+let SECTIONS;
+let BARS;
+let N;
+let BAR_SEC; // bar -> section
+let BAR_ROLE;
+let BAR_CHORDS;
+let TRANSITIONS; // how each section is entered (riser / gap / roll / crash ...)
+let GAP_STEPS; // [from step, to step) of silence before the big downbeats
+let ROLL_BARS; // bar -> { index, count } for bars taken over by a snare roll
+let FILL_BARS; // bars that end with a snare fill (into a finale)
+let RISERS; // riser windows, collected while rendering the fx stem (for cues.json)
+
+function configure(structure) {
+  const secs = structure.sections;
+  secs.forEach((s, i) => {
+    const okGrid = Number.isInteger(s.start / 2) && Number.isInteger(s.end / 2) && s.end > s.start;
+    const okChain = i ? s.start === secs[i - 1].end : s.start === 0;
+    if (!okGrid || !okChain || !ROLE_TEXT[s.role]) throw new Error(`bad section ${JSON.stringify(s)}: needs a known role and contiguous bar-line start/end`);
+  });
+  if (secs[0].role !== 'intro' || secs[0].end < 4) throw new Error('the first section must be an intro of at least 4 s');
+  if (secs.at(-1).role !== 'tail' || secs.at(-1).end - secs.at(-1).start !== 4) throw new Error('the last section must be a 4 s tail');
+  STRUCTURE = structure;
+  SECTIONS = secs.map(s => ({ ...s, music: s.music ?? ROLE_TEXT[s.role], startBar: s.start / 2, endBar: s.end / 2 }));
+  BARS = SECTIONS.at(-1).endBar;
+  N = BAR * BARS;
+  BAR_SEC = range(0, BARS).map(b => SECTIONS.find(s => b >= s.startBar && b < s.endBar));
+  BAR_ROLE = BAR_SEC.map(s => s.role);
+  BAR_CHORDS = structure.chords ? structure.chords.split(/\s+/).filter(Boolean) : generateChords();
+  if (BAR_CHORDS.length !== BARS) throw new Error(`chords cover ${BAR_CHORDS.length} bars, expected ${BARS}`);
+
+  TRANSITIONS = [];
+  GAP_STEPS = [];
+  ROLL_BARS = new Map();
+  FILL_BARS = new Set();
+  RISERS = [];
+  const ENTRY = { build: 'rise', drop: 'drop', drop2: 'drop', bed: 'soft', breakdown: 'down', finale: 'lift', tail: 'final' };
+  SECTIONS.forEach((s, i) => {
+    const entry = i && ENTRY[s.role];
+    if (!entry) return;
+    const prev = SECTIONS[i - 1];
+    const step = s.startBar * 16;
+    const tr = { section: s, prev, entry, time: s.start, step, gap: 0, roll: null };
+    if (entry === 'drop' || entry === 'final') {
+      tr.gap = entry === 'final' ? 2 : 1;
+      const g = step - tr.gap;
+      const count = prev.role === 'breakdown' ? 2 : 1;
+      const b = step - 16 * count;
+      if (count === 2) tr.roll = { segs: [[b, b + 16, 2], [b + 16, b + 24, 1], [b + 24, g, 0.5]], v0: 0.18, v1: 1 };
+      else if (tr.gap === 2) tr.roll = { segs: [[b, b + 8, 2], [b + 8, b + 12, 1], [b + 12, g, 0.5]], v0: 0.25, v1: 1 };
+      else tr.roll = { segs: [[b, b + 8, 2], [b + 8, g, 1]], v0: 0.2, v1: 1 };
+      for (let k = 0; k < count; k++) ROLL_BARS.set(b / 16 + k, { index: k, count });
+      GAP_STEPS.push([g, step]);
+    }
+    if (entry === 'lift') FILL_BARS.add(s.startBar - 1);
+    TRANSITIONS.push(tr);
+  });
+}
+
+/** Am-F-C-G restarting on every section; the last bar before the next section is pulled to G. */
+function generateChords() {
+  const out = [];
+  SECTIONS.forEach((s, i) => {
+    const bars = s.endBar - s.startBar;
+    const still = s.role === 'intro' || s.role === 'tail';
+    const ch = range(0, bars).map(k => (still ? 'Am' : PROGRESSION[k % 4]));
+    const last = ch[bars - 1];
+    if (!still && i < SECTIONS.length - 1 && bars >= 2 && last !== 'G') {
+      if (last !== 'Am') ch[bars - 2] = last;
+      ch[bars - 1] = 'G';
+    }
+    out.push(...ch);
+  });
+  return out;
+}
 
 /** pad = voicing, arp = pool of chord tones (F4..C6), root = bass root (A1, F1, C2, G1). */
 const CHORDS = {
@@ -80,14 +191,15 @@ const LEAD_MOTIF = {
   C: [[0, 3, 79], [3, 1, 76], [4, 2, 79], [6, 2, 76], [8, 3, 79], [11, 1, 76], [12, 4, 72]],
   G: [[0, 3, 74], [3, 1, 71], [4, 2, 74], [6, 2, 79], [8, 4, 79], [12, 2, 74], [14, 2, 76]],
 };
-const range = (a, b) => Array.from({ length: b - a }, (_, i) => a + i);
-const LEAD_BARS = new Set([...range(12, 16), ...range(20, 24), ...range(31, 37), ...range(37, 41)]);
-const LEAD_OCTAVE_UP_BARS = new Set(range(20, 24)); // second hook statement sits an octave higher
+/** Arp note-index patterns over the chord's tone pool; a bed switches pattern pairs every 16 bars. */
 const ARP_PATTERNS = [
   [0, 2, 1, 3, 2, 4, 3, 2, 0, 2, 1, 3, 4, 3, 2, 1],
   [4, 2, 3, 1, 2, 0, 1, 2, 4, 2, 3, 1, 0, 1, 2, 3],
+  [1, 3, 2, 4, 3, 2, 1, 0, 1, 3, 2, 4, 2, 1, 0, 2],
+  [0, 1, 2, 4, 3, 2, 1, 3, 0, 1, 2, 4, 3, 4, 2, 1],
 ];
 const ARP_VEL = [1.0, 0.5, 0.7, 0.5, 0.85, 0.5, 0.7, 0.5, 0.95, 0.5, 0.75, 0.5, 0.85, 0.5, 0.7, 0.55];
+const BED_BLOCK = 16; // bars per variation block inside a bed
 
 /** Bass patterns: [step, length in 16ths, semitone offset from the chord root]. */
 const roll16 = oct => [0, 1, 2, 3].flatMap(k => [[4 * k + 1, 1, 0], [4 * k + 2, 1, 0], [4 * k + 3, 1, oct(k)]]);
@@ -100,34 +212,79 @@ const BASS_PATTERNS = {
   finale: roll16(() => 12),
 };
 
-/** The one-sixteenth (or eighth) of silence before the big downbeats: [from step, to step). */
-const GAP_STEPS = [[191, 192], [495, 496], [670, 672]];
+/** Is time t (s) inside a bed section's `lift` window? */
+const inLift = (s, t) => Boolean(s.lift && t >= s.lift[0] && t < s.lift[1]);
 
-/** Mix automation (seconds -> value). Gains are linear, cutoffs in Hz (interpolated in log space). */
+/** Bed automation: steady level, a filter dip-and-reopen at every 16-bar block, brighter during the lift. */
+function bedSweep(base, lifted, dip) {
+  return s => {
+    const keys = [[0, base]];
+    for (let t = s.start + BED_BLOCK * 2; t < s.end; t += BED_BLOCK * 2) {
+      const before = inLift(s, t - 0.1) ? lifted : base;
+      const after = inLift(s, t) ? lifted : base;
+      keys.push([t - s.start - 0.05, before], [t - s.start, dip], [t - s.start + 6, after]);
+    }
+    return keys;
+  };
+}
+
+/**
+ * Mix automation per role: [seconds from section start (negative = from section end), value].
+ * Gains are linear, cutoffs in Hz (interpolated in log space). Values may be functions of the section.
+ */
 const AUTO = {
-  padGain: [[0, 0], [0.4, 0.04], [1.9, 0.5], [2.0, 0.55], [3.9, 0.4], [12, 0.46], [23.9, 0.58], [24, 0.55], [51.9, 0.55], [52.4, 0.85], [61.9, 0.95], [62.1, 0.55], [73.9, 0.55], [74.2, 0.65], [83.9, 0.65], [84.2, 0.5], [86.5, 0.3], [88, 0.1]],
-  padCut: [[0, 200], [2, 4200], [2.6, 3200], [4, 1600], [12, 2000], [23.9, 4200], [24.2, 5200], [52, 5200], [52.4, 2400], [61.9, 5200], [62.2, 6200], [74.2, 7600], [84, 8600], [86, 3500], [88, 1500]],
-  arpGain: [[12, 0], [12.4, 0.3], [23.9, 0.7], [24, 0.8], [51.9, 0.8], [52.1, 1.0], [61.9, 1.05], [62.1, 0.8], [73.9, 0.8], [74.1, 0.95], [84, 0.95]],
-  arpCut: [[12, 1000], [23.9, 3000], [24, 3400], [52, 2300], [61.9, 4800], [62.1, 3600], [74.1, 4400], [84, 4400]],
-  bassGain: [[4, 0.7], [11.9, 0.9], [12, 0.95], [23.9, 1.0], [52, 0.6], [61.9, 0.75], [62, 1.0], [74, 1.1]],
-  bassSaw: [[4, 0.12], [12, 0.3], [24, 0.5], [52, 0.0], [62, 0.55], [74, 0.7]],
-  leadGain: [[12, 0.8], [62, 0.85], [74, 1.0]],
-  chordSend: [[0, 0.2], [83.9, 0.2], [84, 0.65], [88, 0.65]],
-  fxSend: [[0, 0.18], [83.9, 0.18], [84, 0.45], [88, 0.45]],
+  padGain: {
+    intro: [[0, 0], [0.4, 0.04], [1.9, 0.5], [2.0, 0.55], [-0.1, 0.4]], hook: [[0, 0.4]], build: [[0, 0.46], [-0.1, 0.58]],
+    drop: [[0, 0.55], [-0.1, 0.55]], bed: [[0, 0.5], [-0.1, 0.5]], breakdown: [[0.4, 0.85], [-0.1, 0.95]], drop2: [[0.1, 0.55], [-0.1, 0.55]],
+    finale: [[0.2, 0.65], [-0.1, 0.65]], tail: [[0.2, 0.5], [2.5, 0.3], [4, 0.1]],
+  },
+  padCut: {
+    intro: [[0, 200], [2, 4200], [2.6, 3200]], hook: [[0, 1600]], build: [[0, 2000], [-0.1, 4200]], drop: [[0.2, 5200], [-0.1, 5200]],
+    bed: bedSweep(3000, 4300, 1300), breakdown: [[0.4, 2400], [-0.1, 5200]], drop2: [[0.2, 6200]], finale: [[0.2, 7600], [-0.01, 8600]],
+    tail: [[2, 3500], [4, 1500]],
+  },
+  arpGain: {
+    build: [[0, 0], [0.4, 0.3], [-0.1, 0.7]], drop: [[0, 0.8], [-0.1, 0.8]], bed: s => (s.lift ? [[0, 0.75], [s.lift[0] - s.start, 0.75], [s.lift[0] - s.start + 0.1, 0.85], [s.lift[1] - s.start, 0.85], [s.lift[1] - s.start + 0.1, 0.75]] : [[0, 0.75]]),
+    breakdown: [[0.1, 1.0], [-0.1, 1.05]], drop2: [[0.1, 0.8], [-0.1, 0.8]], finale: [[0.1, 0.95]],
+  },
+  arpCut: {
+    build: [[0, 1000], [-0.1, 3000]], drop: [[0, 3400]], bed: bedSweep(2800, 3800, 1500), breakdown: [[0, 2300], [-0.1, 4800]],
+    drop2: [[0.1, 3600]], finale: [[0.1, 4400]],
+  },
+  bassGain: { hook: [[0, 0.7], [-0.1, 0.9]], build: [[0, 0.95], [-0.1, 1.0]], drop: [[0, 1.0]], bed: [[0, 0.75]], breakdown: [[0, 0.6], [-0.1, 0.75]], drop2: [[0, 1.0]], finale: [[0, 1.1]] },
+  bassSaw: { hook: [[0, 0.12]], build: [[0, 0.3]], drop: [[0, 0.5]], bed: [[0, 0.22]], breakdown: [[0, 0]], drop2: [[0, 0.55]], finale: [[0, 0.7]] },
+  leadGain: { drop: [[0, 0.8]], drop2: [[0, 0.85]], finale: [[0, 1.0]] },
+  chordSend: { intro: [[0, 0.2]], finale: [[-0.1, 0.2]], tail: [[0, 0.65]] },
+  fxSend: { intro: [[0, 0.18]], finale: [[-0.1, 0.18]], tail: [[0, 0.45]] },
 };
+
+/** Turn a per-role AUTO table into a curve over the configured structure. */
+function roleCurve(table, opts) {
+  const keys = [];
+  for (const s of SECTIONS) {
+    const spec = typeof table[s.role] === 'function' ? table[s.role](s) : table[s.role];
+    for (const [t, v] of spec ?? []) {
+      let at = t < 0 ? s.end + t : Math.min(s.start + t, s.end);
+      if (keys.length && at <= keys[keys.length - 1][0]) at = keys[keys.length - 1][0] + 1e-4;
+      keys.push([at, v]);
+    }
+  }
+  return keyframes(keys, opts);
+}
+
 /** Sidechain depth per stem (0 = none, 1 = full duck) and per-stem trims. */
 const DUCK = { bass: 0.9, pad: 0.6, arp: 0.35, lead: 0.25 };
 const TRIM = { drums: 1.0, bass: 0.9, chords: 1.0, arp: 1.0, lead: 1.0, fx: 1.0 };
-/** Per-stem level shaping per section as [dB at section start, dB at section end] - the main energy-map control. */
+/** Per-stem level shaping per role as [dB at section start, dB at section end] - the main energy-map control. */
 const SECTION_DB = {
-  drums: { hook: [-1, -1], build: [-2, 0] },
-  bass: { hook: [-2.5, -2.5], build: [-4.5, -2], drop: [-1.5, -1.5], breakdown: [-8, -8], drop2: [-3, -3], finale: [-3, -3] },
-  chords: { intro: [-5, -5], breakdown: [-6, -6], tail: [-3, -3] },
-  arp: { breakdown: [-4.5, -4.5], finale: [-1, -1] },
+  drums: { hook: [-1, -1], build: [-2, 0], bed: [-2, -2] },
+  bass: { hook: [-2.5, -2.5], build: [-4.5, -2], drop: [-1.5, -1.5], bed: [-5, -5], breakdown: [-8, -8], drop2: [-3, -3], finale: [-3, -3] },
+  chords: { intro: [-5, -5], bed: [-1.5, -1.5], breakdown: [-6, -6], tail: [-3, -3] },
+  arp: { bed: [-2, -2], breakdown: [-4.5, -4.5], finale: [-1, -1] },
   lead: { drop2: [-2, -2], finale: [-1.5, -1.5] },
   fx: { breakdown: [-2, -2] },
 };
-const TARGET_LUFS = -17;
+let TARGET_LUFS = -17; // --lufs overrides
 const TRUE_PEAK_LIMIT = -1.5;
 
 /* ========================================================================== 2. DSP utilities */
@@ -712,20 +869,23 @@ function applyGain(bus, ...gains) {
 function scheduleDrums() {
   const ev = { kick: [], clap: [], snare: [], hat: [], open: [], roll: [] };
   const add = (list, step, vel, extra = {}) => list.push({ at: atStep(step), vel, step, ...extra });
-  const roll = (segs, v0, v1) => {
+
+  add(ev.kick, (IMPACT_TIME * SR) / STEP, 1, { kind: 'impact' });
+  for (const tr of TRANSITIONS) {
+    if (tr.entry === 'final') add(ev.kick, tr.step, 1, { kind: 'impact' });
+    if (!tr.roll) continue;
     const hits = [];
-    for (const [a, b, iv] of segs) for (let s = a; s < b - 1e-9; s += iv) hits.push(s);
+    for (const [a, b, iv] of tr.roll.segs) for (let s = a; s < b - 1e-9; s += iv) hits.push(s);
+    const { v0, v1 } = tr.roll;
     hits.forEach((s, i) => add(ev.roll, s, v0 + ((v1 - v0) * i) / (hits.length - 1), { u: i / (hits.length - 1) }));
-  };
+  }
 
-  add(ev.kick, 16, 1, { kind: 'impact' }); // 2.0 s
-  add(ev.kick, 672, 1, { kind: 'impact' }); // 84.0 s
-  roll([[176, 184, 2], [184, 191, 1]], 0.2, 1); // into the drop at 24.0
-  roll([[464, 480, 2], [480, 488, 1], [488, 495, 0.5]], 0.18, 1); // into the second drop at 62.0
-  roll([[656, 664, 2], [664, 668, 1], [668, 670, 0.5]], 0.25, 1); // into the final hit at 84.0
-
-  for (let bar = 2; bar < 42; bar++) {
-    const role = BAR_ROLE[bar];
+  for (let bar = 0; bar < BARS; bar++) {
+    const sc = BAR_SEC[bar];
+    const role = sc.role;
+    const rel = bar - sc.startBar;
+    const len = sc.endBar - sc.startBar;
+    const roll = ROLL_BARS.get(bar);
     for (let s = 0; s < 16; s++) {
       const step = bar * 16 + s;
       const beat = s % 4 === 0;
@@ -738,36 +898,39 @@ function scheduleDrums() {
       const clap = vel => add(ev.clap, step, vel);
       const snare = vel => add(ev.snare, step, vel);
 
+      if (roll) { // the snare roll owns this bar; keep only a few kicks under it
+        if (roll.count === 1 && beat && s < 8) kick(role === 'build' ? 0.9 : 1);
+        if (roll.count === 2 && roll.index === 0 && s === 0) kick(0.55, 'soft');
+        continue;
+      }
       if (role === 'hook') {
         if (beat) kick(0.8);
-        if (bar < 4) { if (off) hat(0.28); } else { if (s % 2 === 0) hat(0.3); if (s === 14) open(0.3); }
+        if (rel < 2) { if (off) hat(0.28); } else { if (s % 2 === 0) hat(0.3); if (s === 14) open(0.3); }
       } else if (role === 'build') {
-        const last = bar === 11; // the roll takes over from the second half of the last bar
-        if (beat && (!last || s < 8)) kick(0.9);
-        if (!last && backbeat) clap(0.7);
-        if (!last || s < 8) {
-          const sixteenths = bar >= 8;
-          if (beat) hat(0.38);
-          else if (off) (sixteenths ? open : hat)(sixteenths ? 0.4 : 0.3);
-          else if (odd && sixteenths) hat(0.2);
-        }
+        const sixteenths = rel >= 2;
+        if (beat) kick(0.9);
+        if (backbeat) clap(0.7);
+        if (beat) hat(0.38);
+        else if (off) (sixteenths ? open : hat)(sixteenths ? 0.4 : 0.3);
+        else if (odd && sixteenths) hat(0.2);
+      } else if (role === 'bed') {
+        if ((rel + 1) % BED_BLOCK === 0 && rel < len - 1) continue; // one-bar drum drop-out before each new block
+        const lift = inLift(sc, bar * 2 + s * 0.125);
+        if (beat) kick(lift ? 0.75 : 0.68, 'soft');
+        if (backbeat) clap(lift ? 0.45 : 0.38);
+        if (lift) { if (beat) hat(0.3); else if (off) open(0.3); else hat(0.16); } else if (off) hat(0.26); else if (s % 2 === 0) hat(0.14);
       } else if (role === 'breakdown') {
-        if (bar <= 28) {
-          if (s === 0 || s === 8) kick(0.55, 'soft');
-          if (s % 2 === 0) hat(0.2);
-          if (bar === 28 && s === 14) open(0.3);
-        } else if (bar === 29 && s === 0) kick(0.55, 'soft');
-      } else if (role === 'drop' || role === 'drop2' || role === 'finale') {
+        if (s === 0 || s === 8) kick(0.55, 'soft');
+        if (s % 2 === 0) hat(0.2);
+        if (ROLL_BARS.has(bar + 1) && s === 14) open(0.3);
+      } else if (FULL_ROLES.has(role)) {
         const lvl = role === 'finale' ? 1.15 : role === 'drop2' ? 1.05 : 1;
-        const last = bar === 41; // roll into the final hit
-        if (beat && (!last || s < 8)) kick(1);
-        if (!last) {
-          if (backbeat) { clap(lvl); snare(0.8 * lvl); if (role === 'finale') clap(0.6); }
-          if (beat) hat(0.4 * lvl); else if (off) open(0.5 * lvl); else hat(0.22 * lvl);
-          if (bar % 4 === 3 && s === 14) clap(0.35); // ghost clap at phrase ends
-          if (bar % 8 === 7 && s >= 12) snare(0.4 + (s - 12) * 0.15);
-          if (bar === 36 && s >= 12) snare(0.5 + (s - 12) * 0.17); // fill into the finale
-        }
+        if (beat) kick(1);
+        if (backbeat) { clap(lvl); snare(0.8 * lvl); if (role === 'finale') clap(0.6); }
+        if (beat) hat(0.4 * lvl); else if (off) open(0.5 * lvl); else hat(0.22 * lvl);
+        if (bar % 4 === 3 && s === 14) clap(0.35); // ghost clap at phrase ends
+        if (bar % 8 === 7 && s >= 12) snare(0.4 + (s - 12) * 0.15);
+        if (FILL_BARS.has(bar) && s >= 12) snare(0.5 + (s - 12) * 0.17); // fill into the finale
       }
     }
   }
@@ -808,13 +971,18 @@ function renderDrums(ev, gap) {
   return out;
 }
 
+function bassPattern(bar) {
+  const sc = BAR_SEC[bar];
+  if (sc.role === 'bed') return inLift(sc, bar * 2) ? BASS_PATTERNS.build : BASS_PATTERNS.hook;
+  return BASS_PATTERNS[sc.role];
+}
+
 function renderBass(presence, gap) {
-  const gainAt = keyframes(AUTO.bassGain);
-  const sawAt = keyframes(AUTO.bassSaw);
+  const gainAt = roleCurve(AUTO.bassGain);
+  const sawAt = roleCurve(AUTO.bassSaw);
   const mono = new Float32Array(N);
-  for (let bar = 2; bar < 42; bar++) {
-    const role = BAR_ROLE[bar];
-    const pattern = BASS_PATTERNS[role];
+  for (let bar = 0; bar < BARS; bar++) {
+    const pattern = bassPattern(bar);
     if (!pattern) continue;
     const root = CHORDS[BAR_CHORDS[bar]].root;
     for (const [s, len, off] of pattern) {
@@ -830,22 +998,22 @@ function renderBass(presence, gap) {
 function renderChords(presence, gap) {
   const bus = stereo();
   renderPadBus(bus.l, bus.r);
-  const cut = bake(keyframes(AUTO.padCut, { log: true }));
+  const cut = bake(roleCurve(AUTO.padCut, { log: true }));
   for (const ch of [bus.l, bus.r]) { filterStatic(ch, new Biquad('hp', 160, 0.7)); sweepLowpass(ch, cut); }
-  applyGain(bus, bake(keyframes(AUTO.padGain)), duckGain(presence, DUCK.pad), gap);
+  applyGain(bus, bake(roleCurve(AUTO.padGain)), duckGain(presence, DUCK.pad), gap);
 
   // downbeat stabs (added after ducking so they keep their attack)
-  const stabs = [
-    [2, [45, 57, 60, 64, 69, 72, 76], { gain: 0.5, len: 2.4, tau: 0.7, seed: 31 }],
-    [24, [57, 60, 64, 69, 72, 76], { gain: 0.65, len: 1.2, tau: 0.3, seed: 32 }],
-    [62, [57, 60, 64, 69, 72, 76], { gain: 0.65, len: 1.2, tau: 0.3, seed: 33 }],
-    [74, [45, 57, 60, 64, 69, 72, 76], { gain: 0.8, len: 1.6, tau: 0.45, seed: 34 }],
-    [84, [45, 57, 60, 64, 69, 72, 76, 81], { gain: 0.85, len: 4.0, tau: 1.0, ctau: 0.5, c0: 9500, c1: 1800, seed: 35 }],
-  ];
-  for (const [t, notes, o] of stabs) addStab(bus.l, bus.r, sec(t), notes, o);
+  const AM = [57, 60, 64, 69, 72, 76];
+  const stabs = [[IMPACT_TIME, [45, ...AM], { gain: 0.5, len: 2.4, tau: 0.7 }]];
+  for (const tr of TRANSITIONS) {
+    if (tr.entry === 'drop') stabs.push([tr.time, AM, { gain: 0.65, len: 1.2, tau: 0.3 }]);
+    if (tr.entry === 'lift') stabs.push([tr.time, [45, ...AM], { gain: 0.8, len: 1.6, tau: 0.45 }]);
+    if (tr.entry === 'final') stabs.push([tr.time, [45, ...AM, 81], { gain: 0.85, len: 4.0, tau: 1.0, ctau: 0.5, c0: 9500, c1: 1800 }]);
+  }
+  stabs.forEach(([t, notes, o], i) => addStab(bus.l, bus.r, sec(t), notes, { ...o, seed: 31 + i }));
 
   const hall = new Reverb({ rt60: 3.2, damp: 0.3, predelay: 0.025, hp: 260, lp: 8500 });
-  const send = bake(keyframes(AUTO.chordSend));
+  const send = bake(roleCurve(AUTO.chordSend));
   const wet = hall.process(bus.l.map((v, i) => v * send[i]), bus.r.map((v, i) => v * send[i]));
   for (let i = 0; i < N; i++) { bus.l[i] += wet.l[i]; bus.r[i] += wet.r[i]; }
   return bus;
@@ -853,13 +1021,17 @@ function renderChords(presence, gap) {
 
 function renderArp(presence, gap) {
   const bus = stereo();
-  const gainAt = keyframes(AUTO.arpGain);
-  const cutAt = keyframes(AUTO.arpCut, { log: true });
-  for (let step = 96; step < 672; step++) { // 12.0 s .. 84.0 s
+  const gainAt = roleCurve(AUTO.arpGain);
+  const cutAt = roleCurve(AUTO.arpCut, { log: true });
+  const from = SECTIONS.find(s => s.role === 'build')?.startBar ?? 1;
+  const to = SECTIONS.at(-1).startBar; // the final hit
+  for (let step = from * 16; step < to * 16; step++) {
     const bar = step >> 4;
     const j = step & 15;
     const t = (step * STEP) / SR;
-    const midi = CHORDS[BAR_CHORDS[bar]].arp[ARP_PATTERNS[bar % 2][j]];
+    const sc = BAR_SEC[bar];
+    const pair = sc.role === 'bed' ? Math.floor((bar - sc.startBar) / BED_BLOCK) % 2 : 0; // new pattern pair every block
+    const midi = CHORDS[BAR_CHORDS[bar]].arp[ARP_PATTERNS[pair * 2 + (bar % 2)][j]];
     const pan = 0.5 * Math.sin((TAU * t) / 8);
     addArpNote(bus.l, bus.r, step * STEP, midi, ARP_VEL[j] * gainAt(t) * 0.29, cutAt(t), pan);
   }
@@ -877,12 +1049,29 @@ function renderArp(presence, gap) {
   return out;
 }
 
+/**
+ * Which bars carry the lead hook, and transposed by how much. Drops state the hook in bars 0-3 and an
+ * octave higher in bars 8-11 of every 16; drop2 / finale play it throughout (never under a roll).
+ */
+function leadBars() {
+  const bars = new Map();
+  for (let bar = 0; bar < BARS; bar++) {
+    const sc = BAR_SEC[bar];
+    const on = sc.lead ?? FULL_ROLES.has(sc.role);
+    if (!on || ROLL_BARS.has(bar)) continue;
+    const rel = (bar - sc.startBar) % 16;
+    if (sc.role !== 'drop') bars.set(bar, 0);
+    else if (rel < 4) bars.set(bar, 0);
+    else if (rel >= 8 && rel < 12) bars.set(bar, 12);
+  }
+  return bars;
+}
+
 function renderLead(presence, gap) {
   const mono = new Float32Array(N);
-  const gainAt = keyframes(AUTO.leadGain);
-  for (const bar of LEAD_BARS) {
+  const gainAt = roleCurve(AUTO.leadGain);
+  for (const [bar, up] of leadBars()) {
     const role = BAR_ROLE[bar];
-    const up = LEAD_OCTAVE_UP_BARS.has(bar) ? 12 : 0;
     for (const [s, len, midi] of LEAD_MOTIF[BAR_CHORDS[bar]]) {
       const at = bar * BAR + s * STEP;
       const g = 0.32 * gainAt(at / SR);
@@ -905,7 +1094,7 @@ function renderLead(presence, gap) {
   return out;
 }
 
-/** Risers, impacts, crashes. Everything here is positioned from the grid (second values are bar lines). */
+/** Risers, impacts, crashes - all positioned from the section transitions (bar lines). */
 function renderFx() {
   const bus = stereo();
   const onBoth = fn => { fn(bus.l, 0); fn(bus.r, 1); };
@@ -921,40 +1110,41 @@ function renderFx() {
     addNoise(b, t, 2.5, { amp: gain * 0.4, decay: decay * 2.5, seed: seed + 10 + c, filters: [new Biquad('lp', 400, 0.7)] });
   });
   const riser = (end, dur, gain, { tonal = 0.25, f0 = 300, f1 = 10000, seed = 1 } = {}) => {
+    RISERS.push({ start: end - dur, end });
     onBoth((b, c) => addNoiseSweep(b, end - dur, dur, { f0, f1, q: 1.1, ampAt: u => gain * u ** 2.2, seed: seed + c }));
     if (tonal) onBoth(b => addSweepTone(b, end - dur, dur, u => 220 * 4 ** (u ** 1.5), u => tonal * gain * u ** 2.2));
   };
 
-  // 0-2 s: reversed-cymbal riser + sub rise, landing on 2.000
-  onBoth((b, c) => addInto(b, reverse(makeCrash(41 + c, 2, 0.5)), 0, 0.3));
-  onBoth(b => addSweepTone(b, 0, 2, u => 27.5 * 2 ** u, u => 0.3 * u ** 2));
-  riser(2, 2, 0.08, { tonal: 0, f0: 400, f1: 9000, seed: 51 });
-  // 2.0 s impact: sub boom + noise burst (the kick is in the drum stem)
-  boom(2, 0.75, 0.38, 2.0);
-  noiseBurst(2, 0.55, 0.2, 61);
-  // transitions
-  riser(12, 2, 0.1, { tonal: 0, f0: 500, f1: 6000, seed: 71 });
-  riser(24, 4, 0.7, { seed: 81 });
-  crash(24, 0.7, 91);
-  boom(24, 0.55, 0.5, 1.5);
-  // 52.0 s: down-sweep into the breakdown
-  onBoth((b, c) => addNoiseSweep(b, 52, 1.8, { f0: 7000, f1: 250, q: 1, ampAt: u => 0.35 * (1 - u) ** 2, seed: 101 + c }));
-  onBoth(b => addSweepTone(b, 52, 0.9, u => 62 - 30 * u, u => 0.45 * (1 - u) ** 1.5));
-  riser(62, 4, 0.9, { seed: 111 });
-  crash(62, 0.8, 121);
-  boom(62, 0.6, 0.5, 1.5);
-  riser(74, 2, 0.35, { tonal: 0.15, seed: 131 });
-  crash(74, 0.75, 141);
-  boom(74, 0.65, 0.6, 1.8);
-  riser(84, 4, 0.9, { seed: 151 });
-  // 84.0 s: the final hit
-  crash(84, 0.6, 161);
-  boom(84, 0.7, 0.9, 3.5);
-  noiseBurst(84, 0.5, 0.4, 171);
+  // intro: reversed-cymbal riser + sub rise landing on the impact, then sub boom + noise burst (the kick is in the drum stem)
+  const T = IMPACT_TIME;
+  onBoth((b, c) => addInto(b, reverse(makeCrash(41 + c, T, 0.5)), 0, 0.3));
+  onBoth(b => addSweepTone(b, 0, T, u => 27.5 * 2 ** u, u => 0.3 * u ** 2));
+  riser(T, T, 0.08, { tonal: 0, f0: 400, f1: 9000, seed: 51 });
+  boom(T, 0.75, 0.38, 2.0);
+  noiseBurst(T, 0.55, 0.2, 61);
+
+  TRANSITIONS.forEach((tr, i) => {
+    const t = tr.time;
+    const seed = 71 + i * 10;
+    const strong = tr.prev.role === 'breakdown';
+    if (tr.entry === 'rise') riser(t, 2, 0.1, { tonal: 0, f0: 500, f1: 6000, seed });
+    if (tr.entry === 'soft') { riser(t, 4, 0.3, { tonal: 0.1, seed }); crash(t, 0.3, seed + 5); }
+    if (tr.entry === 'drop') { riser(t, 4, strong ? 0.9 : 0.7, { seed }); crash(t, strong ? 0.8 : 0.7, seed + 5); boom(t, strong ? 0.6 : 0.55, 0.5, 1.5); }
+    if (tr.entry === 'lift') { riser(t, 2, 0.35, { tonal: 0.15, seed }); crash(t, 0.75, seed + 5); boom(t, 0.65, 0.6, 1.8); }
+    if (tr.entry === 'down') { // down-sweep into a breakdown
+      onBoth((b, c) => addNoiseSweep(b, t, 1.8, { f0: 7000, f1: 250, q: 1, ampAt: u => 0.35 * (1 - u) ** 2, seed: seed + c }));
+      onBoth(b => addSweepTone(b, t, 0.9, u => 62 - 30 * u, u => 0.45 * (1 - u) ** 1.5));
+    }
+    if (tr.entry === 'final') { riser(t, 4, 0.9, { seed }); crash(t, 0.6, seed + 5); boom(t, 0.7, 0.9, 3.5); noiseBurst(t, 0.5, 0.4, seed + 7); }
+  });
+  // beds: a soft swell into each new 16-bar block
+  for (const s of SECTIONS.filter(x => x.role === 'bed')) {
+    for (let t = s.start + BED_BLOCK * 2, k = 0; t < s.end; t += BED_BLOCK * 2, k++) riser(t, 2, 0.12, { tonal: 0, f0: 600, f1: 7000, seed: 301 + k * 2 });
+  }
 
   // the fx stem is its own reverb send; the long hall carries the ring-out
   const hall = new Reverb({ rt60: 3.2, damp: 0.3, predelay: 0.02, hp: 250, lp: 9000 });
-  const send = bake(keyframes(AUTO.fxSend));
+  const send = bake(roleCurve(AUTO.fxSend));
   const wet = hall.process(bus.l.map((v, i) => v * send[i]), bus.r.map((v, i) => v * send[i]));
   for (let i = 0; i < N; i++) { bus.l[i] += wet.l[i]; bus.r[i] += wet.r[i]; }
   return bus;
@@ -962,21 +1152,24 @@ function renderFx() {
 
 /* ========================================================================== 6. master bus */
 
-/** Start/end fades shared by every stem: 4 ms in, smooth fade-out from 85.2 s to exactly zero at 87.9 s. */
+/** Start/end fades shared by every stem: 4 ms in; smooth fade-out from 1.2 s after the final hit to exactly zero 100 ms before the end. */
 function endFades() {
+  const a = SECTIONS.at(-1).start + 1.2;
+  const b = N / SR - 0.1;
   return bake(t => {
     const head = Math.min(1, t / 0.004);
-    const tail = t < 85.2 ? 1 : t >= 87.9 ? 0 : 0.5 + 0.5 * Math.cos((Math.PI * (t - 85.2)) / 2.7);
+    const tail = t < a ? 1 : t >= b ? 0 : 0.5 + 0.5 * Math.cos((Math.PI * (t - a)) / (b - a));
     return head * tail;
   }, N, 1);
 }
 
 /** Per-section dB shaping for one stem (linear ramps over each section, 50 ms cross-ramps between sections). */
-function sectionGainCurve(table) {
+function sectionGainCurve(stem) {
   const keys = [];
   for (const s of SECTIONS) {
-    const [a, b] = table[s.id] ?? [0, 0];
-    keys.push([s.start, a], [s.end - 0.05, b]);
+    const [a, b] = s.db?.[stem] ?? SECTION_DB[stem][s.role] ?? [0, 0];
+    const [ga, gb] = s.gainDb ?? [0, 0];
+    keys.push([s.start, a + ga], [s.end - 0.05, b + gb]);
   }
   const kf = keyframes(keys);
   return bake(t => dbToLin(kf(t)));
@@ -1417,9 +1610,15 @@ function writeCues(out, sched) {
   const cues = {
     bpm: BPM, beatsPerBar: 4, beatSeconds: BEAT, barSeconds: BEAT * 4, sixteenthSeconds: BEAT / 4,
     sampleRate: SR, durationSeconds: N / SR, key: 'A minor', progression: ['Am', 'F', 'C', 'G'],
-    hits: { impact: 2.0, drop: 24.0, breakdown: 52.0, secondDrop: 62.0, outro: 74.0, finalHit: 84.0, end: 88.0 },
+    structure: STRUCTURE.label,
+    hits: {
+      impact: IMPACT_TIME,
+      ...Object.fromEntries(SECTIONS.slice(1, -1).map(s => [s.id, s.start])),
+      finalHit: SECTIONS.at(-1).start,
+      end: N / SR,
+    },
     sections: SECTIONS.map(s => ({ id: s.id, name: s.name, music: s.music, start: s.start, end: s.end, startBar: s.start / 2 + 1, bars: (s.end - s.start) / 2 })),
-    risers: [[0, 2], [10, 12], [20, 24], [58, 62], [72, 74], [80, 84]].map(([start, end]) => ({ start, end })),
+    risers: [...RISERS].sort((a, b) => a.start - b.start),
     silences: GAP_STEPS.map(([a, b]) => ({ start: (a * STEP) / SR, end: (b * STEP) / SR })),
     barChords: BAR_CHORDS.map((chord, i) => ({ bar: i + 1, start: i * 2, chord })),
     beats: Array.from({ length: BARS * 4 }, (_, i) => i * BEAT),
@@ -1502,7 +1701,8 @@ function runChecks(outDir, sched) {
   check('kick onsets on the grid', worst < 0.0015, `worst offset ${(worst * 1000).toFixed(2)} ms over ${sched.kick.filter(e => e.vel >= 0.8).length} kicks`);
 
   // risers: 4-10 kHz energy grows over the last 2 s before each hit
-  for (const hit of [2, 24, 62, 84]) {
+  const hitTimes = [IMPACT_TIME, ...TRANSITIONS.filter(t => t.entry === 'drop' || t.entry === 'final').map(t => t.time)];
+  for (const hit of hitTimes) {
     const slice = t => bandRms(L, 4000, 10000, sec(t), sec(t + 0.25));
     const early = slice(hit - 2); const late = slice(hit - 0.75);
     check(`riser into ${hit}.0 s`, late > early * 2, `${linToDb(early).toFixed(1)} -> ${linToDb(late).toFixed(1)} dB`);
@@ -1516,9 +1716,9 @@ function runChecks(outDir, sched) {
     const hops = hopEnergies(L, R, sec(s.start), sec(s.end));
     secL[s.id] = -0.691 + 10 * Math.log10(hops.reduce((a, b) => a + b, 0) / hops.length);
   }
-  const order = (a, b) => secL[a] < secL[b];
-  check('energy map', order('intro', 'hook') && order('hook', 'build') && order('build', 'drop') && order('breakdown', 'drop') && order('drop', 'finale') && order('breakdown', 'drop2'),
-    SECTIONS.map(s => `${s.id} ${secL[s.id].toFixed(1)}`).join(' | '));
+  const pairs = STRUCTURE.energyOrder ?? [];
+  const broken = pairs.filter(([a, b]) => !(secL[a] < secL[b])).map(([a, b]) => `${a} !< ${b}`);
+  check('energy map', broken.length === 0, `${SECTIONS.map(s => `${s.id} ${secL[s.id].toFixed(1)}`).join(' | ')}${broken.length ? ` - ${broken.join(', ')}` : ''}`);
   return { checks, sectionLufs: secL };
 }
 
@@ -1579,12 +1779,14 @@ function runFfmpegAnalysis(outDir) {
 /* ========================================================================== 10. main */
 
 function parseArgs(argv) {
-  const args = { out: path.resolve('synth-audio-out'), sfx: true, analysis: true };
+  const args = { out: path.resolve('synth-audio-out'), structure: 'launch', sfx: true, analysis: true };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--out') args.out = path.resolve(argv[++i]);
+    else if (argv[i] === '--structure') args.structure = argv[++i];
+    else if (argv[i] === '--lufs') args.lufs = Number(argv[++i]);
     else if (argv[i] === '--skip-sfx') args.sfx = false;
     else if (argv[i] === '--skip-analysis') args.analysis = false;
-    else { console.error('usage: synth-audio.mjs --out <dir> [--skip-sfx] [--skip-analysis]'); process.exit(2); }
+    else { console.error('usage: synth-audio.mjs --out <dir> [--structure launch|walkthrough|<file.json>] [--lufs -17] [--skip-sfx] [--skip-analysis]'); process.exit(2); }
   }
   return args;
 }
@@ -1606,7 +1808,7 @@ function buildMusic(outDir) {
   const fades = endFades();
   const sum = stereo();
   for (const [name, s] of Object.entries(stems)) {
-    const shape = sectionGainCurve(SECTION_DB[name]);
+    const shape = sectionGainCurve(name);
     for (const ch of [s.l, s.r]) filterStatic(ch, new Biquad('hp', 22, Math.SQRT1_2)); // DC / sub-sonic blocker (kick lobes carry DC)
     for (let i = 0; i < N; i++) {
       const g = fades[i] * TRIM[name] * shape[i];
@@ -1649,8 +1851,11 @@ function buildSfx(outDir) {
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (Number.isFinite(args.lufs)) TARGET_LUFS = args.lufs;
+  const structure = STRUCTURES[args.structure] ?? JSON.parse(fs.readFileSync(args.structure, 'utf8'));
+  configure({ label: STRUCTURES[args.structure] ? args.structure : path.basename(args.structure), ...structure });
   mkdir(args.out);
-  log(`synth-audio -> ${args.out}`);
+  log(`synth-audio [${STRUCTURE.label}, ${N / SR} s] -> ${args.out}`);
   log('music');
   const sched = buildMusic(args.out);
   if (args.sfx) { log('\nsfx'); buildSfx(args.out); }

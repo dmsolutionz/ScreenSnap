@@ -1,0 +1,13 @@
+{
+  "sections": [
+    { "id": "intro", "role": "intro", "name": "Intro / logo reveal", "start": 0, "end": 4, "gainDb": [-1, -1] },
+    { "id": "hook", "role": "hook", "name": "Hook", "start": 4, "end": 12, "gainDb": [-3, -3] },
+    { "id": "build", "role": "build", "name": "Record (popup tour)", "start": 12, "end": 34, "gainDb": [-4, -2.5] },
+    { "id": "editor", "role": "bed", "name": "Editor walkthrough (under narration)", "start": 34, "end": 186, "lift": [98, 130] },
+    { "id": "screenshots", "role": "breakdown", "name": "Screenshots", "start": 186, "end": 212, "gainDb": [-3, -2] },
+    { "id": "private", "role": "drop2", "name": "Private by design", "start": 212, "end": 224, "lead": false, "gainDb": [-1.8, -1.8] },
+    { "id": "finale", "role": "finale", "name": "Outro / call to action", "start": 224, "end": 234, "gainDb": [-2.2, -2.2] },
+    { "id": "tail", "role": "tail", "name": "Final hit + ring-out", "start": 234, "end": 238, "gainDb": [-1.5, -1.5] }
+  ],
+  "energyOrder": [["intro", "hook"], ["hook", "editor"], ["screenshots", "editor"], ["screenshots", "private"], ["editor", "private"], ["private", "finale"]]
+}

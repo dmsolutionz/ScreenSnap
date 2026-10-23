@@ -10,7 +10,7 @@
 // Settings tab is staged in its *connected* state (a sample account written to chrome.storage.local in the
 // throwaway profile) so the auto-upload toggle is visible; the not-connected state is saved as a still too.
 //
-//   node scripts/media/capture-popup.mjs --out DIR [--fps 30] [--dsf 3]
+//   node scripts/media/capture-popup.mjs --out DIR [--fps 30] [--pace 1.6] [--dsf 3]
 import { writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -79,7 +79,7 @@ await page.evaluate(`document.querySelector(${JSON.stringify(tab("capture"))}).c
 await page.evaluate(`chrome.storage.local.set({ driveAccount: 'dana@pulse.example' })`, true);
 await sleep(500);
 
-const d = createDirector(page, { fps: FPS, outDir: OUT, start: [250, 420], cursorScale: 0.62 });
+const d = createDirector(page, { fps: FPS, outDir: OUT, start: [250, 420], cursorScale: 0.62, pace: Number(argv.pace || 1) });
 await d.install();
 
 const moveTo = async (sel, sec = 0.5) => { const r = await R(sel); await d.glide(r.cx, r.cy, sec); return r; };

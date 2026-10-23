@@ -10,7 +10,7 @@
 //   arrow  ->  steps (1, 2, 3)  ->  spotlight (+ dim slider)  ->  text label  ->  crop (pull a corner)  ->  done
 //   (backdrop on the cropped, annotated result)
 //
-//   node scripts/media/capture-shots.mjs --out DIR [--fps 30] [--time 23.5] [--source frame.png]
+//   node scripts/media/capture-shots.mjs --out DIR [--fps 30] [--pace 1.6] [--time 23.5] [--source frame.png]
 import { createServer } from "node:http";
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -88,7 +88,7 @@ for (let i = 0; i < 80; i++) { if (await page.evaluate("!!(window.__screensnapEd
 await sleep(500);
 console.log(`editor open in ${((Date.now() - tStart) / 1000).toFixed(1)}s · image ${await page.evaluate("window.__screensnapEditor.iw + 'x' + window.__screensnapEditor.ih")} · scale ${(await page.evaluate("window.__screensnapEditor.scale")).toFixed(3)}`);
 
-const d = createDirector(page, { fps: FPS, outDir: OUT, start: [W * 0.52, H * 0.5] });
+const d = createDirector(page, { fps: FPS, outDir: OUT, start: [W * 0.52, H * 0.5], pace: Number(argv.pace || 1) });
 await d.install();
 
 // ── helpers ──
