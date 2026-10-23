@@ -10,13 +10,24 @@
 
   Object.assign(NS.Editor.prototype, {
 
+    // The RGBA of display-canvas pixel (x, y). The pixel is copied into a 1x1 CPU-backed scratch canvas first:
+    // reading the display canvas directly on every pointer move makes Chrome warn "Multiple readback operations
+    // using getImageData" (it is GPU-backed), and asking for willReadFrequently on it would push all of its
+    // drawing onto the CPU, which hurts on tall full-page captures.
+    readPixel(x, y) {
+      if (!this.pixelCtx) this.pixelCtx = Object.assign(document.createElement("canvas"), { width: 1, height: 1 }).getContext("2d", { willReadFrequently: true });
+      this.pixelCtx.clearRect(0, 0, 1, 1);
+      this.pixelCtx.drawImage(this.canvas, x, y, 1, 1, 0, 0, 1, 1);
+      return this.pixelCtx.getImageData(0, 0, 1, 1).data;
+    },
+
     // The canvas pixel under image point p — the display canvas is image-resolution, so this is the
     // pixel the export will have. null off the canvas.
     sampleAt(p) {
       const pad = this.bdPadPx();
       const x = Math.floor(pad + p.x - this.cropOx()), y = Math.floor(pad + p.y - this.cropOy());
       if (x < 0 || y < 0 || x >= this.canvas.width || y >= this.canvas.height) return null;
-      const d = this.ctx.getImageData(x, y, 1, 1).data;
+      const d = this.readPixel(x, y);
       return { x, y, hex: "#" + [d[0], d[1], d[2]].map((v) => v.toString(16).padStart(2, "0")).join("") };
     },
     updateLoupe(e, p) {
