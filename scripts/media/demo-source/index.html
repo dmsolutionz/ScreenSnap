@@ -1,0 +1,661 @@
+<!doctype html>
+<!--
+  "Pulse" — an original, generic dark analytics dashboard used as the footage for the screensnap demo film.
+  It is a deterministic scene: nothing animates on its own. `window.__render(t)` (t in seconds) puts every
+  element, the cursor and all hover states into the exact visual state for time t, so render.mjs can
+  screenshot it frame by frame. `window.__meta` / `window.__boxes()` expose the facts that end up in events.json.
+  Served by render.mjs (fonts come from /fonts/ -> src/popup/fonts); open it by hand with `?t=8.4` to inspect a frame.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1920">
+<title>Pulse - Overview</title>
+<style>
+@font-face{font-family:Geist;font-weight:400;src:url(fonts/geist-400.woff2) format("woff2")}
+@font-face{font-family:Geist;font-weight:500;src:url(fonts/geist-500.woff2) format("woff2")}
+@font-face{font-family:Geist;font-weight:600;src:url(fonts/geist-600.woff2) format("woff2")}
+@font-face{font-family:"Geist Mono";font-weight:400;src:url(fonts/geist-mono-400.woff2) format("woff2")}
+@font-face{font-family:"Geist Mono";font-weight:500;src:url(fonts/geist-mono-500.woff2) format("woff2")}
+
+:root{
+  --bg:#0b1020; --side:#0a0f1d; --card-a:#131b33; --card-b:#0f1629; --line:rgba(255,255,255,.07);
+  --text:#e9edf7; --muted:#8c96b2; --faint:#5d6886; --green:#22c55e; --green-hi:#4ade80; --green-lo:#16a34a;
+  --amber:#fbbf24; --blue:#60a5fa; --red:#f87171;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+/* No CSS-driven motion at all: every animated value is written by __render(t). */
+*,*::before,*::after{animation:none!important;transition:none!important}
+html,body{width:1920px;height:1080px;overflow:hidden;background:var(--bg)}
+body{position:relative;color:var(--text);font:400 15px/1.35 Geist,system-ui,sans-serif;-webkit-font-smoothing:antialiased;text-rendering:geometricPrecision;user-select:none}
+.num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
+.mono{font-family:"Geist Mono",ui-monospace,monospace}
+svg{display:block}
+.ico{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+
+#app{position:absolute;left:0;top:0;width:1920px;height:1080px;display:grid;grid-template-columns:264px 1fr}
+
+/* ---------- sidebar ---------- */
+.sidebar{background:var(--side);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:0 16px 20px}
+.brand{height:80px;display:flex;align-items:center;gap:12px;padding:0 8px}
+.brand .mark{width:34px;height:34px;border-radius:10px;background:linear-gradient(145deg,#34d874,#16a34a);display:grid;place-items:center;box-shadow:0 6px 18px rgba(34,197,94,.28)}
+.brand .mark svg{width:20px;height:20px;fill:none;stroke:#fff;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
+.brand b{font-size:22px;font-weight:600;letter-spacing:-.02em}
+.navlabel{font-size:12px;font-weight:500;letter-spacing:.12em;color:var(--faint);padding:18px 12px 10px}
+.nav{display:flex;flex-direction:column;gap:4px}
+.nav a{height:44px;display:flex;align-items:center;gap:14px;padding:0 14px;border-radius:11px;color:var(--muted);font-size:15.5px;font-weight:500;position:relative}
+.nav a.active{background:rgba(34,197,94,.12);color:#fff}
+.nav a.active .ico{color:var(--green-hi)}
+.nav a.active::before{content:"";position:absolute;left:-16px;top:10px;bottom:10px;width:3px;border-radius:0 3px 3px 0;background:var(--green)}
+.nav .count{margin-left:auto;font-size:12.5px;font-weight:500;color:var(--muted);background:rgba(255,255,255,.07);border-radius:999px;padding:1px 8px}
+.side-foot{margin-top:auto;display:flex;flex-direction:column;gap:16px}
+.goal{border:1px solid var(--line);border-radius:14px;padding:16px;background:rgba(255,255,255,.025)}
+.goal .row{display:flex;justify-content:space-between;align-items:baseline;font-size:13.5px;color:var(--muted)}
+.goal .row b{color:var(--text);font-weight:600;font-size:15px}
+.goal .track{height:8px;border-radius:4px;background:rgba(255,255,255,.07);margin:12px 0 10px;overflow:hidden}
+.goal .track i{display:block;height:100%;width:92%;border-radius:4px;background:linear-gradient(90deg,var(--green-lo),var(--green-hi))}
+.goal p{font-size:13px;color:var(--muted)}
+.me{display:flex;align-items:center;gap:12px;padding:0 6px}
+.avatar{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;font-weight:600;font-size:13.5px;color:#0b1020;flex:none}
+.me b{display:block;font-size:14.5px;font-weight:600}
+.me span{font-size:13px;color:var(--muted)}
+
+/* ---------- top bar ---------- */
+.main{display:grid;grid-template-rows:80px 1fr;min-width:0}
+.topbar{display:flex;align-items:center;gap:14px;padding:0 32px;border-bottom:1px solid var(--line)}
+.topbar h1{font-size:23px;font-weight:600;letter-spacing:-.02em;margin-right:22px}
+.search{width:420px;height:44px;border-radius:12px;border:1px solid var(--line);background:rgba(255,255,255,.035);display:flex;align-items:center;gap:10px;padding:0 14px;color:var(--faint);font-size:15px}
+.search .ico{width:18px;height:18px}
+.search kbd{margin-left:auto;font:500 12.5px "Geist Mono",monospace;color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:2px 7px;background:rgba(255,255,255,.04)}
+.spacer{flex:1}
+.pill-btn{height:44px;border-radius:12px;border:1px solid var(--line);background:rgba(255,255,255,.035);display:flex;align-items:center;gap:10px;padding:0 16px;font-size:15px;font-weight:500;color:var(--text)}
+.pill-btn .ico{width:18px;height:18px;color:var(--muted)}
+.icon-btn{width:44px;height:44px;border-radius:12px;border:1px solid var(--line);background:rgba(255,255,255,.035);display:grid;place-items:center;color:var(--muted);position:relative}
+.icon-btn i{position:absolute;right:11px;top:11px;width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 0 2px var(--bg)}
+#exportBtn{height:44px;padding:0 20px;border-radius:12px;background:#22c55e;color:#04210f;font-weight:600;font-size:15px;display:flex;align-items:center;gap:10px;
+  box-shadow:0 0 0 0 transparent, 0 8px 22px rgba(34,197,94,.22);border:0}
+#exportBtn .ico{width:18px;height:18px;stroke-width:2.2}
+
+/* ---------- content grid ---------- */
+.content{padding:28px 32px;display:grid;grid-template-rows:160px 372px 364px;gap:24px;min-height:0;min-width:0}
+.card{background:linear-gradient(180deg,var(--card-a),var(--card-b));border:1px solid var(--line);border-radius:16px;position:relative;overflow:hidden}
+.card::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;background:rgb(255 255 255 / calc(var(--h,0)*.025));box-shadow:inset 0 0 0 1px rgb(34 197 94 / calc(var(--h,0)*.5))}
+
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:24px}
+.kpi .lab{position:absolute;left:24px;top:20px;font-size:15px;font-weight:500;color:var(--muted)}
+.kpi .chip{position:absolute;right:20px;top:16px;width:32px;height:32px;border-radius:10px;background:rgba(255,255,255,.05);display:grid;place-items:center;color:var(--muted)}
+.kpi .chip .ico{width:17px;height:17px}
+.kpi .val{position:absolute;left:24px;top:50px;font-size:42px;line-height:1.1;font-weight:600;letter-spacing:-.03em;white-space:nowrap}
+.kpi .foot{position:absolute;left:24px;bottom:20px;display:flex;align-items:center;gap:10px;font-size:13.5px;color:var(--muted);white-space:nowrap}
+.delta{height:26px;border-radius:999px;padding:0 10px 0 8px;display:inline-flex;align-items:center;gap:4px;font-size:13.5px;font-weight:600;background:rgba(34,197,94,.14);color:var(--green-hi)}
+.delta .ico{width:14px;height:14px;stroke-width:2.4}
+.kpi .spark{position:absolute;right:24px;bottom:24px;width:116px;height:52px;overflow:visible}
+
+.panel-head{position:absolute;left:24px;right:24px;top:22px;display:flex;justify-content:space-between;align-items:flex-start}
+.panel-head h2{font-size:18px;font-weight:600;letter-spacing:-.01em}
+.panel-head p{font-size:13.5px;color:var(--muted);margin-top:3px}
+.legend{display:flex;gap:20px;font-size:13.5px;color:var(--muted);align-items:center;margin-top:2px}
+.legend span{display:flex;align-items:center;gap:8px}
+.legend .dot{width:10px;height:10px;border-radius:50%;background:var(--green)}
+.legend .dash{width:18px;height:0;border-top:2px dashed #6c7898}
+
+.main-grid{display:grid;grid-template-columns:1fr 560px;gap:24px}
+#chartSvg{position:absolute;left:24px;top:78px}
+.tip{position:absolute;left:0;top:0;width:196px;padding:11px 14px 11px;border-radius:12px;background:#1b2542;border:1px solid rgba(255,255,255,.12);
+  box-shadow:0 14px 34px rgba(0,0,0,.45);opacity:0;pointer-events:none}
+.tip b{display:block;font-size:15.5px;font-weight:600;letter-spacing:-.005em;white-space:nowrap}
+.tip span{display:block;font-size:13px;color:var(--green-hi);margin-top:2px;font-weight:500}
+.tip::after{content:"";position:absolute;left:50%;bottom:-6px;width:12px;height:12px;margin-left:-6px;background:#1b2542;border-right:1px solid rgba(255,255,255,.12);border-bottom:1px solid rgba(255,255,255,.12);transform:rotate(45deg)}
+
+.regions .rows{position:absolute;left:24px;right:24px;top:84px;bottom:18px;display:grid;grid-template-rows:repeat(5,1fr)}
+.reg{position:relative;display:flex;flex-direction:column;justify-content:center;gap:9px;margin:0 -12px;padding:0 12px;border-radius:10px;background:rgb(255 255 255 / calc(var(--h,0)*.04))}
+.reg .top{display:flex;align-items:baseline;gap:10px;font-size:15.5px}
+.reg .name{font-weight:500}
+.reg .amt{margin-left:auto;color:var(--muted);font-size:13.5px}
+.reg .pct{font-weight:600;min-width:52px;text-align:right}
+.reg .track{height:10px;border-radius:5px;background:rgba(255,255,255,.065);overflow:hidden}
+.reg .fill{height:100%;width:0;border-radius:5px;background:linear-gradient(90deg,var(--green-lo),var(--green));
+  filter:brightness(calc(1 + var(--h,0)*.35)) saturate(calc(1 + var(--h,0)*.25));box-shadow:0 0 calc(var(--h,0)*16px) rgb(34 197 94 / calc(var(--h,0)*.55))}
+
+.orders .head{position:absolute;left:24px;right:24px;top:20px;display:flex;justify-content:space-between;align-items:center}
+.orders .head h2{font-size:18px;font-weight:600;letter-spacing:-.01em;display:inline}
+.orders .head p{display:inline;margin-left:12px;font-size:13.5px;color:var(--muted)}
+.link{font-size:14px;font-weight:500;color:var(--green-hi);display:flex;align-items:center;gap:6px}
+.link .ico{width:16px;height:16px}
+.table{position:absolute;left:0;right:0;top:56px;--cols:minmax(0,1.7fr) 1fr 1fr 1.1fr 1fr .9fr}
+.thead,.trow{display:grid;grid-template-columns:var(--cols);align-items:center;padding:0 24px}
+.thead{height:40px;font-size:12.5px;font-weight:500;letter-spacing:.08em;color:var(--faint);text-transform:uppercase;border-top:1px solid var(--line)}
+.trow{height:52px;border-top:1px solid var(--line);position:relative;font-size:15px;background:rgb(34 197 94 / calc(var(--h,0)*.075));box-shadow:inset 3px 0 0 rgb(34 197 94 / var(--h,0))}
+.right{text-align:right}
+.cust{display:flex;align-items:center;gap:14px;min-width:0}
+.cust .avatar{width:34px;height:34px;font-size:12.5px}
+.cust b{font-weight:600;font-size:15px;display:block;line-height:1.2}
+.cust span{font-size:13px;color:var(--muted);display:block;line-height:1.25}
+.plan{display:flex;align-items:center;gap:8px}
+.plan i{width:8px;height:8px;border-radius:50%;flex:none}
+.status{display:inline-flex;align-items:center;gap:7px;height:26px;padding:0 12px 0 10px;border-radius:999px;font-size:13px;font-weight:600}
+.status::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.st-paid{background:rgba(34,197,94,.14);color:var(--green-hi)}
+.st-pending{background:rgba(251,191,36,.13);color:var(--amber)}
+.st-refunded{background:rgba(96,165,250,.14);color:var(--blue)}
+.amount{font-weight:600}
+.muted{color:var(--muted)}
+.sk{position:absolute;inset:0;display:grid;grid-template-columns:var(--cols);align-items:center;padding:0 24px;pointer-events:none}
+.sk>div{display:flex;align-items:center;gap:14px}
+.sk i{display:block;border-radius:6px;background:rgba(255,255,255,.07)}
+.sk .r{justify-content:flex-end}
+
+/* ---------- overlays ---------- */
+#scrim{position:absolute;inset:0;background:rgba(4,7,16,.64);backdrop-filter:blur(4px);opacity:0;display:grid;place-items:center;pointer-events:none}
+#modal{width:480px;padding:38px 40px 36px;border-radius:22px;background:linear-gradient(180deg,#18213f,#121a33);border:1px solid rgba(255,255,255,.1);box-shadow:0 40px 100px rgba(0,0,0,.6);display:flex;flex-direction:column;align-items:center;text-align:center}
+#modal h3{font-size:24px;font-weight:600;letter-spacing:-.02em;margin-top:22px}
+#modal p{font-size:15px;color:var(--muted);margin-top:8px}
+#spin{width:68px;height:68px}
+#toast{position:absolute;right:32px;top:96px;width:404px;display:flex;align-items:center;gap:14px;padding:16px 20px 16px 16px;border-radius:16px;background:#162038;border:1px solid rgba(34,197,94,.35);box-shadow:0 18px 44px rgba(0,0,0,.5);opacity:0}
+#toast .ok{width:38px;height:38px;border-radius:50%;background:var(--green);display:grid;place-items:center;flex:none}
+#toast .ok svg{width:20px;height:20px;fill:none;stroke:#04210f;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}
+#toast b{display:block;font-size:16px;font-weight:600;letter-spacing:-.005em}
+#toast span{display:block;font-size:13.5px;color:var(--muted);margin-top:2px}
+#toast .open{margin-left:auto;font-size:14px;font-weight:600;color:var(--green-hi)}
+#ripple{position:absolute;left:0;top:0;width:80px;height:80px;margin:-40px 0 0 -40px;border-radius:50%;border:2.5px solid #fff;opacity:0;pointer-events:none}
+#cursor{position:absolute;left:0;top:0;width:32px;height:41px;pointer-events:none;transform-origin:3px 2px;filter:drop-shadow(0 2px 3px rgba(0,0,0,.55)) drop-shadow(0 0 1px rgba(0,0,0,.6))}
+</style>
+</head>
+<body>
+<div id="app">
+  <aside class="sidebar">
+    <div class="brand"><div class="mark"><svg viewBox="0 0 24 24"><path d="M2.5 12.5h4l2.7-7 4.6 13 2.7-6h5"/></svg></div><b>Pulse</b></div>
+    <div class="navlabel">WORKSPACE</div>
+    <nav class="nav">
+      <a class="active"><svg class="ico" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.8"/></svg>Overview</a>
+      <a><svg class="ico" viewBox="0 0 24 24"><path d="M6 3h8l5 5v13H6z"/><path d="M14 3v5h5"/><path d="M9.5 14h6M9.5 17.5h4"/></svg>Reports</a>
+      <a><svg class="ico" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/><circle cx="17" cy="9" r="2.5"/><path d="M17.5 14.2c2.5.2 4 2 4 4.8"/></svg>Customers<span class="count num">12</span></a>
+      <a><svg class="ico" viewBox="0 0 24 24"><rect x="2.5" y="5" width="19" height="14" rx="2.8"/><path d="M2.5 10h19M6 15h4"/></svg>Billing</a>
+      <a><svg class="ico" viewBox="0 0 24 24"><path d="M4 7h9M19 7h1M4 17h1M11 17h9"/><circle cx="16" cy="7" r="2.4"/><circle cx="8" cy="17" r="2.4"/></svg>Settings</a>
+    </nav>
+    <div class="side-foot">
+      <div class="goal">
+        <div class="row"><span>Q3 revenue goal</span><b class="num">92%</b></div>
+        <div class="track"><i></i></div>
+        <p class="num">$284,930 of $310,000</p>
+      </div>
+      <div class="me"><div class="avatar" style="background:#86efac">DW</div><div><b>Dana Whitfield</b><span>Growth lead</span></div></div>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <h1>Overview</h1>
+      <div class="search"><svg class="ico" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20.5 20.5 16 16"/></svg>Search customers, orders, reports<kbd>&#8984;K</kbd></div>
+      <div class="spacer"></div>
+      <div class="pill-btn"><svg class="ico" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15.5" rx="3"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg>Last 12 weeks<svg class="ico" viewBox="0 0 24 24" style="width:16px;height:16px"><path d="m6 9 6 6 6-6"/></svg></div>
+      <div class="icon-btn"><svg class="ico" viewBox="0 0 24 24"><path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15z"/><path d="M10 21h4"/></svg><i></i></div>
+      <div id="exportBtn" data-h="export"><svg class="ico" viewBox="0 0 24 24"><path d="M12 3.5v11M7.5 10.5 12 15l4.5-4.5M4.5 19.5h15"/></svg>Export report</div>
+    </header>
+
+    <main class="content">
+      <section class="kpis" id="kpis"></section>
+
+      <section class="main-grid">
+        <div class="card chart" id="chart">
+          <div class="panel-head">
+            <div><h2>Revenue &mdash; last 12 weeks</h2><p>Weekly gross revenue, USD</p></div>
+            <div class="legend"><span><i class="dot"></i>This period</span><span><i class="dash"></i>Previous period</span></div>
+          </div>
+          <svg id="chartSvg" width="960" height="284" viewBox="0 0 960 284"></svg>
+          <div class="tip" id="tip"><b class="num">Week 11 &middot; $41,380</b><span class="num">+19.2% vs. Week 10</span></div>
+        </div>
+        <div class="card regions" id="regions">
+          <div class="panel-head">
+            <div><h2>Top regions</h2><p>Share of revenue, last 12 weeks</p></div>
+            <div class="link" style="margin-top:2px">View all<svg class="ico" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
+          </div>
+          <div class="rows" id="regRows"></div>
+        </div>
+      </section>
+
+      <section class="card orders" id="orders">
+        <div class="head"><div><h2>Recent orders</h2><p>Latest 5 of 1,284 this quarter</p></div><div class="link">View all orders<svg class="ico" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div></div>
+        <div class="table">
+          <div class="thead"><div>Customer</div><div>Order</div><div>Plan</div><div>Placed</div><div>Status</div><div class="right">Amount</div></div>
+          <div id="tbody"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<div id="scrim"><div id="modal">
+  <svg id="spin" viewBox="0 0 68 68"><circle cx="34" cy="34" r="27" fill="none" stroke="rgba(255,255,255,.1)" stroke-width="5"/><circle id="spinArc" cx="34" cy="34" r="27" fill="none" stroke="#22c55e" stroke-width="5" stroke-linecap="round"/></svg>
+  <h3>Generating report&hellip;</h3>
+  <p>Pulse_Q3.pdf &middot; revenue, users, conversion and churn</p>
+</div></div>
+
+<div id="toast"><div class="ok"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></div>
+  <div><b>Report exported</b><span class="mono">Pulse_Q3.pdf</span></div><div class="open">Open</div></div>
+
+<div id="ripple"></div>
+<svg id="cursor" viewBox="0 0 28 36">
+  <path d="M3 2.2v22.4l5.6-5.2 3.9 8.6 4.1-1.9-3.8-8.4 8-.2z" fill="#fff" stroke="#0b1020" stroke-width="2" stroke-linejoin="round"/>
+</svg>
+
+<script>
+"use strict";
+/* ============================================================================================
+   Data
+   ============================================================================================ */
+const WEEKS = [14200, 15800, 15100, 17650, 18900, 18200, 21400, 24300, 26750, 32350, 41380, 38900]; // sums to $284,930
+const PREV  = [13040, 13620, 14280, 15080, 15620, 16380, 17210, 17990, 18870, 19780, 20610, 20780]; // sums to $203,260 (+40.2%)
+const PEAK_I = 10; // Week 11
+
+const KPIS = [
+  { key: "rev",  label: "Revenue",      target: 284930, fmt: (v) => "$" + Math.round(v).toLocaleString("en-US"), delta: "+40.2%", dir: "up",
+    spark: WEEKS, icon: '<path d="M12 3v18M16.5 7.5c-.8-1.3-2.4-2-4.5-2-2.6 0-4.3 1.2-4.3 3 0 4.5 9 2 9 6.5 0 1.8-1.8 3-4.7 3-2.1 0-3.9-.8-4.8-2.2"/>' },
+  { key: "usr",  label: "Active users", target: 48210,  fmt: (v) => Math.round(v).toLocaleString("en-US"), delta: "+18.6%", dir: "up",
+    spark: [39.1,39.8,39.5,41.2,41.9,41.4,43.4,44.5,45.6,46.0,47.5,48.2], icon: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/><circle cx="17" cy="9" r="2.5"/><path d="M17.5 14.2c2.5.2 4 2 4 4.8"/>' },
+  { key: "cvr",  label: "Conversion",   target: 4.8,    fmt: (v) => v.toFixed(1) + "%", delta: "+0.9%", dir: "up",
+    spark: [4.0,4.1,3.95,4.2,4.3,4.15,4.4,4.5,4.4,4.6,4.7,4.8], icon: '<path d="M3 5h18l-7 8v6l-4 2v-8z"/>' },
+  { key: "chn",  label: "Churn",        target: 1.2,    fmt: (v) => v.toFixed(1) + "%", delta: "−0.3%", dir: "down",
+    spark: [1.9,1.8,1.85,1.7,1.6,1.65,1.5,1.5,1.4,1.35,1.3,1.2], icon: '<path d="m3 7 6 6 4-4 8 8M15 17h6v-6"/>' },
+];
+const TOTAL = 284930;
+const REGIONS = [["North America", 38.4], ["Europe", 27.1], ["Asia Pacific", 18.6], ["Latin America", 9.8], ["Middle East & Africa", 6.1]];
+const ORDERS = [
+  { co: "Halcyon Robotics", who: "priya.raman@halcyon.example", id: "PL-10482", plan: "Enterprise", pc: "#a78bfa", when: "Sep 30, 09:42", st: "Paid",     amt: "$4,800.00", hue: "#fda4af" },
+  { co: "Marlow & Finch",   who: "m.webb@marlowfinch.example",  id: "PL-10481", plan: "Business",   pc: "#60a5fa", when: "Sep 30, 08:17", st: "Paid",     amt: "$1,290.00", hue: "#93c5fd" },
+  { co: "Juniper Health",   who: "s.lindqvist@juniper.example", id: "PL-10480", plan: "Pro",        pc: "#34d399", when: "Sep 29, 17:55", st: "Pending",  amt: "$480.00",   hue: "#fcd34d" },
+  { co: "Cobalt Freight",   who: "t.herrera@cobalt.example",    id: "PL-10479", plan: "Enterprise", pc: "#a78bfa", when: "Sep 29, 14:03", st: "Paid",     amt: "$3,950.00", hue: "#86efac" },
+  { co: "Tidewater Foods",  who: "a.tanaka@tidewater.example",  id: "PL-10478", plan: "Starter",    pc: "#fbbf24", when: "Sep 29, 11:26", st: "Refunded", amt: "$149.00",   hue: "#c4b5fd" },
+];
+
+/* ============================================================================================
+   Timeline (seconds). Everything visual is a pure function of t built from these.
+   ============================================================================================ */
+const TL = {
+  duration: 24, fps: 30,
+  kpiStart: 1.0, kpiStagger: 0.14, kpiDur: 2.3, sparkDur: 1.6,
+  chartStart: 4.1, chartPeakAt: 6.5, chartEnd: 6.95,   // line head: W1 at start, W11 at peakAt, W12 at end
+  regionsStart: 8.7, regionsStagger: 0.16, regionsDur: 1.1,
+  rowsStart: 11.9, rowsStagger: 0.3, rowsDur: 0.55,
+  deadStart: 15.0, deadEnd: 17.4,
+  clicks: [ { t: 7.35, target: "peak" }, { t: 13.45, target: "order-row" }, { t: 15.10, target: "export" } ],
+  modalIn: [15.18, 15.5], modalOut: [17.4, 17.72],
+  toastIn: [17.7, 18.2], toastOut: [21.6, 22.05],
+};
+
+/* ============================================================================================
+   Math helpers
+   ============================================================================================ */
+const clamp01 = (x) => Math.min(1, Math.max(0, x));
+const lerp = (a, b, k) => a + (b - a) * k;
+const prog = (t, a, d) => clamp01((t - a) / d);
+const easeOut3 = (u) => 1 - Math.pow(1 - u, 3);
+const easeOut4 = (u) => 1 - Math.pow(1 - u, 4);
+const easeInOut3 = (u) => (u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2);
+const easeInOutSine = (u) => -(Math.cos(Math.PI * u) - 1) / 2;
+const smoother = (u) => u * u * u * (u * (u * 6 - 15) + 10);  // minimum-jerk: how a hand actually moves a pointer
+const smoothstep = (u) => u * u * (3 - 2 * u);
+const easeOutBack = (u, s = 1.25) => 1 + (s + 1) * Math.pow(u - 1, 3) + s * Math.pow(u - 1, 2);
+const $ = (s, r = document) => r.querySelector(s);
+const px = (n) => n.toFixed(2) + "px";
+
+/* Monotone cubic (Fritsch-Carlson) so the curves never overshoot; evaluable at any x for the cursor. */
+function slopes(xs, ys) {
+  const n = xs.length, d = [], m = new Array(n);
+  for (let i = 0; i < n - 1; i++) d[i] = (ys[i + 1] - ys[i]) / (xs[i + 1] - xs[i]);
+  m[0] = d[0]; m[n - 1] = d[n - 2];
+  for (let i = 1; i < n - 1; i++) m[i] = d[i - 1] * d[i] <= 0 ? 0 : (d[i - 1] + d[i]) / 2;
+  for (let i = 0; i < n - 1; i++) {
+    if (d[i] === 0) { m[i] = m[i + 1] = 0; continue; }
+    const a = m[i] / d[i], b = m[i + 1] / d[i], s = a * a + b * b;
+    if (s > 9) { const k = 3 / Math.sqrt(s); m[i] = k * a * d[i]; m[i + 1] = k * b * d[i]; }
+  }
+  return m;
+}
+const curvePath = (xs, ys, m) => {
+  let p = `M${xs[0].toFixed(2)},${ys[0].toFixed(2)}`;
+  for (let i = 0; i < xs.length - 1; i++) {
+    const dx = (xs[i + 1] - xs[i]) / 3;
+    p += `C${(xs[i] + dx).toFixed(2)},${(ys[i] + m[i] * dx).toFixed(2)} ${(xs[i + 1] - dx).toFixed(2)},${(ys[i + 1] - m[i + 1] * dx).toFixed(2)} ${xs[i + 1].toFixed(2)},${ys[i + 1].toFixed(2)}`;
+  }
+  return p;
+};
+function curveAt(xs, ys, m, x) {
+  let i = 0; while (i < xs.length - 2 && x > xs[i + 1]) i++;
+  const h = xs[i + 1] - xs[i], t = clamp01((x - xs[i]) / h), t2 = t * t, t3 = t2 * t;
+  return (2 * t3 - 3 * t2 + 1) * ys[i] + (t3 - 2 * t2 + t) * h * m[i] + (-2 * t3 + 3 * t2) * ys[i + 1] + (t3 - t2) * h * m[i + 1];
+}
+
+/* ============================================================================================
+   Build the DOM
+   ============================================================================================ */
+const NS = "http://www.w3.org/2000/svg";
+const el = (tag, attrs = {}, parent) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; };
+const UP = '<path d="M7 17 17 7M9 7h8v8"/>', DOWN = '<path d="M7 7l10 10M17 9v8H9"/>';
+
+const kpiEls = KPIS.map((k, i) => {
+  const card = document.createElement("div");
+  card.className = "card kpi"; card.dataset.h = "kpi" + i;
+  card.innerHTML = `<div class="lab">${k.label}</div><div class="chip"><svg class="ico" viewBox="0 0 24 24">${k.icon}</svg></div>
+    <div class="val num"></div>
+    <div class="foot"><span class="delta num"><svg class="ico" viewBox="0 0 24 24">${k.dir === "up" ? UP : DOWN}</svg>${k.delta}</span><span>vs. prior 12 wks</span></div>
+    <svg class="spark" viewBox="0 0 116 52"></svg>`;
+  $("#kpis").appendChild(card);
+  // sparkline
+  const svg = $(".spark", card), n = k.spark.length, lo = Math.min(...k.spark), hi = Math.max(...k.spark);
+  const xs = k.spark.map((_, j) => 3 + j * (110 / (n - 1)));
+  const ys = k.spark.map((v) => 47 - (v - lo) / (hi - lo) * 42);
+  const m = slopes(xs, ys), d = curvePath(xs, ys, m);
+  const gid = "sg" + i, cid = "sc" + i;
+  const defs = el("defs", {}, svg);
+  const g = el("linearGradient", { id: gid, x1: 0, y1: 0, x2: 0, y2: 1 }, defs);
+  el("stop", { offset: 0, "stop-color": "#22c55e", "stop-opacity": 0.32 }, g); el("stop", { offset: 1, "stop-color": "#22c55e", "stop-opacity": 0 }, g);
+  const clip = el("rect", { x: 0, y: -6, width: 0, height: 64 }, el("clipPath", { id: cid }, defs));   // reveals line + fill left to right
+  const grp = el("g", { "clip-path": `url(#${cid})` }, svg);
+  el("path", { d: `${d}L${xs[n - 1]},52L${xs[0]},52Z`, fill: `url(#${gid})` }, grp);
+  el("path", { d, fill: "none", stroke: "#22c55e", "stroke-width": 2.4, "stroke-linecap": "round", "stroke-linejoin": "round" }, grp);
+  const dot = el("circle", { cx: xs[n - 1], cy: ys[n - 1], r: 3.6, fill: "#0f1629", stroke: "#22c55e", "stroke-width": 2, opacity: 0 }, svg);
+  return { card, val: $(".val", card), foot: $(".foot", card), delta: $(".delta", card), clip, dot };
+});
+
+/* ---- big chart ---- */
+const C = { W: 960, H: 284, L: 60, R: 14, T: 14, B: 38, YMAX: 60000 };
+const cx = (i) => C.L + 26 + i * ((C.W - C.L - C.R - 52) / 11);
+const cy = (v) => C.T + (C.H - C.T - C.B) * (1 - v / C.YMAX);
+const chartSvg = $("#chartSvg");
+{
+  const defs = el("defs", {}, chartSvg);
+  const g = el("linearGradient", { id: "areaG", x1: 0, y1: 0, x2: 0, y2: 1 }, defs);
+  el("stop", { offset: 0, "stop-color": "#22c55e", "stop-opacity": 0.34 }, g);
+  el("stop", { offset: 0.65, "stop-color": "#22c55e", "stop-opacity": 0.08 }, g);
+  el("stop", { offset: 1, "stop-color": "#22c55e", "stop-opacity": 0 }, g);
+  const cp = el("clipPath", { id: "reveal" }, defs); el("rect", { id: "revealRect", x: 0, y: 0, width: 0, height: C.H }, cp);
+  for (let v = 0; v <= C.YMAX; v += 10000) {
+    const y = cy(v);
+    el("line", { x1: C.L, x2: C.W - C.R, y1: y, y2: y, stroke: "rgba(255,255,255,.065)", "stroke-width": 1 }, chartSvg);
+    const t = el("text", { x: C.L - 14, y: y + 4.5, "text-anchor": "end", fill: "#7d88a6", "font-size": 13 }, chartSvg);
+    t.textContent = v === 0 ? "$0" : "$" + v / 1000 + "k";
+  }
+  for (let i = 0; i < 12; i++) {
+    const t = el("text", { x: cx(i), y: C.H - 12, "text-anchor": "middle", fill: "#7d88a6", "font-size": 13 }, chartSvg);
+    t.textContent = "W" + (i + 1);
+  }
+}
+const cxs = WEEKS.map((_, i) => cx(i)), cys = WEEKS.map((v) => cy(v)), cm = slopes(cxs, cys);
+const pys = PREV.map((v) => cy(v)), pm = slopes(cxs, pys);
+const curveY = (x) => curveAt(cxs, cys, cm, x);
+const clipG = el("g", { "clip-path": "url(#reveal)" }, chartSvg);
+el("path", { d: curvePath(cxs, pys, pm), fill: "none", stroke: "#6c7898", "stroke-width": 2, "stroke-dasharray": "6 6", "stroke-linecap": "round" }, clipG);
+const lineD = curvePath(cxs, cys, cm);
+el("path", { d: `${lineD}L${cxs[11]},${cy(0)}L${cxs[0]},${cy(0)}Z`, fill: "url(#areaG)" }, clipG);
+el("path", { d: lineD, fill: "none", stroke: "#22c55e", "stroke-width": 3.2, "stroke-linecap": "round", "stroke-linejoin": "round", style: "filter:drop-shadow(0 0 7px rgba(34,197,94,.5))" }, clipG);
+const markers = WEEKS.map((v, i) => el("circle", { cx: cxs[i], cy: cys[i], r: 4.2, fill: "#10172b", stroke: "#22c55e", "stroke-width": 2.2, opacity: 0 }, chartSvg));
+const peakGuide = el("line", { x1: cxs[PEAK_I], x2: cxs[PEAK_I], y1: cys[PEAK_I], y2: cy(0), stroke: "rgba(255,255,255,.28)", "stroke-width": 1.5, "stroke-dasharray": "4 5", opacity: 0 }, chartSvg);
+const peakHalo = el("circle", { cx: cxs[PEAK_I], cy: cys[PEAK_I], r: 16, fill: "rgba(34,197,94,.22)", opacity: 0 }, chartSvg);
+const peakDot = el("circle", { cx: cxs[PEAK_I], cy: cys[PEAK_I], r: 7, fill: "#22c55e", stroke: "#fff", "stroke-width": 3, opacity: 0 }, chartSvg);
+const headGlow = el("circle", { cx: 0, cy: 0, r: 11, fill: "rgba(34,197,94,.25)", opacity: 0 }, chartSvg);
+const headDot = el("circle", { cx: 0, cy: 0, r: 5.5, fill: "#22c55e", stroke: "#fff", "stroke-width": 2, opacity: 0 }, chartSvg);
+
+/* ---- regions ---- */
+const regAmts = REGIONS.map(([, s]) => Math.round(TOTAL * s / 100));
+regAmts[0] += TOTAL - regAmts.reduce((a, b) => a + b, 0); // make the dollars add up exactly
+const regEls = REGIONS.map(([name, share], i) => {
+  const row = document.createElement("div");
+  row.className = "reg"; row.dataset.h = "reg" + i;
+  row.innerHTML = `<div class="top"><span class="name">${name.replace("&", "&amp;")}</span><span class="amt num"></span><span class="pct num"></span></div><div class="track"><div class="fill"></div></div>`;
+  $("#regRows").appendChild(row);
+  return { row, fill: $(".fill", row), amt: $(".amt", row), pct: $(".pct", row) };
+});
+
+/* ---- orders ---- */
+const ordEls = ORDERS.map((o, i) => {
+  const row = document.createElement("div");
+  row.className = "trow"; row.dataset.h = "row" + i;
+  const ini = o.co.split(/[ &]+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("");
+  row.innerHTML = `
+    <div class="cust"><div class="avatar" style="background:${o.hue}">${ini}</div><div><b>${o.co.replace("&", "&amp;")}</b><span>${o.who}</span></div></div>
+    <div class="mono muted" style="font-size:13.5px">#${o.id}</div>
+    <div class="plan"><i style="background:${o.pc}"></i>${o.plan}</div>
+    <div class="muted num">${o.when}</div>
+    <div><span class="status st-${o.st.toLowerCase()}">${o.st}</span></div>
+    <div class="right amount num">${o.amt}</div>
+    <div class="sk"><div><i style="width:34px;height:34px;border-radius:50%"></i><span style="display:grid;gap:7px"><i style="width:150px;height:10px"></i><i style="width:210px;height:8px"></i></span></div>
+      <div><i style="width:84px;height:10px"></i></div><div><i style="width:92px;height:10px"></i></div><div><i style="width:120px;height:10px"></i></div>
+      <div><i style="width:76px;height:24px;border-radius:12px"></i></div><div class="r"><i style="width:84px;height:10px"></i></div></div>`;
+  $("#tbody").appendChild(row);
+  return { row, content: [...row.children].slice(0, 6), sk: $(".sk", row) };
+});
+
+const exportBtn = $("#exportBtn"), tip = $("#tip"), scrim = $("#scrim"), toast = $("#toast"), spinArc = $("#spinArc");
+const cursorEl = $("#cursor"), ripple = $("#ripple"), revealRect = $("#revealRect");
+
+/* ============================================================================================
+   Layout measurements (taken once, in the settled/untransformed state) -> hover targets + cursor path
+   ============================================================================================ */
+const rectOf = (e) => { const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; };
+let G = null; // geometry
+function measure() {
+  const s = chartSvg.getBoundingClientRect();
+  const P = (i) => [s.left + cxs[i], s.top + cys[i]];
+  const g = {
+    kpi: kpiEls.map((k) => rectOf(k.card)),
+    chart: rectOf($("#chart")), regions: rectOf($("#regions")), orders: rectOf($("#orders")),
+    exportBtn: rectOf(exportBtn),
+    reg: regEls.map((r) => rectOf(r.row)),
+    row: ordEls.map((r) => rectOf(r.row)),
+    svg: { x: s.left, y: s.top },
+    peak: P(PEAK_I), w1: P(0),
+  };
+  g.pt = (i) => P(i);
+  return g;
+}
+const centre = (r, fx = 0.5, fy = 0.5) => [r.x + r.w * fx, r.y + r.h * fy];
+
+/* ============================================================================================
+   Cursor program: a list of timed moves (minimum-jerk easing along a gentle arc), plus one "follow"
+   move that rides the chart line while it draws. Holds are implicit between moves.
+   ============================================================================================ */
+const START = [1660, 930];   // pointer parks at lower right over the orders card, clear of anything interesting
+let MOVES = Object.assign([], { start: START });
+function buildMoves() {
+  const rev = centre(G.kpi[0], 0.56, 0.5);
+  const w1 = G.w1;
+  const chartX = (u) => { // u in [0,1] across W1..W11 -> screen point on the line
+    const x = lerp(cxs[0], cxs[PEAK_I], u);
+    return [G.svg.x + x, G.svg.y + curveY(x)];
+  };
+  MOVES = Object.assign([
+    { t0: 0.9,  t1: 2.75, to: rev, arc: 0.10 },
+    { t0: 3.6, t1: TL.chartStart, to: w1, arc: 0.06 },
+    { t0: TL.chartStart, t1: TL.chartPeakAt, follow: (t) => chartX(easeInOutSine(prog(t, TL.chartStart, TL.chartPeakAt - TL.chartStart))), to: G.peak },
+    { t0: 8.5,  t1: 9.4,  to: centre(G.reg[0], 0.30, 0.45), arc: 0.12 },
+    { t0: 10.35, t1: 11.0, to: centre(G.reg[1], 0.52, 0.45), arc: 0.08 },
+    { t0: 11.7, t1: 12.95, to: centre(G.row[2], 0.34, 0.5), arc: 0.10 },
+    { t0: 13.75, t1: 14.75, to: centre(G.exportBtn, 0.90, 0.70), arc: 0.18 },
+    { t0: 17.9, t1: 19.0, to: [1540, 345], arc: 0.10 },
+    { t0: 19.4, t1: 22.9, to: centre(G.kpi[1], 0.70, 0.30), arc: 0.05 },
+  ], { start: START });
+}
+function cursorAt(t) {
+  let pos = MOVES.start;
+  for (const m of MOVES) {
+    if (t < m.t0) return pos;
+    if (t >= m.t1) { pos = m.to; continue; }
+    if (m.follow) return m.follow(t);
+    const u = smoother((t - m.t0) / (m.t1 - m.t0));
+    const [x0, y0] = pos, [x1, y1] = m.to, dx = x1 - x0, dy = y1 - y0;
+    const nx = -dy * (m.arc || 0), ny = dx * (m.arc || 0);          // control point pushed off the chord
+    const qx = (x0 + x1) / 2 + nx, qy = (y0 + y1) / 2 + ny;
+    const a = (1 - u) * (1 - u), b = 2 * (1 - u) * u, c = u * u;
+    return [a * x0 + b * qx + c * x1, a * y0 + b * qy + c * y1];
+  }
+  return pos;
+}
+
+/* ---- hover: a target's hover amount is the share of the last 200 ms the pointer spent inside it, so
+   states ramp smoothly yet remain a pure function of t. ---- */
+const HOVER_WINDOW = 0.2, HOVER_STEPS = 8;
+function hoverTargets() {
+  const t = {};
+  G.kpi.forEach((r, i) => (t["kpi" + i] = (p) => inRect(r, p)));
+  G.reg.forEach((r, i) => (t["reg" + i] = (p) => inRect(r, p)));
+  G.row.forEach((r, i) => (t["row" + i] = (p) => inRect(r, p)));
+  t.export = (p) => inRect(G.exportBtn, p);
+  t.peak = (p) => Math.hypot(p[0] - G.peak[0], p[1] - G.peak[1]) < 30;
+  return t;
+}
+const inRect = (r, [x, y]) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+let HT = null;
+const hoverAmt = (id, t) => {
+  if (!HT) return 0;
+  let s = 0;
+  for (let k = 0; k <= HOVER_STEPS; k++) s += HT[id](cursorAt(Math.max(0, t - HOVER_WINDOW * k / HOVER_STEPS))) ? 1 : 0;
+  return smoothstep(s / (HOVER_STEPS + 1));
+};
+const setH = (e, h) => e.style.setProperty("--h", h.toFixed(3));
+
+/* ============================================================================================
+   __render(t)
+   ============================================================================================ */
+function render(t) {
+  /* KPI cards */
+  kpiEls.forEach((k, i) => {
+    const d = KPIS[i], s0 = TL.kpiStart + i * TL.kpiStagger;
+    const c = easeOut3(prog(t, s0, TL.kpiDur));
+    k.val.textContent = d.fmt(d.target * c);
+    const q = easeInOut3(prog(t, s0 + 0.15, TL.sparkDur + i * 0.12));
+    k.clip.setAttribute("width", (q * 118).toFixed(2));
+    k.dot.setAttribute("opacity", smoothstep(clamp01((q - 0.96) * 25)).toFixed(3));
+    const dp = easeOut3(prog(t, s0 + 0.35, 0.6));
+    k.foot.style.opacity = dp.toFixed(3);
+    k.foot.style.transform = `translateY(${px((1 - dp) * 6)})`;
+    setH(k.card, hoverAmt("kpi" + i, t));
+  });
+
+  /* Big chart: head position p in [0..11] (in data-point units) */
+  const span = TL.chartPeakAt - TL.chartStart;
+  let head;                                   // x of the drawing head, in chart-svg px
+  if (t <= TL.chartStart) head = null;
+  else if (t < TL.chartPeakAt) head = lerp(cxs[0], cxs[PEAK_I], easeInOutSine(prog(t, TL.chartStart, span)));
+  else head = lerp(cxs[PEAK_I], cxs[11], easeOut3(prog(t, TL.chartPeakAt, TL.chartEnd - TL.chartPeakAt)));
+  const drawing = head !== null && t < TL.chartEnd + 0.05;
+  revealRect.setAttribute("width", head === null ? 0 : (head >= cxs[11] ? C.W : head + 1.6).toFixed(2));
+  markers.forEach((m, i) => m.setAttribute("opacity", head === null ? 0 : smoothstep(clamp01((head - cxs[i] + 6) / 16)).toFixed(3)));
+  if (drawing && head < cxs[11] - 0.5) {
+    headDot.setAttribute("cx", head.toFixed(2)); headDot.setAttribute("cy", curveY(head).toFixed(2));
+    headGlow.setAttribute("cx", head.toFixed(2)); headGlow.setAttribute("cy", curveY(head).toFixed(2));
+    headDot.setAttribute("opacity", 1); headGlow.setAttribute("opacity", 1);
+  } else { headDot.setAttribute("opacity", 0); headGlow.setAttribute("opacity", 0); }
+
+  const hp = hoverAmt("peak", t);
+  // the peak only lights up once the line has actually reached it
+  const peakReady = head !== null && head >= cxs[PEAK_I] - 0.5 ? 1 : 0;
+  const hv = hp * peakReady;
+  peakGuide.setAttribute("opacity", (hv * 0.9).toFixed(3));
+  peakHalo.setAttribute("opacity", hv.toFixed(3)); peakHalo.setAttribute("r", (13 + 5 * hv).toFixed(2));
+  peakDot.setAttribute("opacity", hv.toFixed(3));
+  const ck = TL.clicks[0], pulse = clamp01((t - ck.t) / 0.5);
+  if (t >= ck.t && pulse < 1) peakHalo.setAttribute("r", (18 + 14 * easeOut3(pulse)).toFixed(2)), peakHalo.setAttribute("opacity", (hv * (1 - pulse * 0.6)).toFixed(3));
+  // tooltip sits centred above the peak; rises 8 px as it fades in
+  tip.style.opacity = hv.toFixed(3);
+  if (G) tip.style.transform = `translate(${px(G.peak[0] - G.chart.x - 98)},${px(G.peak[1] - G.chart.y - 86 + (1 - hv) * 8)})`;
+
+  /* Regions */
+  regEls.forEach((r, i) => {
+    const u = easeOut4(prog(t, TL.regionsStart + i * TL.regionsStagger, TL.regionsDur));
+    r.fill.style.width = (u * REGIONS[i][1] / REGIONS[0][1] * 100).toFixed(2) + "%";
+    r.pct.textContent = (REGIONS[i][1] * u).toFixed(1) + "%";
+    r.amt.textContent = "$" + Math.round(regAmts[i] * u).toLocaleString("en-US");
+    r.amt.style.opacity = r.pct.style.opacity = clamp01(u * 5).toFixed(3);
+    setH(r.row, hoverAmt("reg" + i, t));
+  });
+
+  /* Orders table: skeleton rows, then each real row slides in */
+  ordEls.forEach((r, i) => {
+    const u = prog(t, TL.rowsStart + i * TL.rowsStagger, TL.rowsDur), e = easeOut4(u);
+    const sk = 0.5 + 0.5 * Math.sin(t * 3.2 - i * 0.7);                // gentle skeleton pulse
+    r.sk.style.opacity = (u > 0 ? 1 - smoothstep(clamp01(u * 2.2)) : 0.55 + 0.45 * sk).toFixed(3);
+    const cOp = smoothstep(clamp01((u - 0.1) / 0.6));
+    r.content.forEach((c, j) => { c.style.opacity = cOp.toFixed(3); c.style.transform = `translateX(${px((1 - e) * -34)})`; });
+    setH(r.row, hoverAmt("row" + i, t) * smoothstep(clamp01((u - 0.2) / 0.5)));
+  });
+
+  /* Export button */
+  const he = hoverAmt("export", t), press = clamp01(1 - (t - TL.clicks[2].t) / 0.18) * (t >= TL.clicks[2].t ? 1 : 0);
+  exportBtn.style.background = press > 0 ? "#16a34a" : `rgb(${lerp(34, 74, he)} ${lerp(197, 222, he)} ${lerp(94, 128, he)})`;
+  exportBtn.style.boxShadow = `0 0 0 ${px(he * 4)} rgba(34,197,94,${(he * 0.25).toFixed(3)}), 0 8px 22px rgba(34,197,94,${(0.22 + he * 0.18).toFixed(3)})`;
+
+  /* Modal + spinner (dead stretch) */
+  const mIn = smoothstep(prog(t, TL.modalIn[0], TL.modalIn[1] - TL.modalIn[0]));
+  const mOut = smoothstep(prog(t, TL.modalOut[0], TL.modalOut[1] - TL.modalOut[0]));
+  const mv = mIn * (1 - mOut);
+  scrim.style.opacity = mv.toFixed(3);
+  scrim.style.visibility = mv > 0 ? "visible" : "hidden";
+  $("#modal").style.transform = `translateY(${px((1 - mv) * 14)}) scale(${(0.97 + 0.03 * mv).toFixed(4)})`;
+  const C_ = 2 * Math.PI * 27, len = 34 + 62 * (0.5 + 0.5 * Math.sin(t * 4.1));
+  spinArc.setAttribute("stroke-dasharray", `${len.toFixed(2)} ${(C_ - len).toFixed(2)}`);
+  spinArc.setAttribute("transform", `rotate(${((t * 330) % 360).toFixed(2)} 34 34)`);
+
+  /* Toast */
+  const tIn = prog(t, TL.toastIn[0], TL.toastIn[1] - TL.toastIn[0]), tOut = smoothstep(prog(t, TL.toastOut[0], TL.toastOut[1] - TL.toastOut[0]));
+  const te = tIn > 0 ? Math.min(1, easeOutBack(tIn, 0.9)) : 0, tv = clamp01(tIn * 1.6) * (1 - tOut);
+  toast.style.opacity = tv.toFixed(3);
+  toast.style.visibility = tv > 0 ? "visible" : "hidden";
+  toast.style.transform = `translateX(${px((1 - te) * 60 + tOut * 40)})`;
+
+  /* Cursor, press and click ripple */
+  const [mx, my] = cursorAt(t);
+  let sc = 1;
+  ripple.style.opacity = 0;
+  for (const c of TL.clicks) {
+    const age = t - c.t;
+    if (age >= 0 && age < 0.18) sc = Math.min(sc, 1 - 0.12 * Math.sin(Math.PI * age / 0.18));
+    if (age >= 0 && age < 0.62) {
+      const k = age / 0.62, [rx, ry] = cursorAt(c.t);
+      ripple.style.opacity = (0.8 * (1 - k)).toFixed(3);
+      ripple.style.transform = `translate(${px(rx)},${px(ry)}) scale(${(0.16 + 0.84 * easeOut3(k)).toFixed(3)})`;
+    }
+  }
+  cursorEl.style.transform = `translate(${px(mx - 3)},${px(my - 2)}) scale(${sc.toFixed(3)})`;
+}
+
+/* ============================================================================================
+   Public API for render.mjs
+   ============================================================================================ */
+window.__ready = (async () => {
+  await document.fonts.ready;
+  await Promise.all(["400 15px Geist", "500 15px Geist", "600 15px Geist", "400 13px 'Geist Mono'", "500 13px 'Geist Mono'"].map((f) => document.fonts.load(f)));
+  render(TL.duration);               // settle everything once so measurements are taken in the final state
+  G = measure();
+  buildMoves(); HT = hoverTargets();
+  window.__render(window.__t0 ?? 0);
+  return true;
+})();
+window.__render = (t) => { render(t); document.body.dataset.t = t.toFixed(3); };
+window.__meta = () => ({ TL, WEEKS, PREV, moves: MOVES.map((m) => ({ t0: m.t0, t1: m.t1, x: m.to[0], y: m.to[1] })) });
+/** Hover / visibility amounts (0..1) at time t, so render.mjs can report when things are "on". */
+window.__probe = (t) => {
+  render(t);
+  const h = (e) => parseFloat(e.style.getPropertyValue("--h")) || 0, o = {};
+  kpiEls.forEach((k, i) => (o["kpi" + i + "Hover"] = h(k.card)));
+  regEls.forEach((r, i) => (o["region" + i + "Hover"] = h(r.row)));
+  ordEls.forEach((r, i) => (o["orderRow" + i + "Hover"] = h(r.row)));
+  o.exportHover = hoverAmt("export", t); o.tooltip = +tip.style.opacity; o.modal = +scrim.style.opacity; o.toast = +toast.style.opacity;
+  return o;
+};
+/** Bounding boxes (CSS px in the 1920x1080 frame) at the moment t. */
+window.__boxes = (t) => {
+  render(t);
+  const r = (e) => { const b = rectOf(e); return { x: +b.x.toFixed(2), y: +b.y.toFixed(2), w: +b.w.toFixed(2), h: +b.h.toFixed(2) }; };
+  return {
+    revenueCard: r(kpiEls[0].card), deltaPill: r(kpiEls[0].delta), chartPanel: r($("#chart")),
+    peakPoint: r(peakHalo), peakCentre: { x: +G.peak[0].toFixed(2), y: +G.peak[1].toFixed(2) }, tooltip: r(tip),
+    regionsCard: r($("#regions")), tableCard: r($("#orders")), exportButton: r(exportBtn),
+    kpiCards: kpiEls.map((k) => r(k.card)), modal: r($("#modal")), toast: r(toast), cursor: { x: cursorAt(t)[0], y: cursorAt(t)[1] },
+  };
+};
+window.__cursor = (t) => cursorAt(t);
+if (new URLSearchParams(location.search).has("t")) window.__t0 = parseFloat(new URLSearchParams(location.search).get("t"));
+</script>
+</body>
+</html>

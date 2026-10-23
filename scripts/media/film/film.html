@@ -1,0 +1,177 @@
+<!doctype html>
+<!-- The screensnap launch film, as one deterministic page: window.__render(t) puts every element in the exact
+     state for time t (seconds). render-film.mjs calls it once per frame and screenshots the result at 2x
+     (3840x2160). The real UI footage (editor, popup, screenshot editor) is image sequences captured from the
+     actual extension; everything else is drawn here. Layout units are CSS px on a 1920x1080 stage. -->
+<meta charset="utf-8">
+<title>screensnap film</title>
+<style>
+  @font-face { font-family: Archivo; font-weight: 700; src: url("/site/fonts/archivo-700.woff2") format("woff2"); }
+  @font-face { font-family: Archivo; font-weight: 800; src: url("/site/fonts/archivo-800.woff2") format("woff2"); }
+  @font-face { font-family: Geist; font-weight: 400; src: url("/fonts/geist-400.woff2") format("woff2"); }
+  @font-face { font-family: Geist; font-weight: 500; src: url("/fonts/geist-500.woff2") format("woff2"); }
+  @font-face { font-family: Geist; font-weight: 600; src: url("/fonts/geist-600.woff2") format("woff2"); }
+  @font-face { font-family: "Geist Mono"; font-weight: 400; src: url("/fonts/geist-mono-400.woff2") format("woff2"); }
+  @font-face { font-family: "Geist Mono"; font-weight: 500; src: url("/fonts/geist-mono-500.woff2") format("woff2"); }
+  :root { --green: #22c55e; --green-d: #16a34a; --ink: #f4f6f5; --dim: #8b948e; --bg: #060809; --red: #f0524f; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: var(--bg); }
+  body { font-family: Geist, system-ui, sans-serif; color: var(--ink); -webkit-font-smoothing: antialiased; }
+  #stage { position: relative; width: 1920px; height: 1080px; overflow: hidden; }
+
+  /* ── backdrop: drifting colour fields, a faint dot grid, a vignette ── */
+  #bg { position: absolute; inset: -200px; background: var(--bg); }
+  .blob { position: absolute; border-radius: 50%; filter: blur(150px); will-change: transform; }
+  #b1 { width: 1100px; height: 1100px; background: radial-gradient(circle, rgba(34,197,94,.34), transparent 68%); left: 900px; top: -300px; }
+  #b2 { width: 1000px; height: 1000px; background: radial-gradient(circle, rgba(20,184,166,.20), transparent 68%); left: -200px; top: 480px; }
+  #b3 { width: 800px; height: 800px; background: radial-gradient(circle, rgba(99,102,241,.14), transparent 68%); left: 1100px; top: 700px; }
+  #grid { position: absolute; inset: 0; background-image: radial-gradient(rgba(255,255,255,.07) 1.2px, transparent 1.6px); background-size: 48px 48px; -webkit-mask-image: radial-gradient(ellipse 75% 70% at 50% 45%, #000 20%, transparent 78%); }
+  #vig { position: absolute; inset: 0; background: radial-gradient(ellipse 85% 85% at 50% 50%, transparent 55%, rgba(0,0,0,.55) 100%); pointer-events: none; z-index: 50; }
+
+  .scene { position: absolute; inset: 0; display: none; }
+  .word { font-family: Archivo, sans-serif; font-weight: 800; letter-spacing: -0.045em; line-height: 1; }
+  .mono { font-family: "Geist Mono", monospace; font-weight: 500; letter-spacing: .14em; text-transform: uppercase; }
+  .g { color: var(--green); }
+  .center { position: absolute; left: 0; right: 0; text-align: center; }
+
+  /* ── 1 intro ── */
+  #s1-word { position: absolute; left: 0; right: 0; top: 400px; text-align: center; font-size: 236px; white-space: nowrap; }
+  #s1-word .ch { display: inline-block; will-change: transform; }
+  #s1-dot { display: inline-block; color: var(--green); text-shadow: 0 0 60px rgba(34,197,94,.8); }
+  #s1-rec { position: absolute; left: 936px; top: 516px; width: 48px; height: 48px; border-radius: 50%; background: var(--green); box-shadow: 0 0 80px 10px rgba(34,197,94,.7); }
+  .ring { position: absolute; border-radius: 50%; border: 3px solid var(--green); left: 960px; top: 540px; width: 100px; height: 100px; margin: -50px 0 0 -50px; opacity: 0; }
+  #s1-tag { position: absolute; left: 0; right: 0; top: 680px; text-align: center; font-size: 46px; font-weight: 500; letter-spacing: .01em; color: #c8d0cb; }
+  #s1-tag b { color: var(--ink); font-weight: 600; }
+
+  /* ── 2 hook ── */
+  .hook { position: absolute; left: 0; right: 0; text-align: center; font-size: 168px; }
+  .hook span { position: relative; display: inline-block; }
+  .hook i { position: absolute; left: -2%; top: 55%; height: 16px; width: 104%; background: var(--red); border-radius: 8px; transform-origin: 0 50%; box-shadow: 0 0 40px rgba(240,82,79,.6); }
+  #s2-final { position: absolute; left: 0; right: 0; top: 330px; text-align: center; }
+  #s2-final .word { font-size: 196px; }
+  #s2-pills { position: absolute; left: 0; right: 0; top: 640px; display: flex; justify-content: center; gap: 28px; }
+  .pill { font-size: 38px; font-weight: 600; padding: 20px 38px; border-radius: 999px; background: rgba(34,197,94,.12); border: 2px solid rgba(34,197,94,.55); color: #c9f5d9; display: flex; align-items: center; gap: 16px; }
+  .pill::before { content: ""; width: 14px; height: 14px; border-radius: 50%; background: var(--green); box-shadow: 0 0 16px var(--green); }
+
+  /* ── device / window frames ── */
+  .win { position: absolute; border-radius: 16px; overflow: hidden; background: #fff; box-shadow: 0 70px 140px -30px rgba(0,0,0,.75), 0 0 0 1.5px rgba(255,255,255,.10), 0 0 200px rgba(34,197,94,.14); }
+  .win-bar { height: 36px; background: linear-gradient(#262b29, #1c201e); display: flex; align-items: center; gap: 9px; padding: 0 16px; position: relative; }
+  .win-bar i { width: 12px; height: 12px; border-radius: 50%; background: #ff5f57; }
+  .win-bar i:nth-child(2) { background: #febc2e; } .win-bar i:nth-child(3) { background: #28c840; }
+  .win-title { position: absolute; left: 0; right: 0; text-align: center; font-family: "Geist Mono", monospace; font-size: 13px; color: #9aa39d; letter-spacing: .02em; }
+  .win img { display: block; width: 100%; }
+  #ed-cam, #sh-cam { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; transform-origin: 0 0; }
+
+  /* ── 3 record (popup) ── */
+  #s3-title { position: absolute; left: 150px; top: 96px; font-size: 128px; line-height: .98; }
+  #s3-list { position: absolute; left: 150px; top: 410px; width: 820px; display: flex; flex-direction: column; gap: 14px; }
+  .feat { display: flex; align-items: center; gap: 26px; padding: 18px 30px; border-radius: 20px; background: rgba(255,255,255,.04); border: 1.5px solid rgba(255,255,255,.07); font-size: 38px; font-weight: 500; color: #9aa39d; transition: none; }
+  .feat b { font-family: "Geist Mono", monospace; font-size: 20px; color: #5f6862; min-width: 44px; letter-spacing: .1em; }
+  #pop-dev { position: absolute; left: 1230px; top: 64px; width: 500px; border-radius: 30px; overflow: hidden; background: #fff; box-shadow: 0 80px 160px -30px rgba(0,0,0,.8), 0 0 0 1.5px rgba(255,255,255,.10), 0 0 220px rgba(34,197,94,.22); transform-origin: 50% 50%; }
+  #pop-dev img { display: block; width: 100%; }
+
+  /* ── 5 screenshots ── */
+  #s5-title { position: absolute; left: 0; right: 0; top: 56px; text-align: center; font-size: 84px; }
+  #sh-win { left: 260px; top: 150px; width: 1400px; }
+  .keys { position: absolute; left: 0; right: 0; top: 968px; display: flex; justify-content: center; gap: 18px; }
+  .key { display: flex; align-items: center; gap: 14px; font-size: 28px; font-weight: 500; color: #c3cbc6; padding: 8px 22px 8px 10px; border-radius: 14px; background: rgba(255,255,255,.05); border: 1.5px solid rgba(255,255,255,.08); }
+  .key kbd { font-family: "Geist Mono", monospace; font-size: 26px; font-weight: 500; color: #0b0d0c; background: linear-gradient(#ffffff, #d6ddd8); border-radius: 9px; min-width: 46px; height: 46px; display: flex; align-items: center; justify-content: center; box-shadow: 0 5px 0 #8f9992, 0 10px 18px rgba(0,0,0,.4); }
+
+  /* ── 4 editor ── */
+  #ed-win { left: 280px; top: 40px; width: 1360px; }
+  #ed-key { position: absolute; left: 0; bottom: 58px; z-index: 46; height: 84px; padding: 0 26px 0 16px; border-radius: 22px; background: rgba(6,8,9,.86); border: 1.5px solid rgba(34,197,94,.55); backdrop-filter: blur(18px); font-size: 36px; }
+
+  /* ── 6 private ── */
+  #s6-head { position: absolute; left: 0; right: 0; top: 118px; text-align: center; font-size: 104px; }
+  #s6-zeros { position: absolute; left: 0; right: 0; top: 300px; display: flex; justify-content: center; gap: 40px; }
+  .zero { text-align: center; width: 420px; }
+  .zero .n { font-family: Archivo, sans-serif; font-weight: 800; font-size: 300px; line-height: 1; letter-spacing: -0.05em; font-variant-numeric: tabular-nums; }
+  .zero .l { margin-top: 6px; font-size: 26px; color: var(--green); }
+  #s6-drive { position: absolute; left: 0; right: 0; top: 748px; display: flex; justify-content: center; }
+  #s6-drive .card { display: flex; align-items: center; gap: 30px; padding: 26px 44px; border-radius: 26px; background: rgba(255,255,255,.05); border: 1.5px solid rgba(255,255,255,.1); font-size: 36px; font-weight: 500; color: #c9d1cc; }
+  .tog { width: 96px; height: 54px; border-radius: 27px; background: #3a413d; position: relative; }
+  .tog::after { content: ""; position: absolute; left: 6px; top: 6px; width: 42px; height: 42px; border-radius: 50%; background: #fff; }
+
+  /* ── 7 outro ── */
+  #s7-word { position: absolute; left: 0; right: 0; top: 190px; text-align: center; font-size: 250px; }
+  #s7-sub { position: absolute; left: 0; right: 0; top: 470px; text-align: center; font-size: 64px; font-weight: 600; letter-spacing: -0.01em; }
+  #s7-btn { position: absolute; left: 50%; top: 610px; margin-left: -330px; width: 660px; height: 124px; border-radius: 28px; background: linear-gradient(#2ad06a, #1ea857); color: #04210f; font-size: 44px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 18px; box-shadow: 0 30px 80px -20px rgba(34,197,94,.7), inset 0 2px 0 rgba(255,255,255,.35); }
+  #s7-foot { position: absolute; left: 0; right: 0; top: 790px; text-align: center; font-size: 30px; color: var(--dim); }
+  #s7-foot b { color: var(--ink); font-weight: 500; }
+
+  /* ── hud, captions, transitions ── */
+  #hud { position: absolute; left: 56px; top: 44px; font-family: Archivo, sans-serif; font-weight: 800; font-size: 34px; letter-spacing: -0.03em; opacity: 0; z-index: 40; }
+  #hud span { color: var(--green); }
+  #cap { position: absolute; left: 0; right: 0; bottom: 56px; display: flex; justify-content: center; z-index: 45; }
+  #cap-in { font-size: 48px; font-weight: 600; letter-spacing: -0.01em; padding: 18px 40px 20px; border-radius: 22px; background: rgba(6,8,9,.86); border: 1.5px solid rgba(255,255,255,.1); backdrop-filter: blur(18px); white-space: nowrap; box-shadow: 0 12px 40px rgba(0,0,0,.35); }
+  #cap-in .w { display: inline-block; will-change: transform; }
+  #cap-in .hl { color: var(--green); }
+  #sweep { position: absolute; top: -100px; bottom: -100px; width: 520px; background: linear-gradient(90deg, transparent, rgba(34,197,94,.0) 10%, rgba(34,197,94,.55) 50%, rgba(160,255,200,.0) 90%, transparent); transform: skewX(-18deg); opacity: 0; z-index: 48; mix-blend-mode: screen; }
+  #flash { position: absolute; inset: 0; background: #fff; opacity: 0; z-index: 47; pointer-events: none; }
+  #fade { position: absolute; inset: 0; background: #000; opacity: 0; z-index: 60; pointer-events: none; }
+</style>
+
+<div id="stage">
+  <div id="bg"><div class="blob" id="b1"></div><div class="blob" id="b2"></div><div class="blob" id="b3"></div><div id="grid"></div></div>
+
+  <section class="scene" id="s1">
+    <div id="s1-rec"></div><div class="ring" id="s1-ring"></div><div class="ring" id="s1-ring2"></div>
+    <h1 class="word" id="s1-word">screensnap<span id="s1-dot">.</span></h1>
+    <div id="s1-tag"><b>Record.</b> <b>Edit.</b> Keep it.</div>
+  </section>
+
+  <section class="scene" id="s2">
+    <div class="hook word" id="h1"><span>Subscriptions?<i></i></span></div>
+    <div class="hook word" id="h2"><span>Watermarks?<i></i></span></div>
+    <div class="hook word" id="h3"><span>Sign-ups?<i></i></span></div>
+    <div id="s2-final"><div class="word">screensnap is <span class="g">free.</span></div></div>
+    <div id="s2-pills"><div class="pill">No paywall</div><div class="pill">No watermark</div><div class="pill">No account</div></div>
+  </section>
+
+  <section class="scene" id="s3">
+    <h2 class="word" id="s3-title">Record<br><span class="g">anything.</span></h2>
+    <div id="s3-list">
+      <div class="feat"><b>01</b>Tab, window or whole screen</div>
+      <div class="feat"><b>02</b>System audio + your mic</div>
+      <div class="feat"><b>03</b>Countdown &amp; quality presets</div>
+      <div class="feat"><b>04</b>Screen + Cam bubble</div>
+      <div class="feat"><b>05</b>Saved as native MP4</div>
+    </div>
+    <div id="pop-dev"><img id="pop-img" alt=""></div>
+  </section>
+
+  <section class="scene" id="s4">
+    <div id="ed-cam"><div class="win" id="ed-win"><div class="win-bar"><i></i><i></i><i></i><div class="win-title">screensnap — video editor</div></div><img id="ed-img" alt=""></div></div>
+    <div id="ed-key" class="key"><kbd id="ed-kbd">C</kbd><span id="ed-keylbl">Crop</span></div>
+  </section>
+
+  <section class="scene" id="s5">
+    <h2 class="word" id="s5-title">Screenshots, <span class="g">annotated.</span></h2>
+    <div id="sh-cam"><div class="win" id="sh-win"><div class="win-bar"><i></i><i></i><i></i><div class="win-title">screensnap — annotate</div></div><img id="sh-img" alt=""></div></div>
+    <div class="keys" id="s5-keys">
+      <div class="key"><kbd>A</kbd>Arrow</div><div class="key"><kbd>N</kbd>Steps</div><div class="key"><kbd>S</kbd>Spotlight</div><div class="key"><kbd>T</kbd>Text</div><div class="key"><kbd>C</kbd>Crop</div>
+    </div>
+  </section>
+
+  <section class="scene" id="s6">
+    <h2 class="word" id="s6-head">Private <span class="g">by design.</span></h2>
+    <div id="s6-zeros">
+      <div class="zero"><div class="n" id="z1">0</div><div class="l mono">servers</div></div>
+      <div class="zero"><div class="n" id="z2">0</div><div class="l mono">trackers</div></div>
+      <div class="zero"><div class="n" id="z3">0</div><div class="l mono">accounts</div></div>
+    </div>
+    <div id="s6-drive"><div class="card"><div class="tog" id="tog"></div><span>Optional backup to <b style="color:#fff">your own</b> Google Drive</span></div></div>
+  </section>
+
+  <section class="scene" id="s7">
+    <h1 class="word" id="s7-word">screensnap<span class="g">.</span></h1>
+    <div id="s7-sub">Free. Local. <span class="g">Yours.</span></div>
+    <div id="s7-btn"><svg width="48" height="48" viewBox="0 0 48 48"><circle cx="24" cy="24" r="20" fill="none" stroke="#04210f" stroke-width="4"/><circle cx="24" cy="24" r="8" fill="#04210f"/></svg>Add to Chrome — it’s free</div>
+    <div id="s7-foot"><b>screensnap.xyz</b> &nbsp;·&nbsp; open source on GitHub</div>
+  </section>
+
+  <div id="hud">screensnap<span>.</span></div>
+  <div id="cap"><div id="cap-in"></div></div>
+  <div id="sweep"></div><div id="flash"></div><div id="vig"></div><div id="fade"></div>
+</div>
+<script type="module" src="/film/film.js"></script>
