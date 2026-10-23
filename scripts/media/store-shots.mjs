@@ -67,17 +67,19 @@ const shotHTML = (s) => `<!doctype html><meta charset="utf-8"><style>${BASE}
 <div class="card ${s.tall ? "tall" : "wide"}"><img src="${img(s.img)}"></div>`;
 
 // ── promo tiles ──
+// The small tile is what search results, category grids and "You might also like" show (as small as ~184px wide),
+// so it says one thing, huge: FREE, then what it is. Nothing on it is smaller than it can be read at that size.
 const small = `<!doctype html><meta charset="utf-8"><style>${BASE}
   html, body { width: 440px; height: 280px; }
-  .logo { left: 22px; top: 20px; font-size: 21px; gap: 9px; } .logo img { width: 28px; height: 28px; }
-  h1 { position: absolute; left: 22px; top: 66px; font-size: 40px; line-height: .98; }
-  .chips { position: absolute; left: 22px; bottom: 22px; } .chip { font-size: 12.5px; padding: 6px 11px; gap: 7px; } .chip i { width: 6px; height: 6px; }
-  .card { left: 284px; top: 54px; width: 300px; border-radius: 10px; transform: perspective(900px) rotateY(-18deg); transform-origin: 0 50%; }
+  .logo { left: 24px; top: 22px; font-size: 26px; gap: 10px; } .logo img { width: 34px; height: 34px; }
+  .free { position: absolute; left: 20px; top: 62px; font-weight: 800; font-size: 118px; line-height: .9; letter-spacing: -0.06em; color: #2ee07a; text-shadow: 0 5px 0 #0a4a24, 0 0 40px rgba(34,197,94,.55); }
+  h1 { position: absolute; left: 24px; top: 178px; font-size: 34px; line-height: 1.0; }
+  .card { left: 282px; top: 70px; width: 290px; border-radius: 10px; transform: perspective(900px) rotateY(-20deg); transform-origin: 0 50%; }
 </style><div class="bg"></div><div class="dots"></div>
 <div class="card"><img src="${img(join(ED, "backdrop.png"))}"></div>
 <div class="logo"><img src="${ICON}"><span>screensnap<b>.</b></span></div>
-<h1><em>Free</em> screen<br>recorder<br>+ editor</h1>
-<div class="chips"><div class="chip"><i></i>No watermark</div><div class="chip"><i></i>No sign-up</div></div>`;
+<div class="free">FREE</div>
+<h1>screen recorder<br>+ video editor</h1>`;
 
 const marquee = `<!doctype html><meta charset="utf-8"><style>${BASE}
   html, body { width: 1400px; height: 560px; }
