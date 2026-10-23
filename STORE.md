@@ -5,6 +5,15 @@ Plain text only: no markdown, no emojis, no em dashes.
 
 ---
 
+v1.8 has been released with the following updates:
+• A video editor timeline that reads like a real editor. A big timecode sits over a proper ruler, and your recording appears as a clip with a strip of frames across it, so you can see where to cut. The parts you trim away fade out instead of vanishing.
+• Colour-coded tracks. Video, zoom, each annotation and the audio get their own labelled track, and the audio track has its own mute button and volume slider right in the header.
+• A zoom and pan bar under the timeline. Drag the bar to scroll, or drag its round ends to zoom in on a moment. The timeline follows the playhead while you play, and you can grab the playhead by its flag to scrub.
+• Snapping you can switch off. Edges snap to the playhead and to each other, with a magnet button to turn it off and the option key to skip it for one drag. Dragging a trim handle shows the exact time.
+• A crop box that stays editable. Drag it to move it, pull any of its eight handles to resize, hold shift to keep its shape or option to resize from the centre, and use the arrow keys to nudge it. Pick 16:9, 9:16, 1:1, 4:3 or 4:5, or type an exact width and height, and swap between portrait and landscape.
+• Crop shows the whole frame while you work, so you can grow a crop back out later instead of starting over. Press Enter or double-click to apply, Esc to cancel.
+• New shortcuts: C for crop, X for cut mode, Z to add a zoom.
+
 v1.7 has been released with the following updates:
 • A friendlier screenshot editor. Everything you place, from arrows and boxes to blur, text and images, stays selected with handles, so you can move and resize it straight away without switching tools. Images, boxes, text and step badges can be rotated too.
 • Text works like a design app. Click to place a text frame, or drag to make a box that wraps. Move it by its border while you type, drag the sides to rewrap, and drag the corners to resize.
@@ -59,13 +68,13 @@ RECORD ANYTHING, FREE AND UNLIMITED
 • No upgrade prompts and no "pro" tier. It's all just free.
 
 A REAL VIDEO EDITOR, ALSO FREE
-• A multi-track timeline. The video, each overlay, and the audio get their own track. Drag blocks to move them, drag the edges to resize, and everything snaps into place.
+• A multi-track timeline. Your recording shows as a clip with a strip of frames across it, and the zoom, each overlay, and the audio get their own colour-coded track. Drag blocks to move them, drag the edges to resize, and everything snaps into place. A zoom and pan bar and a big timecode keep long recordings easy to navigate.
 • Trim the ends, or cut mistakes out of the middle.
 • Zoom into the action with draggable focus blocks that ease in and out.
 • Add text, arrows, boxes, blur, logos, images, and animated GIFs. Resize them right on the video and set when they appear and disappear (circle something, then stop circling it).
 • Undo and redo. Ctrl+Z (cmd+Z on Mac) reverts a move, resize, or delete, and shift redoes it.
 • Edit the audio. Mute regions without cutting the picture, change the volume, or mix in a voiceover or music track from a file.
-• Crop free-form or to a ratio (16:9, 1:1, 9:16, 4:3), change the speed, or wrap the video in a gradient backdrop with rounded corners and a shadow.
+• Crop with a box you can move and resize by its handles, free-form or locked to 16:9, 9:16, 1:1, 4:3 or 4:5, or type an exact size. Change the speed, or wrap the video in a gradient backdrop with rounded corners and a shadow.
 • Export a native MP4 (pick 720p or 1080p to shrink the file, and an edit never comes out bigger than the original) or an animated GIF, or download the original untouched. Every frame is encoded on your device.
 
 SCREENSHOTS
