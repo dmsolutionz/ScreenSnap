@@ -14,6 +14,9 @@ export function defaultTransforms(meta) {
   const dur = Math.max(0, (meta && meta.durationSec) || 0);
   return {
     trimIn: 0, trimOut: dur, cuts: [], outScale: null, speed: 1, crop: null, zoom: [], backdrop: null,
+    // Editing aids that never reach the export: split points (S) divide the kept video into pieces you can
+    // select and delete (a delete adds a cut), and markers (M) are named-less jump / snap points.
+    splits: [], markers: [],
     // Independent audio mute mask — same {trimIn,trimOut,cuts} shape as the video fields above, so
     // segmentsOf()/keepFrame() work unmodified when called as segmentsOf(t.audio)/keepFrame(sec, t.audio).
     // This is NOT a ripple window like video's cuts (which shift later segments earlier in the output):
@@ -160,6 +163,21 @@ function safeSpeed(t) {
 }
 
 // Keep a source-time frame if it falls inside any kept segment. (Half-open [in, out).)
+// The kept video as editable pieces: the segments (trim minus cuts) further divided at the split points.
+// Selecting a piece on the timeline and deleting it adds a cut over exactly that piece (a ripple delete).
+export function piecesOf(t) {
+  const out = [];
+  for (const s of segmentsOf(t)) {
+    let a = s.in;
+    for (const x of ((t && t.splits) || []).filter((v) => v > s.in + 1e-3 && v < s.out - 1e-3).sort((p, q) => p - q)) {
+      out.push({ in: a, out: x });
+      a = x;
+    }
+    out.push({ in: a, out: s.out });
+  }
+  return out;
+}
+
 export function keepFrame(srcSec, t) {
   const segs = segmentsOf(t);
   for (const s of segs) if (srcSec >= s.in && srcSec < s.out) return true;

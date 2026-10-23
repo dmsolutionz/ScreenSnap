@@ -3,7 +3,7 @@
 // FOUNDATION-OWNED and final — feature work happens inside the modules this orchestrates.
 import { loadClip, pickFile, toInput } from "./source.js";
 import { listIds } from "./idb.js";
-import { defaultTransforms, composeDims, cropRect, outDuration, segmentsOf, outTimestamp, srcTimestamp } from "./transforms.js";
+import { defaultTransforms, composeDims, cropRect, outDuration, segmentsOf, piecesOf, outTimestamp, srcTimestamp } from "./transforms.js";
 import { createLayerStore, createLayerHistory, newImageLayer, newShapeLayer } from "./layers-model.js";
 import { translate } from "./shapes.js";
 import { buildShell } from "./ui-shell.js";
@@ -45,7 +45,8 @@ let lastTime = 0;        // latest preview playhead (source seconds) — anchor 
 let selectedZoomId = null; // id of the zoom block currently being edited (focus box shown)
 let selectedLayerId = null; // id of the layer currently selected on the stage (resize box shown for images)
 let audioPeaks = null; // { peaks, buckets } from computeWaveformPeaks(), or null (no track / not decoded yet)
-let cropMode = false;  // the crop tool is open: the stage shows the WHOLE frame (no crop, no zoom) under the crop box
+let cropMode = false;
+let selectedPiece = null; // {in,out} of the clip piece selected on the timeline (Delete removes it), or null  // the crop tool is open: the stage shows the WHOLE frame (no crop, no zoom) under the crop box
 const NEW_ZOOM_SCALE = 2;  // default magnification for a freshly-added zoom block
 
 async function boot() {
@@ -101,7 +102,15 @@ async function start(blob, fileName) {
   const transforms = defaultTransforms(meta);
 
   const store = createLayerStore();
-  const history = createLayerHistory(store); // ⌘Z/ctrl+Z over every layer edit (move, resize, add, delete…)
+  // ⌘Z/ctrl+Z over every edit, one step per gesture: overlay layers (move, resize, add, delete…) AND the
+  // timeline / crop state (trims, splits, cuts, zooms, crop, backdrop…). The imported audio track is left
+  // out: its decoded file lives on the session, so restoring only its numbers could point at nothing.
+  const history = createLayerHistory(store, {
+    extra: {
+      get: () => { const { extraAudio, ...rest } = transforms; return structuredClone(rest); },
+      set: (snap) => restoreEdits(snap),
+    },
+  });
   const shell = buildShell(root);
 
   buildToolbar(shell.toolbarEl, transforms);
@@ -203,6 +212,12 @@ async function start(blob, fileName) {
     },
     getFilmstrip: () => film,
     getClipName: () => fileName,
+    // Pieces / splits / markers: click a piece of the clip to select it, Delete removes it (a ripple delete).
+    getPieces: () => piecesOf(transforms),
+    getSplits: () => transforms.splits || [],
+    getMarkers: () => transforms.markers || [],
+    onPieceSelect: (p) => { selectedPiece = p; if (p) { selectLayer(null); selectZoom(null); } },
+    onMarkerRemove: (id) => { transforms.markers = (transforms.markers || []).filter((m) => m.id !== id); edited(); },
     // Overlay layer tracks (one row per layer): the range block, plus the header controls the Layers
     // sidebar used to own (eye / opacity / reorder = z-order / delete).
     store,
@@ -305,6 +320,7 @@ async function start(blob, fileName) {
       const b = (transforms.zoom || []).find((x) => x.id === selectedZoomId);
       if (!b) return;
       b.cx = cx; b.cy = cy; b.scale = scale;
+      history.change();
       timeline.refresh();
       zoomOverlay.refresh();
       preview.redraw();
@@ -360,6 +376,7 @@ function buildToolbar(el, transforms) {
   el.innerHTML = `
     <div class="ss-tb-group">
       <button class="ss-tool" id="ss-crop-btn" title="Crop the frame (C)">Crop</button>
+      <button class="ss-tool" id="ss-split-btn" title="Split the clip at the playhead (S), then click a piece and press Delete">Split</button>
       <button class="ss-tool" id="ss-cut-btn" title="Cut mode (X): drag on the Video track to remove a section">Cut</button>
       <button class="ss-tool" id="ss-zoom-add" title="Add a zoom at the playhead (Z)">+ Zoom</button>
       <button class="ss-tool" id="ss-zoom-remove" title="Remove the selected zoom" disabled>Remove zoom</button>
@@ -424,6 +441,7 @@ function buildToolbar(el, transforms) {
   // ── clip actions (tools live in the left rail now) ────────────────────────────────────────────
   el.querySelector("#ss-crop-btn").addEventListener("click", () => toggleCrop());
   el.querySelector("#ss-cut-btn").addEventListener("click", () => toggleCut());
+  el.querySelector("#ss-split-btn").addEventListener("click", () => splitAtPlayhead());
   el.querySelector("#ss-zoom-add").addEventListener("click", () => addZoom());
   el.querySelector("#ss-zoom-remove").addEventListener("click", () => removeSelectedZoom());
 
@@ -591,7 +609,7 @@ function buildTransport(el) {
     <button class="ss-step" id="ss-prev-edge" type="button" title="Previous clip edge or cut">⏮</button>
     <button class="ss-pp" id="ss-pp" type="button" aria-label="Play">${PLAY_SVG}</button>
     <button class="ss-step" id="ss-next-edge" type="button" title="Next clip edge or cut">⏭</button>
-    <span class="ss-key-hint"><kbd>space</kbd> play · <kbd>←</kbd><kbd>→</kbd> frame · <kbd>⇧</kbd><kbd>←</kbd><kbd>→</kbd> 1s · <kbd>C</kbd> crop · <kbd>X</kbd> cut · <kbd>Z</kbd> zoom</span>
+    <span class="ss-key-hint"><kbd>J</kbd><kbd>K</kbd><kbd>L</kbd> play · <kbd>←</kbd><kbd>→</kbd> frame · <kbd>↑</kbd><kbd>↓</kbd> edits · <kbd>S</kbd> split · <kbd>Q</kbd><kbd>W</kbd> trim to playhead · <kbd>M</kbd> marker · <kbd>⌘Z</kbd> undo</span>
     <div class="ss-tb-spacer"></div>
     <span class="ss-key-hint">⌘ scroll or pinch to zoom the timeline</span>`;
   el.querySelector("#ss-pp").addEventListener("click", () => togglePlay());
@@ -764,6 +782,7 @@ function changeZoom(id, patch) {
   if (!b) return;
   if (patch.tIn != null) b.tIn = patch.tIn;
   if (patch.tOut != null) b.tOut = patch.tOut;
+  session.history.change();
   session.timeline.refresh();
   session.zoomOverlay.refresh();
   session.preview.redraw();
@@ -863,6 +882,95 @@ function changeExtraAudio(r, mode) {
   session.preview.redraw();
 }
 
+// Any edit that doesn't already go through setStatus (markers, splits): refresh and record an undo step.
+function edited() {
+  if (!session) return;
+  setStatus(session.shell.statusEl, session.meta, session.transforms);
+  session.timeline.refresh();
+}
+
+// S / Split: divide the clip at the playhead. The pieces can then be selected and deleted one by one.
+function splitAtPlayhead() {
+  if (!session) return;
+  const t = session.transforms, at = Math.round(lastTime * 1000) / 1000;
+  const inKept = piecesOf(t).some((p) => at > p.in + 0.05 && at < p.out - 0.05);
+  if (!inKept || (t.splits || []).some((x) => Math.abs(x - at) < 0.05)) return;
+  t.splits = [...(t.splits || []), at].sort((a, b) => a - b);
+  edited();
+}
+
+// Delete / Backspace on a selected piece: cut exactly that piece out (later video closes the gap). The
+// last remaining piece can't go — there would be nothing left to export.
+function deleteSelectedPiece() {
+  if (!session || !selectedPiece) return false;
+  const t = session.transforms;
+  if (piecesOf(t).length < 2) return false;
+  t.cuts = [...(t.cuts || []), { in: selectedPiece.in, out: selectedPiece.out }];
+  selectedPiece = null;
+  session.timeline.clearPiece();
+  session.preview.seekTo(lastTime); // off a removed frame
+  edited();
+  session.preview.redraw();
+  return true;
+}
+
+// M: drop a marker at the playhead (a jump target for ↑/↓ and a snap point); again on one removes it.
+function toggleMarker() {
+  if (!session) return;
+  const t = session.transforms, at = Math.round(lastTime * 1000) / 1000;
+  const hit = (t.markers || []).find((m) => Math.abs(m.t - at) < 0.05);
+  t.markers = hit ? t.markers.filter((m) => m !== hit) : [...(t.markers || []), { id: Math.random().toString(36).slice(2, 9), t: at }];
+  edited();
+}
+
+// Q / W: trim the start / end of the clip to the playhead (the playhead stays on the new edge).
+function trimToPlayhead(which) {
+  if (!session) return;
+  const t = session.transforms, at = lastTime;
+  if (which === "in" && at < t.trimOut - 0.05) t.trimIn = at;
+  else if (which === "out" && at > t.trimIn + 0.05) t.trimOut = at;
+  else return;
+  session.timeline.setTrim(t.trimIn, t.trimOut);
+  edited();
+}
+
+// J / K / L: the editor's shuttle. L plays, K stops, J steps back a second at a time.
+function shuttle(k) {
+  if (!session) return;
+  if (k === "l") { if (!session.preview.isPlaying()) togglePlay(); }
+  else if (k === "k") { if (session.preview.isPlaying()) togglePlay(); }
+  else stepBy(-1);
+}
+
+// Undo / redo put the edit state back: copy it into the live transforms (closures hold that object) and
+// bring every view of it up to date.
+function restoreEdits(snap) {
+  if (!session) return;
+  const t = session.transforms;
+  Object.assign(t, structuredClone(snap));
+  session.timeline.setTrim(t.trimIn, t.trimOut);
+  if (selectedZoomId && !(t.zoom || []).some((b) => b.id === selectedZoomId)) selectZoom(null);
+  syncProjectControls();
+  setStatus(session.shell.statusEl, session.meta, t);
+  session.timeline.refresh();
+  session.preview.redraw();
+  session.zoomOverlay.refresh();
+  session.selectionOverlay.refresh();
+  markCropBtn(false);
+}
+
+// The Backdrop / Project popovers' controls, from the transforms (after an undo).
+function syncProjectControls() {
+  const t = session.transforms, $ = (id) => document.getElementById(id);
+  if ($("ss-bd-on")) $("ss-bd-on").checked = !!t.backdrop;
+  if (t.backdrop && $("ss-bd-bg")) $("ss-bd-bg").value = t.backdrop.bg;
+  if (t.backdrop && $("ss-bd-pad")) $("ss-bd-pad").value = String(t.backdrop.pad);
+  if ($("ss-res")) $("ss-res").value = t.outScale ? String(t.outScale.maxHeight) : "";
+  if ($("ss-speed")) $("ss-speed").value = String(t.speed || 1);
+  if ($("ss-audio-mute-cb")) $("ss-audio-mute-cb").checked = !!t.audio.muted;
+  if ($("ss-audio-vol")) $("ss-audio-vol").value = String(typeof t.audio.volume === "number" ? t.audio.volume : 1);
+}
+
 // Cut toolbar button / X: while on, dragging across the Video track removes that section.
 function toggleCut() {
   if (!session?.timeline) return;
@@ -940,6 +1048,8 @@ function edgeTimes() {
   (t.zoom || []).forEach((b) => out.push(b.tIn, b.tOut));
   session.store.layers.forEach((l) => { if (l.range) out.push(l.range.inSec, l.range.outSec); });
   ((t.audio && t.audio.cuts) || []).forEach((c) => out.push(c.in, c.out));
+  (t.splits || []).forEach((x) => out.push(x));
+  (t.markers || []).forEach((m) => out.push(m.t));
   return [...new Set(out.map((v) => Math.round(v * 1000) / 1000))].sort((a, b) => a - b);
 }
 
@@ -1148,6 +1258,7 @@ async function shareExport(btn) {
 
 function setStatus(el, meta, t, errMsg) {
   if (!el) return;
+  if (!errMsg) session?.history.change(); // every edit passes through here: it joins (or opens) an undo step
   if (errMsg) { el.textContent = errMsg; el.classList.add("ss-status-err"); return; }
   el.classList.remove("ss-status-err");
   const d = composeDims(t, meta.width || 2, meta.height || 2);
@@ -1194,8 +1305,9 @@ function pickImageFile() {
 }
 
 // Keyboard shortcuts — all ignored while typing in a field (e.g. the text-annotation input).
-// Space = play/pause · V R A T B = tools · I = add image · C = crop · X = cut mode · Z = add zoom ·
-// esc = Select + deselect · ⌘D = duplicate.
+// Space = play/pause · J K L = shuttle · ←→ frame · ↑↓ prev/next edit · S = split at playhead · Delete = remove
+// the selected piece · Q / W = trim start / end to the playhead · M = marker · V R A T B = tools · I = add image ·
+// C = crop · X = cut mode · Z = add zoom · esc = Select + deselect · ⌘D = duplicate · ⌘Z / ⇧⌘Z = undo / redo.
 const TOOL_KEYS = { v: "select", r: "rect", a: "arrow", t: "text", b: "blur" };
 window.addEventListener("keydown", (e) => {
   const el = document.activeElement;
@@ -1219,8 +1331,16 @@ window.addEventListener("keydown", (e) => {
   if (e.metaKey || e.ctrlKey || e.altKey) return; // don't shadow browser shortcuts
   if (e.key === "ArrowLeft") { e.preventDefault(); stepBy(e.shiftKey ? -1 : -1 / 30); return; }
   if (e.key === "ArrowRight") { e.preventDefault(); stepBy(e.shiftKey ? 1 : 1 / 30); return; }
-  if (e.key === "Escape") { setActiveTool("select"); selectLayer(null); return; }
+  if (e.key === "ArrowUp") { e.preventDefault(); jumpEdge(-1); return; }
+  if (e.key === "ArrowDown") { e.preventDefault(); jumpEdge(1); return; }
+  if ((e.key === "Delete" || e.key === "Backspace") && selectedPiece && !selectedLayerId) { e.preventDefault(); deleteSelectedPiece(); return; }
+  if (e.key === "Escape") { setActiveTool("select"); selectLayer(null); if (selectedPiece) { selectedPiece = null; session.timeline.clearPiece(); } return; }
   const k = e.key.toLowerCase();
+  if (k === "s") { splitAtPlayhead(); return; }
+  if (k === "m") { toggleMarker(); return; }
+  if (k === "q") { trimToPlayhead("in"); return; }
+  if (k === "w") { trimToPlayhead("out"); return; }
+  if (k === "j" || k === "k" || k === "l") { shuttle(k); return; }
   if (k === "i") { addImageFromPicker(); return; }
   if (k === "c") { toggleCrop(); return; }
   if (k === "x") { toggleCut(); return; }

@@ -57,3 +57,10 @@ test("capToSource: floor keeps tiny crops legible but never exceeds the source's
   assert.equal(capToSource(20e6, 100e3, 0.0001), Math.round(100e3 * 1.15));
   assert.equal(capToSource(7.5e6, 0, 1), 7.5e6); // unknown source rate → uncapped
 });
+
+test("piecesOf: segments divided at split points; splits in cuts or at edges are ignored", async () => {
+  const { piecesOf } = await import("../src/editor/transforms.js");
+  const t = { trimIn: 1, trimOut: 10, cuts: [{ in: 4, out: 5 }], splits: [3, 4.5, 7, 10] };
+  assert.deepEqual(piecesOf(t), [{ in: 1, out: 3 }, { in: 3, out: 4 }, { in: 5, out: 7 }, { in: 7, out: 10 }]);
+  assert.deepEqual(piecesOf({ trimIn: 0, trimOut: 5, cuts: [], splits: [] }), [{ in: 0, out: 5 }]);
+});

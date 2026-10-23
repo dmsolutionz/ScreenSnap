@@ -12,6 +12,9 @@ v1.8 has been released with the following updates:
 • Snapping you can switch off. Edges snap to the playhead and to each other, with a magnet button to turn it off and the option key to skip it for one drag. Dragging a trim handle shows the exact time.
 • A crop box that stays editable. Drag it to move it, pull any of its eight handles to resize, hold shift to keep its shape or option to resize from the centre, and use the arrow keys to nudge it. Pick 16:9, 9:16, 1:1, 4:3 or 4:5, or type an exact width and height, and swap between portrait and landscape.
 • Crop shows the whole frame while you work, so you can grow a crop back out later instead of starting over. Press Enter or double-click to apply, Esc to cancel.
+• Edit like a video editor. Press S to split the clip at the playhead, click a piece and press Delete, and the rest closes up. Q and W trim the start or end to the playhead, M drops a marker, J, K and L play and stop, and the up and down arrows jump between edits.
+• Undo everything. Trims, splits, cuts, zooms and crops are now undoable along with your annotations, one step at a time.
+• While you drag a trim handle the preview shows the frame you are cutting on, and Esc puts a drag back where it started.
 • New shortcuts: C for crop, X for cut mode, Z to add a zoom.
 
 v1.7 has been released with the following updates:

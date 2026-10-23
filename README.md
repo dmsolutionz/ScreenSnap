@@ -53,7 +53,11 @@ Built because being nagged to log in just to save a screenshot is miserable.
   with drag-to-move / drag-edge-to-resize clips, a draggable flag **playhead**, **snapping** (a magnet
   toggle; hold ⌥ to bypass), a **zoom & pan navigator** (drag the bar to pan, its round ends to zoom),
   per-track mute / volume / show-hide, and a constant-height panel (adding tracks never reflows the stage)
-- **Trim** the ends and **cut** mistakes out of the middle (multi-segment), **resolution** and **speed**
+- **Trim** the ends (drag the handles, or Q / W to the playhead) and **cut** mistakes out of the middle: split at
+  the playhead (S), click a piece and press Delete, and the rest closes up. Every timeline, crop and overlay
+  edit is one **undo** step (⌘Z / ⇧⌘Z). **Markers** (M), J / K / L playback, ↑ / ↓ to jump between edits,
+  Esc to abandon a drag, and the preview follows a trim handle so you see the frame you're cutting on.
+  **Resolution** and **speed**
 - **Crop** with a persistent box over the whole frame: drag it to move, pull any of 8 handles to resize
   (⇧ keeps the shape, ⌥ resizes from the centre), pick a ratio (16:9 / 9:16 / 1:1 / 4:3 / 4:5), type an
   exact W × H, swap orientation, nudge with the arrow keys, and re-open it later to adjust; **Zoom** with draggable, resizable focus

@@ -183,7 +183,9 @@ export function createCropOverlay({ stageEl, canvas, inspectorEl, getTransforms,
     const t = e.target, typing = !!t && (t.tagName === "INPUT" || t.tagName === "SELECT" || t.isContentEditable);
     const swallow = () => { e.preventDefault(); e.stopImmediatePropagation(); };
     if (e.key === "Escape") { swallow(); if (typing) t.blur(); cancel(); return; }
-    if (e.key === "Enter" && !(t && t.tagName === "BUTTON")) { swallow(); if (typing) t.blur(); commit(); return; }
+    // Enter applies — even right after clicking a ratio chip (which keeps focus); only Reset / Cancel / Apply
+    // keep their own meaning when focused.
+    if (e.key === "Enter" && !(t && t.matches && t.matches("#ss-crop-reset, #ss-crop-cancel, #ss-crop-apply"))) { swallow(); if (typing) t.blur(); commit(); return; }
     if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
     const step = e.shiftKey ? 10 : 1;
     const d = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];

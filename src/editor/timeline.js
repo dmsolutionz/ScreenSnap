@@ -68,21 +68,33 @@ function laneGlyph(l) {
 }
 
 // Closed SVG path (viewBox "0 0 100 30") tracing a waveform envelope from interleaved [min,max,…] peaks.
-function waveformPath(peaks, buckets) {
+// `gain` scales it for display only: a quiet recording is lifted toward full height (at most +12 dB, so
+// near-silent room tone doesn't look loud) so you can still see where the words are.
+function waveformPath(peaks, buckets, gain = 1) {
   if (!peaks || !buckets) return "";
-  const midY = 15, amp = 14, top = [], bottom = [], span = Math.max(1, buckets - 1);
+  const midY = 15, top = [], bottom = [], span = Math.max(1, buckets - 1);
   for (let i = 0; i < buckets; i++) {
     const x = (i / span) * 100;
-    top.push(`${x.toFixed(2)},${(midY - (peaks[i * 2 + 1] || 0) * amp).toFixed(2)}`);
-    bottom.push(`${x.toFixed(2)},${(midY - (peaks[i * 2] || 0) * amp).toFixed(2)}`);
+    top.push(`${x.toFixed(2)},${(midY - Math.min(1, (peaks[i * 2 + 1] || 0) * gain) * 14).toFixed(2)}`);
+    bottom.push(`${x.toFixed(2)},${(midY - Math.max(-1, (peaks[i * 2] || 0) * gain) * 14).toFixed(2)}`);
   }
   bottom.reverse();
   return `M${top.join(" L")} L${bottom.join(" L")} Z`;
 }
 
+function displayGain(peaks) {
+  let peak = 0;
+  for (let i = 0; i < peaks.length; i++) peak = Math.max(peak, Math.abs(peaks[i]));
+  return peak > 0 ? clamp(0.9 / peak, 1, 4) : 1;
+}
+
 // Shared select / move / resize wiring for a track's time area. Attached once to a persistent container.
 //   secAt(clientX) -> source seconds. getBlocks() -> [{id,tIn,tOut,movable=true}]. onSelect(id|null).
 //   onChange(id,{tIn,tOut},mode). onCreateStart/Move/End for empty-space paint. canInteract() gate.
+// The drag in progress anywhere on the timeline can be cancelled with Esc: whoever starts one parks an
+// "undo this drag" function here, and the timeline's Esc handler calls it.
+let abortActive = null;
+
 function wireBlockDrag(container, opts) {
   const { secAt, maxSec, minLen = 0.1, blockSelector, getBlocks, onSelect, onChange, onCreateStart, onCreateMove, onCreateEnd, canInteract } = opts;
   let drag = null, creating = null;
@@ -104,6 +116,7 @@ function wireBlockDrag(container, opts) {
     if (mode === "move" && b.movable === false) return;
     container.setPointerCapture?.(e.pointerId);
     drag = { id: b.id, mode, startSec: secAt(e.clientX), orig: { tIn: b.tIn, tOut: b.tOut } };
+    abortActive = () => { const d = drag; drag = null; if (d && onChange) onChange(d.id, d.orig, d.mode); if (opts.onDragEnd) opts.onDragEnd(); };
   });
   container.addEventListener("pointermove", (e) => {
     if (creating) { if (onCreateMove) onCreateMove(creating.anchorSec, secAt(e.clientX)); return; }
@@ -126,7 +139,7 @@ function wireBlockDrag(container, opts) {
   const end = (e) => {
     if (creating) { const c = creating; creating = null; container.releasePointerCapture?.(e.pointerId); if (onCreateEnd) onCreateEnd(c.anchorSec, secAt(e.clientX)); return; }
     if (!drag) return;
-    container.releasePointerCapture?.(e.pointerId); drag = null;
+    container.releasePointerCapture?.(e.pointerId); drag = null; abortActive = null;
     if (opts.onDragEnd) opts.onDragEnd();
   };
   container.addEventListener("pointerup", end);
@@ -141,8 +154,12 @@ function wireBlockDrag(container, opts) {
 //   store, getSelectedLayer, onLayerSelect, onLayerRangeChange,
 //   onLayerVisible, onLayerOpacity, onLayerReorder, onLayerDelete,
 //   getExtraAudio, getExtraBlock, onExtraAudioChange, onExtraMute, onExtraVolume, onExtraRemove,
-//   getFilmstrip, getClipName, onScaleChange
+//   getFilmstrip, getClipName, onScaleChange,
+//   getPieces, getSplits, getMarkers, onPieceSelect, onMarkerRemove
 // }
+//   getPieces() -> the kept video as [{in,out}] pieces (piecesOf). A click on the clip selects the piece
+//   under it (onPieceSelect({in,out}|null)); the editor deletes it. getMarkers() -> [{id,t}]: drawn on the
+//   ruler (click to jump, double-click to remove) and used as snap targets with the split points.
 //   getExtraBlock() -> the imported track's {tIn,tOut} in SOURCE seconds (the controller converts from
 //   its output-time offset), or null. getAudioState() -> { muted, volume } of the recording's own audio.
 //   getFilmstrip() -> { items: (canvas|null)[], aspect() } from filmstrip.js, or null. onScaleChange()
@@ -157,6 +174,7 @@ export function createTimeline(opts) {
     onLayerVisible, onLayerOpacity, onLayerReorder, onLayerDelete,
     getExtraAudio, getExtraBlock, onExtraAudioChange, onExtraMute, onExtraVolume, onExtraRemove,
     getFilmstrip, getClipName, onScaleChange,
+    getPieces, getSplits, getMarkers, onPieceSelect, onMarkerRemove,
   } = opts;
 
   const dur = Math.max(0.001, durationSec || 0);
@@ -186,7 +204,7 @@ export function createTimeline(opts) {
   }
 
   // ── skeleton (rebuilt only on layer-set change) ─────────────────────────────────────────────────
-  let inEl, outEl, trimEl, cutsEl, vtime, rtime, rlabels, lanesEl, playEl, filmEl, nameEl, dimL, dimR, tcEl, snapBtn;
+  let inEl, outEl, trimEl, cutsEl, piecesEl, vtime, rtime, rlabels, rmarks, lanesEl, playEl, filmEl, nameEl, dimL, dimR, tcEl, snapBtn;
   let ztime, atime, awsvg, awpath, amutesEl, amuteBtn, avolEl;
   let navTime, navThumb, navPh;
   const layerRows = new Map(); // id -> { time, block }
@@ -235,6 +253,7 @@ export function createTimeline(opts) {
     });
     rtime = timeArea("ss-tl-rtime");
     rlabels = doc.createElement("div"); rlabels.className = "ss-tl-rlabels"; rtime.appendChild(rlabels);
+    rmarks = doc.createElement("div"); rmarks.className = "ss-tl-rmarks"; rtime.appendChild(rmarks);
     ruler.appendChild(rtime);
     panel.appendChild(ruler);
 
@@ -249,9 +268,10 @@ export function createTimeline(opts) {
     dimR = doc.createElement("div"); dimR.className = "ss-tl-dim";
     trimEl = doc.createElement("div"); trimEl.className = "ss-tl-trim";
     cutsEl = doc.createElement("div"); cutsEl.className = "ss-tl-cuts";
+    piecesEl = doc.createElement("div"); piecesEl.className = "ss-tl-pieces";
     inEl = doc.createElement("div"); inEl.className = "ss-tl-handle ss-tl-handle-in"; inEl.title = "Trim start — drag";
     outEl = doc.createElement("div"); outEl.className = "ss-tl-handle ss-tl-handle-out"; outEl.title = "Trim end — drag";
-    vtime.append(filmEl, nameEl, dimL, dimR, trimEl, cutsEl, inEl, outEl);
+    vtime.append(filmEl, nameEl, dimL, dimR, trimEl, piecesEl, cutsEl, inEl, outEl);
     vrow.appendChild(vtime);
     panel.appendChild(vrow);
     wireVideoTrack();
@@ -365,7 +385,12 @@ export function createTimeline(opts) {
   // Every interesting edge on the shared ruler, excluding the block being dragged (else it would
   // snap to itself): playhead, trim in/out, cut edges, zoom/layer/mute/extra block edges, whole seconds.
   function snapCandidates(kind, id) {
-    const c = [0, dur, playSec, inSec, outSec];
+    const c = [0, dur];
+    if (kind !== "playhead") c.push(playSec); // a dragged playhead never snaps onto itself (it would stick)
+    if (kind !== "in") c.push(inSec);
+    if (kind !== "out") c.push(outSec);
+    for (const x of (getSplits && getSplits()) || []) c.push(x);
+    for (const m of (getMarkers && getMarkers()) || []) c.push(m.t);
     // Whole seconds only once a second spans >= ~5× the 8px snap radius: on a long clip at Fit (a few
     // px per second) every position is within the radius of SOME whole second, so every drag snapped.
     if (pps() >= 40) for (let s = 1; s < dur; s++) c.push(s);
@@ -496,45 +521,82 @@ export function createTimeline(opts) {
     });
   }
 
-  // ── video track handlers (trim / scrub / cut) ───────────────────────────────────────────────────
-  let inSec = 0, outSec = dur, playSec = 0, dragging = null, cutAnchor = 0;
+  // ── video track handlers (trim / scrub / cut / select a piece) ─────────────────────────────────────
+  let inSec = 0, outSec = dur, playSec = 0, dragging = null, cutAnchor = 0, dragFrom = null, selPiece = null;
   const MIN_GAP = Math.min(0.05, dur);
   function vSecAt(clientX) { return secAtIn(clientX, vtime); }
 
+  // Pull a dragged edge / playhead onto the nearest edit, marker or block edge within ~8px (not itself).
+  function snapSec(sec, kind) {
+    if (!snapOn || altDown) { hideSnapGuide(); return sec; }
+    const th = 8 / pps();
+    let best = null;
+    for (const c of snapCandidates(kind, null)) { const d = Math.abs(c - sec); if (d <= th && (!best || d < best.d)) best = { d, c }; }
+    if (!best) { hideSnapGuide(); return sec; }
+    showSnapGuide(best.c);
+    return best.c;
+  }
+  // Trim monitor: while an edge is dragged the preview shows the frame at that edge, so you see what you cut on.
+  const monitor = (sec) => { if (onSeek) onSeek(sec); };
+
   function applyVDrag(clientX) {
     const sec = vSecAt(clientX);
-    if (dragging === "in") { inSec = clamp(sec, 0, outSec - MIN_GAP); showTip(inSec); if (onTrimChange) onTrimChange(inSec, outSec); }
-    else if (dragging === "out") { outSec = clamp(sec, inSec + MIN_GAP, dur); showTip(outSec); if (onTrimChange) onTrimChange(inSec, outSec); }
-    else if (dragging === "scrub") { playSec = sec; if (onSeek) onSeek(sec); }
-    else if (dragging === "cut") { pendingCut = { in: Math.min(cutAnchor, sec), out: Math.max(cutAnchor, sec) }; showTip(sec); }
+    if (dragging === "in") { inSec = clamp(snapSec(sec, "in"), 0, outSec - MIN_GAP); showTip(inSec); if (onTrimChange) onTrimChange(inSec, outSec); monitor(inSec); }
+    else if (dragging === "out") { outSec = clamp(snapSec(sec, "out"), inSec + MIN_GAP, dur); showTip(outSec); if (onTrimChange) onTrimChange(inSec, outSec); monitor(outSec); }
+    else if (dragging === "scrub") { playSec = snapSec(sec, "playhead"); if (onSeek) onSeek(playSec); }
+    else if (dragging === "cut") { const x = snapSec(sec, "cut"); pendingCut = { in: Math.min(cutAnchor, x), out: Math.max(cutAnchor, x) }; showTip(x); monitor(x); }
     layout();
+  }
+  function startV(which, e, onClip = false) {
+    dragging = which;
+    dragFrom = { x: e.clientX, onClip, inSec, outSec, playSec };
+    abortActive = () => { // Esc: put everything back the way the press found it
+      const f = dragFrom;
+      if (dragging === "in" || dragging === "out") { inSec = f.inSec; outSec = f.outSec; if (onTrimChange) onTrimChange(inSec, outSec); }
+      pendingCut = null;
+      playSec = f.playSec; if (onSeek) onSeek(playSec);
+      dragging = null; dragFrom = null; hideTip(); hideSnapGuide(); layout();
+    };
   }
   const vMove = (e) => { if (dragging) applyVDrag(e.clientX); };
   const vEnd = (e) => {
     if (!dragging) return;
     e.currentTarget?.releasePointerCapture?.(e.pointerId);
     if (dragging === "cut" && pendingCut) { const c = pendingCut; pendingCut = null; if (c.out - c.in > 0.08 && onAddCut) onAddCut(c.in, c.out); }
-    dragging = null; hideTip(); layout();
+    // a click (no drag) on the clip selects the piece under it, as clicking a clip does in an NLE
+    if (dragging === "scrub" && dragFrom && dragFrom.onClip && Math.abs(e.clientX - dragFrom.x) < 4) selectPieceAt(vSecAt(e.clientX));
+    dragging = null; dragFrom = null; abortActive = null; hideTip(); hideSnapGuide(); layout();
   };
+  function selectPieceAt(sec) {
+    const p = ((getPieces && getPieces()) || []).find((x) => sec >= x.in && sec <= x.out) || null;
+    selPiece = p ? { in: p.in, out: p.out } : null;
+    if (onPieceSelect) onPieceSelect(selPiece);
+  }
   function wireVideoTrack() {
-    const handleDown = (which) => (e) => { e.preventDefault(); e.stopPropagation(); dragging = which; e.currentTarget.setPointerCapture?.(e.pointerId); applyVDrag(e.clientX); };
+    const handleDown = (which) => (e) => { e.preventDefault(); e.stopPropagation(); startV(which, e); e.currentTarget.setPointerCapture?.(e.pointerId); applyVDrag(e.clientX); };
     inEl.addEventListener("pointerdown", handleDown("in"));
     outEl.addEventListener("pointerdown", handleDown("out"));
     vtime.addEventListener("pointerdown", (e) => {
       if (dragging || e.target === inEl || e.target === outEl || e.target.closest(".ss-tl-cut")) return;
       e.preventDefault(); vtime.setPointerCapture?.(e.pointerId);
-      if (cutMode) { dragging = "cut"; cutAnchor = vSecAt(e.clientX); pendingCut = { in: cutAnchor, out: cutAnchor }; layout(); }
-      else { dragging = "scrub"; applyVDrag(e.clientX); }
+      if (cutMode) { startV("cut", e); cutAnchor = vSecAt(e.clientX); pendingCut = { in: cutAnchor, out: cutAnchor }; layout(); }
+      else { startV("scrub", e, true); applyVDrag(e.clientX); }
     });
     for (const t of [inEl, outEl, vtime]) { t.addEventListener("pointermove", vMove); t.addEventListener("pointerup", vEnd); t.addEventListener("pointercancel", vEnd); }
-    // scrub via the ruler too
-    rtime.addEventListener("pointerdown", (e) => { e.preventDefault(); rtime.setPointerCapture?.(e.pointerId); dragging = "scrub"; applyVDrag(e.clientX); });
+    // scrub via the ruler too (markers on it take their own clicks)
+    rtime.addEventListener("pointerdown", (e) => { if (e.target.closest(".ss-tl-mk")) return; e.preventDefault(); rtime.setPointerCapture?.(e.pointerId); startV("scrub", e); applyVDrag(e.clientX); });
     rtime.addEventListener("pointermove", vMove); rtime.addEventListener("pointerup", vEnd); rtime.addEventListener("pointercancel", vEnd);
   }
   function wirePlayheadGrab(grab) {
-    grab.addEventListener("pointerdown", (e) => { e.preventDefault(); e.stopPropagation(); grab.setPointerCapture?.(e.pointerId); dragging = "scrub"; applyVDrag(e.clientX); });
+    grab.addEventListener("pointerdown", (e) => { e.preventDefault(); e.stopPropagation(); grab.setPointerCapture?.(e.pointerId); startV("scrub", e); applyVDrag(e.clientX); });
     grab.addEventListener("pointermove", vMove); grab.addEventListener("pointerup", vEnd); grab.addEventListener("pointercancel", vEnd);
   }
+  const onEsc = (e) => {
+    if (e.key !== "Escape" || !abortActive) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    const f = abortActive; abortActive = null; f();
+  };
+  window.addEventListener("keydown", onEsc, true);
 
   // ── navigator: the thumb is the visible window — drag it to pan, drag an end to zoom that side ────
   function setView(a, b) {
@@ -588,6 +650,37 @@ export function createTimeline(opts) {
       }
       cutsEl.appendChild(band);
     });
+  }
+  // The kept video's pieces (split points divide it), the selected one outlined, and the split marks.
+  function renderPieces() {
+    piecesEl.textContent = "";
+    const pieces = (getPieces && getPieces()) || [];
+    if (selPiece && !pieces.some((p) => Math.abs(p.in - selPiece.in) < 1e-3 && Math.abs(p.out - selPiece.out) < 1e-3)) {
+      selPiece = null; // an edit removed or reshaped it
+      if (onPieceSelect) onPieceSelect(null);
+    }
+    if (selPiece) {
+      const box = doc.createElement("div"); box.className = "ss-tl-piece on";
+      posBlock(box, selPiece.in, selPiece.out);
+      piecesEl.appendChild(box);
+    }
+    for (const x of (getSplits && getSplits()) || []) {
+      if (!pieces.some((p) => Math.abs(p.in - x) < 1e-3)) continue; // only splits that still divide kept video
+      const m = doc.createElement("div"); m.className = "ss-tl-split"; m.style.left = `${xOf(x)}px`; m.title = `Split · ${fmtTc(x)}`;
+      piecesEl.appendChild(m);
+    }
+  }
+  function renderMarkers() {
+    rmarks.textContent = "";
+    for (const mk of (getMarkers && getMarkers()) || []) {
+      if (mk.t < 0 || mk.t > dur) continue;
+      const m = doc.createElement("button"); m.className = "ss-tl-mk"; m.type = "button";
+      m.style.left = `${xOf(mk.t)}px`; m.title = `Marker · ${fmtTc(mk.t)} — click to jump, double-click to remove`;
+      m.addEventListener("pointerdown", (e) => e.stopPropagation());
+      m.addEventListener("click", (e) => { e.stopPropagation(); playSec = mk.t; if (onSeek) onSeek(mk.t); positionPlayhead(); });
+      m.addEventListener("dblclick", (e) => { e.stopPropagation(); if (onMarkerRemove) onMarkerRemove(mk.id); });
+      rmarks.appendChild(m);
+    }
   }
   function renderZoom() {
     ztime.querySelectorAll(".ss-tl-zblock").forEach((n) => n.remove());
@@ -645,7 +738,8 @@ export function createTimeline(opts) {
   }
   function renderAudio() {
     const data = getAudioPeaks && getAudioPeaks();
-    awpath.setAttribute("d", data ? waveformPath(data.peaks, data.buckets) : "");
+    if (data && data.gain == null) data.gain = displayGain(data.peaks);
+    awpath.setAttribute("d", data ? waveformPath(data.peaks, data.buckets, data.gain) : "");
     // The waveform spans the WHOLE clip on the shared scale (stretched by zoom, shifted by pan);
     // the lane's overflow:hidden clips it, keeping peaks aligned with the ruler and mute bands.
     awsvg.style.left = `${xOf(0)}px`;
@@ -746,6 +840,8 @@ export function createTimeline(opts) {
     inEl.style.left = `${inX}px`;
     outEl.style.left = `${outX}px`;
     renderCuts();
+    renderPieces();
+    renderMarkers();
     renderZoom();
     renderLayerBlocks();
     renderAudio();
@@ -787,13 +883,8 @@ export function createTimeline(opts) {
   panel.addEventListener("wheel", (e) => {
     if (e.metaKey || e.ctrlKey) {
       e.preventDefault();
-      const before = pps();
-      const anchorSec = secAtIn(e.clientX, rtime);
-      const mult = e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
-      setPps(before * mult);
-      scrollX = clamp(anchorSec * pps() - (e.clientX - rtime.getBoundingClientRect().left), 0, maxScroll());
-      layout();
-      if (onScaleChange) onScaleChange();
+      const px = e.clientX - rtime.getBoundingClientRect().left;
+      zoomTo((zoomAnim ? zoomTarget : pps()) * (e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP), secAtIn(e.clientX, rtime), px);
       return;
     }
     const dx = e.shiftKey && Math.abs(e.deltaX) < Math.abs(e.deltaY) ? e.deltaY : e.deltaX;
@@ -808,6 +899,29 @@ export function createTimeline(opts) {
   // Keep the px-based layout in sync with the panel's size (fit-mode pps depends on it).
   const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => layout()) : null;
   if (ro) ro.observe(panel);
+
+  // Zoom eases to its new scale (about 0.2 s, ease-out) keeping `anchorSec` under the same x, so the view
+  // glides instead of jumping and what you were looking at stays put.
+  let zoomAnim = 0, zoomTarget = 0;
+  function zoomTo(target, anchorSec, anchorPx) {
+    zoomTarget = clamp(target, fitPps(), maxPps());
+    const from = pps(), t0 = performance.now(), D = 200;
+    cancelAnimationFrame(zoomAnim);
+    const step = (now) => {
+      const u = Math.min(1, (now - t0) / D), k = 1 - Math.pow(1 - u, 3);
+      setPps(Math.exp(Math.log(from) + (Math.log(zoomTarget) - Math.log(from)) * k));
+      scrollX = clamp(anchorSec * pps() - anchorPx, 0, maxScroll());
+      layout();
+      if (onScaleChange) onScaleChange();
+      zoomAnim = u < 1 ? requestAnimationFrame(step) : 0;
+    };
+    zoomAnim = requestAnimationFrame(step);
+  }
+  // Buttons zoom about the playhead when it is in view, else about the middle of the view.
+  function zoomAboutPlayhead(mult) {
+    const x = xOf(playSec), w = timeW(), px = x >= 0 && x <= w ? x : w / 2;
+    zoomTo((zoomAnim ? zoomTarget : pps()) * mult, (scrollX + px) / pps(), px);
+  }
 
   function setPps(v) {
     const fit = fitPps();
@@ -835,8 +949,10 @@ export function createTimeline(opts) {
     },
     setCutMode(on) { cutMode = !!on; vtime.classList.toggle("ss-tl-cutmode", cutMode); },
     isCutMode: () => cutMode,
-    zoomBy(mult) { setPps(pps() * mult); scrollX = clamp(scrollX, 0, maxScroll()); layout(); if (onScaleChange) onScaleChange(); },
-    fit() { fitMode = true; scrollX = 0; layout(); if (onScaleChange) onScaleChange(); },
+    zoomBy(mult) { zoomAboutPlayhead(mult); },
+    fit() { zoomTo(fitPps(), 0, 0); },
+    getSelectedPiece: () => selPiece,
+    clearPiece() { selPiece = null; layout(); },
     setZoomNorm(t) { const fit = fitPps(); setPps(fit * (1 + clamp(t, 0, 1) * (maxPps() / fit - 1))); scrollX = clamp(scrollX, 0, maxScroll()); layout(); },
     getZoomNorm() { const fit = fitPps(), span = maxPps() / fit - 1; return span > 0 ? clamp((pps() / fit - 1) / span, 0, 1) : 0; },
     isSnapping: () => snapOn,
@@ -845,6 +961,7 @@ export function createTimeline(opts) {
     destroy() {
       if (unsub) unsub(); if (ro) ro.disconnect();
       window.removeEventListener("keydown", onKeyAlt); window.removeEventListener("keyup", onKeyAlt);
+      window.removeEventListener("keydown", onEsc, true); cancelAnimationFrame(zoomAnim);
       el.innerHTML = "";
     },
   };

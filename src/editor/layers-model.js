@@ -66,16 +66,22 @@ export function createLayerStore() {
 // of a gesture pushes the pre-change snapshot, and the gesture closes on pointer-up (or after a quiet
 // spell, for changes that aren't pointer-driven). Bitmaps/GIF frames are shared by reference across
 // snapshots — only the positional/style data is copied, so history is cheap even with big images.
-export function createLayerHistory(store, { limit = 50 } = {}) {
+// `extra` ({ get(), set(snapshot) }) folds non-layer edit state into the same steps — the editor passes the
+// timeline / crop / zoom transforms, so ⌘Z walks back trims, splits and crops as well as overlay edits.
+// Changes to that state aren't store events, so the editor reports them with change().
+export function createLayerHistory(store, { limit = 50, extra = null } = {}) {
   const clone = (ls) => ls.map((l) => ({
     ...l,
     shape: l.shape ? JSON.parse(JSON.stringify(l.shape)) : l.shape,
     image: l.image ? { ...l.image } : l.image,
     range: l.range ? { ...l.range } : l.range,
   }));
+  const snap = () => ({ layers: clone(store.layers), extra: extra ? extra.get() : null });
+  // Bitmaps aren't comparable data; positions, sizes, styles and the extra state are what a step changes.
+  const key = (s) => JSON.stringify({ l: s.layers.map((l) => ({ ...l, image: l.image ? { ...l.image, bitmap: 0, frames: 0 } : null })), e: s.extra });
   const undoStack = [];
   let redoStack = [];
-  let live = clone(store.layers); // the state BEFORE the in-flight gesture — what undo restores
+  let live = snap(); // the state BEFORE the in-flight gesture — what undo restores
   let restoring = false;
   let gestureOpen = false;
   let pointerDown = false;
@@ -85,7 +91,9 @@ export function createLayerHistory(store, { limit = 50 } = {}) {
     clearTimeout(quietTimer);
     quietTimer = null;
     gestureOpen = false;
-    live = clone(store.layers);
+    live = snap();
+    // A gesture that ended where it started (a drag let go in place) is not a step.
+    if (undoStack.length && key(undoStack[undoStack.length - 1]) === key(live)) undoStack.pop();
   };
   const onPointerDown = () => { pointerDown = true; };
   const onPointerUp = () => {
@@ -97,7 +105,7 @@ export function createLayerHistory(store, { limit = 50 } = {}) {
   window.addEventListener("pointerdown", onPointerDown, true);
   window.addEventListener("pointerup", onPointerUp, true);
   window.addEventListener("pointercancel", onPointerUp, true);
-  const unsub = store.subscribe(() => {
+  const change = () => {
     if (restoring) return;
     if (!gestureOpen) {
       undoStack.push(live);
@@ -107,14 +115,19 @@ export function createLayerHistory(store, { limit = 50 } = {}) {
     }
     clearTimeout(quietTimer);
     quietTimer = setTimeout(closeGesture, pointerDown ? 4000 : 400); // long backstop while dragging
-  });
+  };
+  const unsub = store.subscribe(change);
 
   const restore = (snapshot) => {
     restoring = true;
-    try { store.replace(clone(snapshot)); } finally { restoring = false; }
+    try {
+      store.replace(clone(snapshot.layers));
+      if (extra && snapshot.extra) extra.set(snapshot.extra);
+    } finally { restoring = false; }
     live = snapshot;
   };
   return {
+    change,
     undo() {
       if (gestureOpen) closeGesture(); // sync `live` to the current state first
       if (!undoStack.length) return false;
