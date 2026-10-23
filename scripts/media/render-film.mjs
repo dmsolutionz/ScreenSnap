@@ -7,9 +7,9 @@
 //   node scripts/media/render-film.mjs --work <media-work dir> --out <dir> [--dsf 2] [--fps 30] [--workers 6]
 //        [--from 0 --to <end>]         seconds range to render (default: the whole film)
 //        [--at 2.0,12.5,30]            stills only (design review) → <out>/still-<t>.png
-//        [--captions]                  also write <out>/captions.srt, sfx-cues.json and voice.json
+//        [--captions]                  also write <out>/captions.srt, sfx-cues.json, voice.json and music-structure.json
 import { createServer } from "node:http";
-import { createReadStream, existsSync, statSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { createReadStream, existsSync, statSync, mkdirSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve, join, extname } from "node:path";
 import { launchChrome } from "./lib/chrome.mjs";
@@ -20,9 +20,7 @@ const argv = Object.fromEntries(process.argv.slice(2).reduce((a, x, i, all) => (
 const WORK = resolve(argv.work || ""), OUT = resolve(argv.out || "");
 if (!argv.work || !argv.out) { console.error("usage: render-film.mjs --work <media-work> --out <dir> [--at t,t] [--from s --to s]"); process.exit(2); }
 const DSF = Number(argv.dsf || 2), FPS = Number(argv.fps || 30), WORKERS = Number(argv.workers || 6);
-// the film's length comes from film.js (export const DURATION)
-const DURATION = Number((readFileSync(join(HERE, "film", "film.js"), "utf8").match(/export const DURATION = ([\d.]+)/) || [])[1]);
-const FROM = Number(argv.from || 0), TO = Number(argv.to || DURATION);
+let DURATION = 0, FROM = Number(argv.from || 0), TO = 0; // the film's length depends on its footage: asked of the page below
 
 const ROOTS = { "/film/": join(HERE, "film"), "/work/": WORK, "/fonts/": join(REPO, "src", "popup", "fonts"), "/site/": join(REPO, "docs") };
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".json": "application/json", ".png": "image/png", ".woff2": "font/woff2" };
@@ -58,6 +56,24 @@ async function worker(jobs, label) {
   } finally { await chrome.close(); }
 }
 
+{
+  const chrome = await launchChrome();
+  const page = await chrome.newPage(PAGE, { width: 1920, height: 1080, dsf: 1 });
+  for (let i = 0; i < 200 && !(await page.evaluate("window.__ready === true").catch(() => false)); i++) await new Promise((r) => setTimeout(r, 150));
+  DURATION = await page.evaluate("window.__duration");
+  TO = Number(argv.to || DURATION);
+  if (argv.captions) {
+    const caps = await page.evaluate("window.__captions()");
+    const ts = (s) => { const ms = Math.round(s * 1000), h = Math.floor(ms / 3600000), m = Math.floor(ms / 60000) % 60, sec = Math.floor(ms / 1000) % 60; return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")},${String(ms % 1000).padStart(3, "0")}`; };
+    writeFileSync(join(OUT, "captions.srt"), caps.map((c, i) => `${i + 1}\n${ts(c.t0)} --> ${ts(c.t1)}\n${c.text.replace(/\*/g, "")}\n`).join("\n"));
+    writeFileSync(join(OUT, "sfx-cues.json"), JSON.stringify(await page.evaluate("window.__sfx()"), null, 1));
+    writeFileSync(join(OUT, "voice.json"), JSON.stringify(await page.evaluate("window.__voice()"), null, 1));
+    writeFileSync(join(OUT, "music-structure.json"), JSON.stringify(await page.evaluate("window.__music()"), null, 1));
+    console.log(`${DURATION} s film · wrote captions.srt, sfx-cues.json, voice.json, music-structure.json → ${OUT}`);
+  }
+  await chrome.close();
+}
+
 if (argv.at) {
   const ts = argv.at.split(",").map(Number);
   await worker(ts.map((t) => ({ t, file: join(OUT, `still-${String(t).replace(".", "_")}.png`) })), "stills");
@@ -75,18 +91,5 @@ if (argv.at) {
   console.log(`\nrendered ${total} frames in ${((Date.now() - t0) / 60000).toFixed(1)} min → ${OUT}/frames`);
 }
 
-if (argv.captions) {
-  const chrome = await launchChrome();
-  const page = await chrome.newPage(PAGE, { width: 1920, height: 1080, dsf: 1 });
-  for (let i = 0; i < 200 && !(await page.evaluate("window.__ready === true").catch(() => false)); i++) await new Promise((r) => setTimeout(r, 150));
-  const caps = await page.evaluate("window.__captions()");
-  const ts = (s) => { const ms = Math.round(s * 1000), h = Math.floor(ms / 3600000), m = Math.floor(ms / 60000) % 60, sec = Math.floor(ms / 1000) % 60; return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")},${String(ms % 1000).padStart(3, "0")}`; };
-  const srt = caps.map((c, i) => `${i + 1}\n${ts(c.t0)} --> ${ts(c.t1)}\n${c.text.replace(/\*/g, "")}\n`).join("\n");
-  writeFileSync(join(OUT, "captions.srt"), srt);
-  writeFileSync(join(OUT, "sfx-cues.json"), JSON.stringify(await page.evaluate("window.__sfx()"), null, 1));
-  writeFileSync(join(OUT, "voice.json"), JSON.stringify(await page.evaluate("window.__voice()"), null, 1));
-  await chrome.close();
-  console.log(`wrote ${caps.length} captions → ${OUT}/captions.srt + sfx-cues.json + voice.json`);
-}
 server.close();
 process.exit(0);

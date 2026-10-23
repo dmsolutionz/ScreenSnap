@@ -60,11 +60,10 @@ for (const cue of cues) {
 
 // ── voiceover bus ──
 const voice = [new Float32Array(N), new Float32Array(N)];
-const lines = argv.voice ? JSON.parse(readFileSync(argv.voice, "utf8")) : [];
-for (const l of lines) {
-  const wav = readWav(l.file), at = Math.round(l.t * SR);
-  for (let c = 0; c < 2; c++) for (let i = 0; i < wav[c].length && at + i < N; i++) if (at + i >= 0) voice[c][at + i] += wav[c][i];
-}
+// narrate.mjs's one continuous take (already placed on the film's clock) + where each line is, for the ducking
+const vo = argv.voice ? JSON.parse(readFileSync(argv.voice, "utf8")) : { track: null, lines: [] };
+const lines = vo.lines;
+if (vo.track) { const wav = readWav(vo.track); for (let c = 0; c < 2; c++) voice[c].set(wav[c].subarray(0, N)); }
 // Where speech is: 1 inside a line, 0 outside, with 120 ms ramps — the music fades down before the first word
 // and back up after the last, instead of pumping on every syllable.
 const speaking = new Float32Array(N);

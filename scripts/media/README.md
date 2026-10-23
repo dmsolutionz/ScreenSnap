@@ -15,7 +15,7 @@ capture-popup.mjs          films the REAL popup tour
 capture-shots.mjs          films the REAL screenshot editor annotating a page
 synth-audio.mjs            music bed + sound effects, 120 BPM, sample-accurate → music.wav, stems, sfx/*.wav, cues.json
 render-film.mjs            renders film/ (one deterministic HTML page) to 3840x2160 PNG frames; --captions writes captions.srt, sfx-cues.json, voice.json
-narrate.mjs                the voiceover: each caption spoken by FilmCraft's natural Kokoro-82M voice, fitted to its slot → vo-cues.json
+narrate.mjs                the voiceover: one continuous take in FilmCraft's natural Kokoro-82M voice, every line on its cue → vo.wav + vo-cues.json
 mix-audio.mjs              music + sound effects + voiceover at the film's cue times, music ducked under both, normalised to -14 LUFS
 encode-film.mjs            4K H.264 master for YouTube + the website demo loop, GIF fallback and poster
 store-shots.mjs            the five 1280x800 Chrome Web Store screenshots from the stills
@@ -40,21 +40,26 @@ waits for a line to be spoken before starting the next step, so the footage is p
 Pick any working directory `W` and run from the repo root:
 
 ```sh
-export W=/path/to/work
+export W=/path/to/work FILMCRAFT_CLI=/path/to/filmcraft-cli
 node scripts/media/demo-source/render.mjs --out $W/source          # ~75 s
-node scripts/media/capture-editor.mjs --source $W/source/demo-source.mp4 --events $W/source/events.json --out $W/editor/main --dsf 2
-node scripts/media/capture-popup.mjs  --out $W/popup
-node scripts/media/capture-shots.mjs  --out $W/shots
-node scripts/media/synth-audio.mjs    --structure scripts/media/film/music-structure.json --out $W/audio   # ~35 s
+node scripts/media/capture-popup.mjs  --out $W/popup-slow --pace 2.1
+node scripts/media/capture-shots.mjs  --out $W/shots-slow --pace 1.6
+# the editor waits for its narration: measure the lines its steps say, then film it
+node -e 'const s=require("fs").readFileSync("scripts/media/capture-editor.mjs","utf8");console.log(JSON.stringify([...s.matchAll(/d\.say\("((?:[^"\\]|\\.)*)"/g)].map((m,i)=>({t:i*10,text:m[1],until:i*10+10}))))' > $W/editor-say.json
+node scripts/media/narrate.mjs        --voice-script $W/editor-say.json --filmcraft $FILMCRAFT_CLI --out $W/vo --measure
+node scripts/media/capture-editor.mjs --source $W/source/demo-source.mp4 --events $W/source/events.json --out $W/editor/slow --dsf 2 --speech $W/vo/vo-cues.json
+# the film's timeline follows the footage; --captions also writes the voice script and the music's form
 node scripts/media/render-film.mjs    --work $W --out $W/film/final --dsf 2 --workers 6 --captions   # ~4 min at 4K
+node scripts/media/synth-audio.mjs    --structure $W/film/final/music-structure.json --out $W/audio
 node scripts/media/narrate.mjs        --voice-script $W/film/final/voice.json --filmcraft $FILMCRAFT_CLI --out $W/vo
 node scripts/media/mix-audio.mjs      --audio $W/audio --cues $W/film/final/sfx-cues.json --voice $W/vo/vo-cues.json --out $W/film/mix.wav
-node scripts/media/encode-film.mjs    --frames $W/film/final/frames --audio $W/film/mix.wav --captions $W/film/final/captions.srt --out $W/film/out
-node scripts/media/store-shots.mjs    --editor $W/editor/main/stills --popup $W/popup/stills/record-full.png --shots $W/shots/stills/annotated.png --out screenshots/store
+node scripts/media/encode-film.mjs    --frames $W/film/final/frames --audio $W/film/mix.wav --captions $W/film/final/captions.srt --out $W/film/out \
+                                      --site-from <editor start + 0.3> --site-to <editor end - 0.4> --poster-at <seconds>
+node scripts/media/store-shots.mjs    --editor $W/editor/slow/stills --popup $W/popup-slow/stills/record-full.png --shots $W/shots-slow/stills/annotated.png --out screenshots/store
 ```
 
-The editor capture uses the voiceover's timings: run narrate.mjs once, then capture-editor with
-`--speech $W/vo/vo-cues.json`, then re-render the captions and narration so both match the new footage.
+The narration is one continuous take (FilmCraft `[pause]` markers between lines, no clip joins); narrate.mjs
+re-renders it with corrected pauses until every line starts within 0.1 s of its cue.
 `render-film.mjs --at 12.5,30 --dsf 1 --out DIR` renders single stills for design review.
 
 **FilmCraft CLI with natural voices.** The FilmCraft app may be built without them; build the CLI from

@@ -33,7 +33,7 @@ const ed = await openEditor({ source: SOURCE, width: W, height: H, dsf: DSF });
 console.log(`editor open in ${((Date.now() - tStart) / 1000).toFixed(1)}s`);
 const { page } = ed;
 // --speech: the voiceover's durations per caption (narrate.mjs output), so steps wait for their narration
-const speech = argv.speech && existsSync(argv.speech) ? Object.fromEntries(JSON.parse(readFileSync(argv.speech, "utf8")).map((c) => [c.text, c.dur * (c.pace || 1)])) : null;
+const speech = argv.speech && existsSync(argv.speech) ? Object.fromEntries(JSON.parse(readFileSync(argv.speech, "utf8")).lines.map((c) => [c.text, c.dur])) : null;
 const d = createDirector(page, { fps: FPS, outDir: OUT, start: [W * 0.62, H * 0.42], speech });
 await d.install();
 
@@ -55,21 +55,21 @@ const gone = (name) => `!document.querySelector(${JSON.stringify(name)})`;
 // ── segments ── Every step is slow on purpose: the cursor travels to the control, pauses so the viewer can see
 // where it is, acts, then the result holds on screen. Each step says what it does (d.say → the film's captions).
 const open = seg("open", async () => {
-  await d.say("This is the screensnap video editor.");
+  await d.say("This is the screensnap editor.");
   await d.hold(2.6);
-  await d.say("Your recording is the clip on the timeline.");
+  await d.say("Your recording sits on the timeline as a clip.");
   const v = await R(".ss-tl-vtime");
   await d.glide(v.l + v.w * 0.35, v.cy, 1.4);
   await d.hold(2.0);
 });
 
 const scrub = seg("scrub", async () => {
-  await d.say("Drag the playhead to find a moment.");
+  await d.say("Drag the playhead to move through your video.");
   const flag = await R(".ss-tl-ph-grab");
   await d.glide(flag.cx, flag.cy, 1.2); await d.hold(0.6);
   await d.drag([[flag.cx, flag.cy], [await secX(4.0), flag.cy], [await secX(E.peakT), flag.cy]], 3.2);
   await d.hold(1.6);
-  await d.say("Drag the ends of this bar to zoom the timeline.");
+  await d.say("For more detail, drag the ends of this bar to zoom in.");
   const h = await R('.ss-tl-nav-h[data-edge="out"]');
   await d.glide(h.cx, h.cy, 1.3); await d.hold(0.6);
   await d.drag([[h.cx, h.cy], [h.cx - (await R(".ss-tl-ntime")).w * 0.6, h.cy]], 2.0);
@@ -77,7 +77,7 @@ const scrub = seg("scrub", async () => {
   const th = await R(".ss-tl-nav-thumb");
   await d.drag([[th.cx, th.cy], [th.cx + 160, th.cy]], 1.6);
   await d.hold(1.2);
-  await d.say("Fit brings the whole clip back.");
+  await d.say("Click Fit to see the whole clip again.");
   await moveTo(".ss-tl-zfit", 1.0); await d.hold(0.4); await d.click({ settle: 0.3 });
   await d.hold(1.4);
 });
@@ -99,55 +99,55 @@ const trim = seg("trim", async () => {
 // just inside the spinner's window and clear of whole seconds (a ruler click would snap onto those).
 const cut = seg("cut", async () => {
   const r = await R(".ss-tl-rtime"), A = E.dead[0] + 0.3, B = E.dead[1] + 0.2;
-  await d.say("Put the playhead where the boring part starts…");
+  await d.say("Let's take out this loading screen. Move the playhead to where it starts,");
   await d.glide(await secX(A), r.cy, 1.4); await d.hold(0.4); await d.click({ settle: 0.4 });
   await d.hold(0.8);
-  await d.say("…and press S to split the clip there.", "S");
+  await d.say("and press S to split the clip there.", "S");
   await d.key("s"); await d.hold(1.6);
-  await d.say("Split again where it ends.", "S");
+  await d.say("Then do the same where it ends.", "S");
   await d.glide(await secX(B), r.cy, 1.2); await d.hold(0.3); await d.click({ settle: 0.4 });
   await d.key("s"); await d.hold(1.6);
   const v = await R(".ss-tl-vtime");
-  await d.say("Click the piece you don't want.");
+  await d.say("Now click the part you don't want,");
   await d.glide(await secX((A + B) / 2), v.cy + 8, 1.4); await d.hold(0.4); await d.click({ settle: 0.4 });
   await d.hold(1.4);
-  await d.say("Press Delete, and the rest closes up.", "⌫");
+  await d.say("press Delete, and the gap closes up on its own.", "⌫");
   await d.key("Backspace"); await d.hold(2.4);
 });
 
 const undo = seg("undo", async () => {
-  await d.say("Every edit can be undone…", "⌘Z");
+  await d.say("Changed your mind? Undo brings it back.", "⌘Z");
   await d.key("z", { meta: true }); await d.hold(1.8);
-  await d.say("…and redone.", "⇧⌘Z");
+  await d.say("And redo takes it out again.", "⇧⌘Z");
   await d.key("z", { meta: true, shift: true }); await d.hold(1.8);
 });
 
 const zoom = seg("zoom", async () => {
   const r = await R(".ss-tl-rtime");
-  await d.say("Press M to drop a marker at a moment you want to find again.", "M");
+  await d.say("Press M to drop a marker you can jump back to.", "M");
   await d.glide(await secX(E.peakT), r.cy, 1.4); await d.hold(0.3); await d.click({ settle: 0.3 });
   await d.key("m"); await d.hold(1.8);
-  await d.say("Add a zoom at the playhead.", "Z");
+  await d.say("Now add a zoom, right here.", "Z");
   await moveTo("#ss-zoom-add", 1.2); await d.hold(0.4); await d.click({ settle: 0.4 });
   await d.hold(1.4);
-  await d.say("Drag the box onto what matters.");
+  await d.say("Drag the box over the part you want to show off,");
   const box = await R(".ss-zfocus");
   const [px, py] = await toClient(E.peak.x, E.peak.y);
   await d.glide(box.cx, box.cy, 1.0); await d.hold(0.3);
   await d.drag([[box.cx, box.cy], [px, py]], 2.0);
   await d.hold(1.0);
-  await d.say("Pull its corner to zoom closer or wider.");
+  await d.say("and pull the corner to zoom in closer.");
   const handle = await R(".ss-zfocus-handle");
   await d.glide(handle.cx, handle.cy, 0.9); await d.hold(0.3);
   await d.drag([[handle.cx, handle.cy], [handle.cx + 40, handle.cy + 14]], 1.4);
   await d.hold(1.2);
-  await d.say("Stretch the zoom on the timeline to make it last longer.");
+  await d.say("Stretch it on the timeline to make it last longer.");
   const blk = await R(".ss-tl-zblock");
   await d.glide(blk.r - 2, blk.cy, 1.1); await d.hold(0.3);
   await d.drag([[blk.r - 2, blk.cy], [await secX(E.peakT + 3.2), blk.cy]], 1.6);
   await d.hold(1.0);
   await d.still("zoom");
-  await d.say("Scrub through it: the zoom eases in and out.");
+  await d.say("Scrub through, and the zoom glides in and out smoothly.");
   const flag = await R(".ss-tl-ph-grab");
   await d.glide(flag.cx, flag.cy, 1.0); await d.hold(0.3);
   await d.drag([[flag.cx, flag.cy], [await secX(E.peakT + 2.4), flag.cy], [await secX(E.peakT + 5.2), flag.cy]], 3.6);
@@ -155,24 +155,24 @@ const zoom = seg("zoom", async () => {
 });
 
 const crop = seg("crop", async () => {
-  await d.say("Crop shows the whole frame with a box you can grab.", "C");
+  await d.say("Crop shows the whole picture, with a box you can grab.", "C");
   await moveTo("#ss-crop-btn", 1.2); await d.hold(0.3); await d.click({ settle: 0.3 });
   await d.hold(2.0);
   const k = await scale();
-  await d.say("Pull the left edge past the sidebar…");
+  await d.say("Pull the left side in, past the sidebar,");
   const L = await R('.ss-crop-h[data-h="-1,0"]');
   await d.glide(L.cx, L.cy, 1.2); await d.hold(0.4);
   await d.drag([[L.cx, L.cy], [L.cx + (E.kpi.x - 36) * k, L.cy]], 1.8);
   await d.hold(0.8);
-  await d.say("…and the top edge below the header.");
+  await d.say("and bring the top down, below the header.");
   const T = await R('.ss-crop-h[data-h="0,-1"]');
   await d.glide(T.cx, T.cy, 1.1); await d.hold(0.4);
   await d.drag([[T.cx, T.cy], [T.cx, T.cy + (E.kpi.y - 36) * k]], 1.5);
   await d.hold(1.0);
-  await d.say("Pick a ratio and the box keeps that shape.");
+  await d.say("Pick a shape, like 16:9, and the box keeps it.");
   await moveTo('.ss-crop-preset[data-ratio="16:9"]', 1.2); await d.hold(0.4); await d.click({ settle: 0.4 });
   await d.hold(1.4);
-  await d.say("Drag inside the box to move it.");
+  await d.say("Drag inside the box to move it around.");
   const f = await R(".ss-crop-frame");
   await d.glide(f.cx, f.cy, 1.1); await d.hold(0.3);
   await d.drag([[f.cx, f.cy], [f.cx - 18, f.cy + 8]], 1.2);
@@ -180,7 +180,7 @@ const crop = seg("crop", async () => {
   const c = await R("#ss-canvas"), fr = await R(".ss-crop-frame");
   view = { x: ((fr.l - c.l) / c.w) * E.srcW, y: ((fr.t - c.t) / c.h) * E.srcH, w: (fr.w / c.w) * E.srcW, h: (fr.h / c.h) * E.srcH };
   await d.still("crop-box");
-  await d.say("Press Enter to apply.", "↵");
+  await d.say("Press Enter, and it's cropped.", "↵");
   await d.key("Enter");
   await d.hold(2.2);
 });
@@ -188,18 +188,18 @@ const crop = seg("crop", async () => {
 const annotate = seg("annotate", async () => {
   const [dx, dy] = await toClient(E.delta.x + E.delta.w / 2, E.delta.y + E.delta.h / 2);
   const k = await scale();
-  await d.say("Draw an arrow…", "A");
+  await d.say("Draw an arrow to point at something,", "A");
   await d.key("a"); await d.hold(0.6);
   await d.glide(dx + 150 * k, dy + 120 * k, 1.0); await d.hold(0.3);
   await d.drag([[dx + 150 * k, dy + 120 * k], [dx + 14 * k, dy + 10 * k]], 1.6);
   await d.hold(1.0);
-  await d.say("…and a box around what matters.", "R");
+  await d.say("and a box around what matters.", "R");
   await d.key("r"); await d.hold(0.5);
   const [bx, by] = await toClient(E.delta.x - 12, E.delta.y - 10);
   await d.glide(bx, by, 1.0); await d.hold(0.3);
   await d.drag([[bx, by], [bx + (E.delta.w + 24) * k, by + (E.delta.h + 20) * k]], 1.4);
   await d.hold(1.2);
-  await d.say("Each one gets a track: drag its end to choose when it disappears.");
+  await d.say("Each one gets its own track, so you can choose when it disappears.");
   const lb = await R(".ss-tl-lblock.on, .ss-tl-lblock");
   await d.glide(lb.r - 2, lb.cy, 1.3); await d.hold(0.4);
   await d.drag([[lb.r - 2, lb.cy], [await secX(14), lb.cy]], 1.8);
@@ -209,7 +209,7 @@ const annotate = seg("annotate", async () => {
 });
 
 const audio = seg("audio", async () => {
-  await d.say("Drag across the audio to mute a stretch, without cutting the picture.");
+  await d.say("Drag across the sound to mute a section, without touching the picture.");
   const a = await R(".ss-tl-atime");
   await d.glide(await secX(20.8), a.cy, 1.3); await d.hold(0.4);
   await d.drag([[await secX(20.8), a.cy], [await secX(23.0), a.cy]], 1.6);
@@ -217,7 +217,7 @@ const audio = seg("audio", async () => {
 });
 
 const backdrop = seg("backdrop", async () => {
-  await d.say("Wrap it in a backdrop.");
+  await d.say("Give it a colorful backdrop, so it looks polished.");
   await clickOn("#ss-backdrop-pop", 1.1);
   await d.hold(0.8);
   await clickOn("#ss-bd-on", 0.9);
@@ -232,11 +232,11 @@ const backdrop = seg("backdrop", async () => {
 const exportIt = seg("export", async () => {
   // headless has no save dialog: stand in for chrome.downloads so the real export runs to the end
   await page.evaluate(`(() => { try { chrome.downloads.download = (o, cb) => { cb(1); }; const add = chrome.downloads.onChanged.addListener.bind(chrome.downloads.onChanged); chrome.downloads.onChanged.addListener = (fn) => { setTimeout(() => fn({ id: 1, state: { current: 'complete' } }), 50); add(fn); }; } catch (e) { console.warn('downloads stub', e); } })()`);
-  await d.say("Export as MP4 or GIF, or share it from your own Drive.");
+  await d.say("Export it as an MP4 or a GIF, or share it from your own Google Drive.");
   await clickOn("#ss-export-caret", 1.2); await d.hold(2.2); await d.still("export-menu");
   await d.glide(W * 0.5, H * 0.45, 0.8); await d.click({ settle: 0.2 }); // close the menu
   await d.hold(0.4);
-  await d.say("Export: every frame is encoded on your device.");
+  await d.say("Hit Export, and every frame is made right here on your computer.");
   await clickOn("#ss-export", 1.1);
   d.mark("exporting");
   const ok = await d.fastForward(`document.getElementById('ss-export').textContent.includes('Saved')`, { maxSec: 90, holdSec: 0.22 });

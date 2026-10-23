@@ -19,12 +19,6 @@ const E = {
 const P = (t, a, b, e = E.out3) => e(clamp((t - a) / (b - a)));
 const BEAT = 0.5;
 
-// ── timeline (seconds) ──
-// Every UI clip plays at real speed — each step slow enough to follow — so the film is long by design.
-// (music-structure.json mirrors these section times for synth-audio.mjs)
-export const T = { s1: [0, 4], s2: [4, 12], s3: [12, 34], s4: [34, 186], s5: [186, 212], s6: [212, 224], s7: [224, 238] };
-export const DURATION = 238;
-const FINAL = T.s7[0] + 10; // the last big hit
 const FPS = 30;
 
 // ── element helpers ──
@@ -50,6 +44,18 @@ const base = { editor: "/work/editor/slow", popup: "/work/popup-slow", shots: "/
 const frameUrl = (set, i) => `${base[set]}/frames/${String(i).padStart(6, "0")}.png`;
 async function manifest(set) { try { return await (await fetch(`${base[set]}/manifest.json`)).json(); } catch { return null; } }
 const M = { editor: await manifest("editor"), popup: await manifest("popup"), shots: await manifest("shots") };
+// ── timeline (seconds) ──
+// Every UI clip plays at real speed — each step slow enough to follow — so each section is as long as its
+// footage, rounded up to whole bars (2 s at 120 BPM) so cuts land on the music. window.__music() hands the same
+// section times to synth-audio.mjs, so the soundtrack is arranged around them.
+const BAR = 2, upBar = (x) => Math.ceil(x / BAR) * BAR;
+const len = (set, fallback) => (M[set] ? M[set].duration : fallback);
+const e3 = upBar(12 + 0.9 + len("popup", 20) + 0.8);
+const e4 = upBar(e3 + 0.6 + len("editor", 150) + 0.6);
+const e5 = upBar(e4 + 0.5 + len("shots", 25) + 0.8);
+export const T = { s1: [0, 4], s2: [4, 12], s3: [12, e3], s4: [e3, e4], s5: [e4, e5], s6: [e5, e5 + 12], s7: [e5 + 12, e5 + 26] };
+export const DURATION = T.s7[1];
+const FINAL = T.s7[0] + 10; // the last big hit
 const mk = (set, name, fallback = 0) => (M[set] && M[set].marks && M[set].marks[name] != null ? M[set].marks[name] : fallback);
 
 // footage → film time. Each clip plays from `t0` at `speed`x; the mapping is shared by captions and key-caps.
@@ -76,25 +82,25 @@ const editorSteps = ((M.editor && M.editor.captions) || []).map((c, i, all) => (
 }));
 const S3 = T.s3[0], S5 = T.s5[0], S6 = T.s6[0], S7 = T.s7[0];
 export const captions = [
-  C(0.4, 3.9, "screensnap. Record. Edit. Keep it.", true, [[2.1, "screensnap."]]),
-  C(4.0, 10.0, "Subscriptions? Watermarks? Sign-ups?", true, [[4.05, "Subscriptions?"], [6.05, "Watermarks?"], [8.05, "Sign-ups?"]]),
-  C(10.1, 11.9, "screensnap is free. No paywall, no watermark, no account.", true, [[10.1, "screensnap is free."]]),
+  C(0.4, 3.9, "screensnap.", true, [[2.1, "screensnap."]]),
+  C(4.0, 10.0, "No subscriptions. No watermarks. No sign-ups.", true, [[4.05, "No subscriptions."], [6.05, "No watermarks."], [8.05, "No sign-ups."]]),
+  C(10.1, 11.9, "Just free.", true, [[10.15, "Just free."]]),
   C(S3 + 0.55, fT("popup", "audio") - 0.1, "Record a *tab*, a *window*, or your whole *screen*."),
-  C(fT("popup", "audio"), fT("popup", "quality") - 0.1, "Record system audio and your mic."),
-  C(fT("popup", "quality"), fT("popup", "cam-options") - 0.1, "Pick the quality and a countdown."),
-  C(fT("popup", "cam-options"), fT("popup", "settings") - 0.1, "Screen + Cam adds a camera bubble."),
-  C(fT("popup", "settings"), T.s3[1] - 0.3, "Recordings save as native *MP4*. No time limit."),
+  C(fT("popup", "audio"), fT("popup", "quality") - 0.1, "Capture your computer's sound, and your voice through the microphone."),
+  C(fT("popup", "quality"), fT("popup", "cam-options") - 0.1, "Choose the quality, and give yourself a countdown."),
+  C(fT("popup", "cam-options"), fT("popup", "settings") - 0.1, "Screen and camera puts your face in a little bubble."),
+  C(fT("popup", "settings"), T.s3[1] - 0.3, "When you stop, you get a normal *MP4* file, with no time limit."),
   ...editorSteps.map((c) => C(c.t0, c.t1, c.text)),
-  C(S5 + 0.6, fT("shots", "steps") - 0.1, "Screenshots too. Draw an *arrow*."),
-  C(fT("shots", "steps"), fT("shots", "spotlight") - 0.1, "Number your *steps*."),
-  C(fT("shots", "spotlight"), fT("shots", "text") - 0.1, "Spotlight what *matters*."),
-  C(fT("shots", "text"), fT("shots", "crop") - 0.1, "Add *text* wherever you need it."),
-  C(fT("shots", "crop"), T.s5[1] - 0.4, "Crop, add a backdrop, re-edit any time."),
-  C(S6 + 0.4, S6 + 2.9, "*Nothing* leaves your device."),
-  C(S6 + 3.0, S6 + 7.9, "No servers. No telemetry. No accounts.", false, [[S6 + 3.0, "No servers, no telemetry, no accounts."]]),
-  C(S6 + 8.0, T.s6[1] - 0.2, "Optional backup to *your* Drive, not ours."),
-  C(S7 + 2.6, S7 + 7.4, "Free. Open source. *No catch.*"),
-  C(FINAL + 0.4, T.s7[1] - 0.4, "Get it on the *Chrome Web Store*."),
+  C(S5 + 0.6, fT("shots", "steps") - 0.1, "Screenshots work the same way. Draw an *arrow*,"),
+  C(fT("shots", "steps"), fT("shots", "spotlight") - 0.1, "number your *steps*,"),
+  C(fT("shots", "spotlight"), fT("shots", "text") - 0.1, "spotlight what *matters*,"),
+  C(fT("shots", "text"), fT("shots", "crop") - 0.1, "add some *text*,"),
+  C(fT("shots", "crop"), T.s5[1] - 0.4, "then crop it, add a backdrop, and save."),
+  C(S6 + 0.4, S6 + 3.4, "*Nothing* you record leaves your computer."),
+  C(S6 + 3.5, S6 + 6.9, "No servers, no tracking, no accounts."),
+  C(S6 + 7.0, T.s6[1] - 0.2, "Want a backup? It goes to *your* Google Drive, not ours."),
+  C(S7 + 2.6, S7 + 7.4, "screensnap is free and open source. *No catch.*"),
+  C(FINAL + 0.4, T.s7[1] - 0.4, "Get it from the *Chrome Web Store*."),
 ];
 
 // ── element refs ──
@@ -236,11 +242,12 @@ function s4(t) {
   // a key-cap announces the shortcut for the tool being used
   let cap = null;
   for (const kc of KEYCAPS) if (t >= kc.t - 0.05 && t < kc.end) cap = { k: kc.k, lbl: kc.lbl, u: P(t, kc.t, kc.t + 0.3, E.outBack), o: 1 - P(t, kc.end - 0.3, kc.end) };
-  vis(el["ed-key"], !!cap);
+  el["ed-key"].style.display = cap ? "flex" : "none";
   if (cap) {
     el["ed-kbd"].textContent = cap.k; el["ed-keylbl"].textContent = cap.lbl;
-    const cw = el["cap-in"].offsetWidth || 0, kw = el["ed-key"].offsetWidth || 190;
-    el["ed-key"].style.left = `${960 - cw / 2 - kw - 18}px`;
+    const cw = el["cap-in"].offsetWidth || 0, ch = el["cap-in"].offsetHeight || 84, kw = el["ed-key"].offsetWidth || 190;
+    el["ed-key"].style.height = `${ch}px`;
+    el["ed-key"].style.left = `${960 - cw / 2 - kw - 30}px`;
     put(el["ed-key"], { x: (1 - cap.u) * -50, s: lerp(0.8, 1, cap.u), o: cap.o * cap.u });
   }
 }
@@ -401,4 +408,17 @@ window.__voice = () => {
   return lines.map((l, i) => ({ ...l, until: i + 1 < lines.length ? lines[i + 1].t : DURATION - 0.5 }));
 };
 window.__duration = DURATION;
+window.__music = () => ({
+  sections: [
+    { id: "intro", role: "intro", name: "Intro / logo reveal", start: 0, end: 4, gainDb: [-1, -1] },
+    { id: "hook", role: "hook", name: "Hook", start: 4, end: 12, gainDb: [-3, -3] },
+    { id: "build", role: "build", name: "Record (popup tour)", start: 12, end: T.s3[1], gainDb: [-4, -2.5] },
+    { id: "editor", role: "bed", name: "Editor walkthrough (under narration)", start: T.s4[0], end: T.s4[1], lift: [T.s4[0] + 64, T.s4[0] + 96] },
+    { id: "screenshots", role: "breakdown", name: "Screenshots", start: T.s5[0], end: T.s5[1], gainDb: [-3, -2] },
+    { id: "private", role: "drop2", name: "Private by design", start: T.s6[0], end: T.s6[1], lead: false, gainDb: [-1.8, -1.8] },
+    { id: "finale", role: "finale", name: "Outro / call to action", start: T.s7[0], end: FINAL, gainDb: [-2.2, -2.2] },
+    { id: "tail", role: "tail", name: "Final hit + ring-out", start: FINAL, end: T.s7[1], gainDb: [-1.5, -1.5] },
+  ],
+  energyOrder: [["intro", "hook"], ["hook", "editor"], ["screenshots", "editor"], ["screenshots", "private"], ["editor", "private"], ["private", "finale"]],
+});
 window.__ready = true;
