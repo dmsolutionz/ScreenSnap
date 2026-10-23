@@ -21,11 +21,13 @@ Built because being nagged to log in just to save a screenshot is miserable.
 ## Features
 
 **Screenshots** (PNG)
-- **Visible Tab** · **Full Page** (auto-scroll + stitch, de-dupes sticky headers) · **Select Area**
+- **Visible Tab** · **Full Page** (auto-scroll + stitch, de-dupes sticky headers; also handles web apps whose
+  content scrolls inside a panel rather than the page, e.g. Gmail) · **Select Area**
   (on-page green marquee with live dimensions, Enter to capture)
 - After capture you get a **captured card**: **Annotate & save**, **Save PNG directly**, **Copy**, or Discard
 - **Annotation editor** — Draw, Arrow, Rectangle, Text, Highlight, Blur/Redact, Eraser, **Crop**
-  (free-form or 16:9 / 1:1 / 9:16 / 4:3), a **Layers panel** (select, reorder, show/hide, delete,
+  (a movable, resizable crop box; free-form or 16:9 / 1:1 / 9:16 / 4:3), Move-tool **transform handles**
+  with smart-guide snapping and arrow-key nudges, a **Layers panel** (select, reorder, show/hide, delete,
   **re-edit text**, add **image/logo layers**), a **Beautify backdrop** (gradient/solid + rounded
   corners + shadow), colours, stroke weights, undo/redo, copy-to-clipboard
 
@@ -38,6 +40,8 @@ Built because being nagged to log in just to save a screenshot is miserable.
 - Screen / Screen+Cam are controlled from the toolbar **REC** badge, the popup, and keyboard shortcuts
   (no on-page bar off-tab, and no countdown — the picker is the "get ready" beat)
 - **System / tab audio** and/or **microphone** (mixed), **pause / resume**, and a red **REC** badge
+- **Quality** — Small (720p), **Standard** (1080p, the default) or High (full resolution), each with an
+  explicit bitrate, so a Standard take is roughly 15 MB a minute (a 7-minute walkthrough ≈ 100 MB)
 
 **Video editor** (opens after a recording; WebCodecs, no ffmpeg/WASM)
 - A **multi-track timeline** — pinned ruler + video track, then a track per overlay, plus audio —
@@ -86,6 +90,12 @@ chrome://extensions  →  enable Developer mode  →  Load unpacked  →  select
 That's it — **no build step, no `npm install`, zero dependencies.** Icons and fonts are committed, so
 it runs straight from source. (`npm run make:icons` only re-generates the placeholder icons.)
 
+**Releasing:** bump `version` in `manifest.json` and `package.json`, then push to `main`. The
+[Package workflow](.github/workflows/package.yml) runs the tests + lint, builds `screensnap-<version>.zip`
+(`npm run package` locally), and publishes a `v<version>` GitHub release with the zip and its SHA-256,
+ready to upload to the Chrome Web Store. Pushes that don't change the version just build the zip as a
+workflow artifact.
+
 ## Architecture
 
 No framework, no bundler, zero runtime dependencies — plain ES modules + self-contained injected
@@ -126,7 +136,8 @@ host access **is** optional and requested only when you click Connect.
 ## Known limitations
 
 - **Full-page capture** uses `captureVisibleTab` (rate-limited ~2/sec), so long pages take a few
-  seconds; lazy-loaded content and complex sticky layouts can still leave seams.
+  seconds; lazy-loaded content and complex sticky layouts can still leave seams. For apps that scroll
+  inside a panel it expands the largest scrolling panel only, and content inside iframes isn't scrolled.
 - **Screen + Cam** composites the webcam as a fixed corner bubble (pick corner/size/shape/mirror in the
   popup, adjustable mid-recording) — it isn't a freely-draggable live overlay, because off-tab screen
   capture has no web page to overlay.

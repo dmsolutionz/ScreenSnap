@@ -274,7 +274,9 @@ export function createTimeline(opts) {
   // snap to itself): playhead, trim in/out, cut edges, zoom/layer/mute/extra block edges, whole seconds.
   function snapCandidates(kind, id) {
     const c = [0, dur, playSec, inSec, outSec];
-    for (let s = 1; s < dur; s++) c.push(s);
+    // Whole seconds only once a second spans >= ~5× the 8px snap radius: on a long clip at Fit (a few
+    // px per second) every position is within the radius of SOME whole second, so every drag snapped.
+    if (pps() >= 40) for (let s = 1; s < dur; s++) c.push(s);
     for (const cut of (getCuts && getCuts()) || []) c.push(cut.in, cut.out);
     for (const b of (getZoomBlocks && getZoomBlocks()) || []) if (!(kind === "zoom" && String(b.id) === String(id))) c.push(b.tIn, b.tOut);
     if (store) for (const l of store.layers) if (l.range && !(kind === "layer" && String(l.id) === String(id))) c.push(l.range.inSec, l.range.outSec);
@@ -322,12 +324,13 @@ export function createTimeline(opts) {
       eyeBtn.textContent = nowVisible ? "👁" : "🚫";
       eyeBtn.title = nowVisible ? "Hide" : "Show";
     });
-    h.querySelector(".ss-tl-op").addEventListener("input", (e) => onLayerOpacity && onLayerOpacity(l.id, Number(e.target.value)));
+    const opEl = h.querySelector(".ss-tl-op");
+    opEl.addEventListener("input", (e) => onLayerOpacity && onLayerOpacity(l.id, Number(e.target.value)));
     h.querySelector("[data-del]").addEventListener("click", () => onLayerDelete && onLayerDelete(l.id));
     wireReorder(h.querySelector("[data-grip]"), l.id);
     const t = timeArea("ss-tl-ltime");
     row.append(h, t); lanesEl.appendChild(row);
-    layerRows.set(l.id, { time: t, block: null });
+    layerRows.set(l.id, { time: t, block: null, eyeBtn, opEl });
     wireBlockDrag(t, {
       secAt: (x) => secAtIn(x, t), maxSec: dur, minLen: Math.min(0.1, dur), blockSelector: ".ss-tl-lblock",
       getBlocks: () => {
@@ -357,7 +360,7 @@ export function createTimeline(opts) {
     h.querySelector("[data-exdel]").addEventListener("click", () => onExtraRemove && onExtraRemove());
     const t = timeArea("ss-tl-extime");
     row.append(h, t); lanesEl.appendChild(row);
-    extraRow = { time: t };
+    extraRow = { time: t, nameEl: h.querySelector(".ss-tl-exname-h"), muteBtn: h.querySelector("[data-exmute]"), volEl: h.querySelector(".ss-tl-exvol") };
     wireBlockDrag(t, {
       secAt: (x) => secAtIn(x, t), maxSec: dur, minLen: Math.min(0.1, dur), blockSelector: ".ss-tl-exblock",
       getBlocks: () => {
@@ -465,6 +468,12 @@ export function createTimeline(opts) {
     const selId = getSelectedLayer && getSelectedLayer();
     for (const [id, ref] of layerRows) {
       const l = store.get(id); if (!l) continue;
+      // The header is built once per layer set, so re-sync its controls from the store (undo/redo or
+      // the inspector's opacity slider change these without rebuilding the row).
+      const vis = l.visible !== false;
+      ref.eyeBtn.textContent = vis ? "👁" : "🚫"; ref.eyeBtn.title = vis ? "Hide" : "Show";
+      const op = String(typeof l.opacity === "number" ? l.opacity : 1);
+      if (ref.opEl.value !== op && doc.activeElement !== ref.opEl) ref.opEl.value = op;
       ref.time.textContent = "";
       const r = l.range;
       const lo = r ? clamp(r.inSec, 0, dur) : 0, hi = r ? clamp(r.outSec, lo, dur) : dur;
@@ -514,6 +523,12 @@ export function createTimeline(opts) {
     const ea = getExtraAudio && getExtraAudio();
     const eb = getExtraBlock && getExtraBlock();
     if (!ea || !eb) return;
+    // Header controls are built once (the row survives mute / volume / re-import), so sync them here.
+    extraRow.nameEl.textContent = ea.name || "audio";
+    extraRow.muteBtn.textContent = ea.muted ? "🔇" : "🔊";
+    extraRow.muteBtn.title = ea.muted ? "Unmute track" : "Mute track";
+    const vol = String(typeof ea.volume === "number" ? ea.volume : 1);
+    if (extraRow.volEl.value !== vol && doc.activeElement !== extraRow.volEl) extraRow.volEl.value = vol;
     extraRow.time.textContent = "";
     const lo = clamp(eb.tIn, 0, dur), hi = clamp(eb.tOut, lo, dur);
     const b = doc.createElement("div"); b.className = "ss-tl-exblock" + (selectedExtra ? " on" : ""); b.dataset.id = "ex";

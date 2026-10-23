@@ -1,6 +1,6 @@
 // Service worker — orchestrates everything. No DOM: screenshots stitch with OffscreenCanvas; tab &
 // video-circle recording run in the offscreen document. Recordings save as native MP4 (no transcoding).
-import { MSG, TARGET, PHASE, SOURCE, getSettings, setSettings, restartOptions, stamp, elapsedMs } from "../lib/messages.js";
+import { MSG, TARGET, PHASE, SOURCE, getSettings, setSettings, restartOptions, qualityProfile, stamp, elapsedMs } from "../lib/messages.js";
 import { preparePageForCapture, gotoTile, restorePageAfterCapture } from "../content/fullpage.js";
 import { driveConnect, driveDisconnect, driveStatus, uploadToDrive, makeShareable, shareUrl } from "../lib/drive.js";
 import { getBlob } from "../editor/idb.js";
@@ -33,6 +33,10 @@ async function handle(msg, sender) {
   switch (msg.type) {
     case MSG.GET_STATE:
       return { ok: true, state: await getState(), settings: await getSettings() };
+    case MSG.KEEPALIVE:
+      // Receiving any message resets the MV3 idle timer — that's the whole point (the popup, the Screen +
+      // Cam setup window and the permission window ping while they wait on the user).
+      return { ok: true };
     case MSG.CAPTURE_VISIBLE:
       return doScreenshot("visible");
     case MSG.CAPTURE_FULLPAGE:
@@ -146,7 +150,7 @@ async function handle(msg, sender) {
       // Restart: the just-finished take was discarded on purpose; immediately re-prepare with the same
       // settings instead of going idle / opening the editor.
       if (pendingRestart) { pendingRestart = false; await closeOffscreen(); await startRecording(restartOpts || {}); return { ok: true }; }
-      await setState({ phase: PHASE.IDLE, progress: 0, lastSaved: msg.filename || null, note: msg.note || null, error: null, clipId: msg.clipId || null });
+      await setState({ phase: PHASE.IDLE, progress: 0, lastSaved: msg.filename || null, lastSize: msg.size || null, note: msg.note || null, error: null, clipId: msg.clipId || null });
       await closeOffscreen();
       await closePreviewWindow();
       // Land the finished recording in the editor, where the user can Download it as-is or edit it.
@@ -216,6 +220,13 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   if (st.phase !== PHASE.PREPARING && st.phase !== PHASE.RECORDING) return;
   if (st.drawActive) injectFile(tabId, "src/content/draw-overlay.js").catch(() => {}); // pen follows navigation
   injectFile(tabId, "src/content/recorder-control.js").catch(() => {});
+});
+// Closing the tab mid-countdown means REC_GO never comes, which left the take stuck at PREPARING (REC badge
+// on, popup without tabs) until a manual cancel. Once recording, the tab-capture track ending already stops
+// and saves the take, so only the countdown needs this.
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const st = await getState();
+  if (st.recordingTabId === tabId && st.phase === PHASE.PREPARING && st.source === SOURCE.TAB) await stopRecording(true);
 });
 
 // Global keyboard shortcuts (manifest "commands"): stop / pause-resume the active recording from anywhere
@@ -345,6 +356,8 @@ async function uploadClip(clipId, fileName) {
     });
     await setState({ drive: { status: "done", pct: 100, fileName: name, fileId: res.id || null, link: res.webViewLink || null, folderId: res.folderId || null, folderName: res.folderName || null } });
   } catch (e) {
+    // Disconnect aborts an in-flight upload (drive.js) — that's the user's choice, not a failure to report.
+    if (e && e.name === "AbortError") return void (await setState({ drive: null }));
     await setState({ drive: { status: "error", fileName: name, error: String((e && e.message) || e) } });
   }
 }
@@ -367,6 +380,7 @@ async function shareClip(clipId, fileName) {
     await makeShareable(fileId);
     await setState({ drive: { ...(await getState()).drive, sharing: false, shareUrl: shareUrl(fileId, name) } });
   } catch (e) {
+    if (e && e.name === "AbortError") return void (await setState({ drive: null }));
     const cur = (await getState()).drive || {};
     await setState({ drive: { ...cur, sharing: false, shareError: String((e && e.message) || e) } });
   }
@@ -376,6 +390,7 @@ async function captureFullPage(tab) {
   const run = (func, args = []) => chrome.scripting.executeScript({ target: { tabId: tab.id }, func, args }).then((r) => r[0]?.result);
   const m = await run(preparePageForCapture);
   try {
+    if (m.mode === "element") return await captureScrollerPage(tab, run, m);
     const { dpr } = m;
     const scale = Math.min(1, MAX_CANVAS_SIDE / (m.pageW * dpr), MAX_CANVAS_SIDE / (m.pageH * dpr));
     const canvas = new OffscreenCanvas(Math.round(m.pageW * dpr * scale), Math.round(m.pageH * dpr * scale));
@@ -411,6 +426,83 @@ async function captureFullPage(tab) {
   } finally {
     await run(restorePageAfterCapture).catch(() => {});
   }
+}
+
+// Full page for an app whose content scrolls inside an element (see fullpage.js "element" mode). The output is
+// the page as if that box were tall enough to show everything: the first tile supplies the shell (header,
+// sidebars, any footer below the box), each tile supplies one screen of the box's content at its scroll offset,
+// and the sidebars' empty extension is filled with their own bottom-edge background color.
+async function captureScrollerPage(tab, run, m) {
+  const { dpr, viewW, viewH, rect, maxTop } = m;
+  const scale = Math.min(1, MAX_CANVAS_SIDE / (viewW * dpr), MAX_CANVAS_SIDE / ((viewH + maxTop) * dpr));
+  const k = dpr * scale; // CSS px → output px
+  let canvas = new OffscreenCanvas(Math.round(viewW * k), Math.round((viewH + maxTop) * k));
+  let ctx = canvas.getContext("2d");
+
+  const ys = [];
+  for (let y = 0; y < maxTop; y += rect.h) ys.push(y);
+  ys.push(maxTop);
+
+  let first = null, lastTop = 0;
+  const seen = new Set();
+  try {
+    for (let i = 0; i < ys.length; i++) {
+      const pos = await run(gotoTile, [0, ys[i], i > 0]);
+      if (seen.has(pos.scrollY)) continue;
+      seen.add(pos.scrollY);
+      if (i === 0) await delay(200);
+      const bmp = await dataUrlToBitmap(await captureWithRetry(tab.windowId));
+      const r = bmp.width / viewW; // capture px per CSS px (≈ dpr)
+      if (!first) { first = bmp; ctx.drawImage(bmp, 0, 0, bmp.width, bmp.height, 0, 0, viewW * k, viewH * k); }
+      ctx.drawImage(bmp, rect.x * r, rect.y * r, rect.w * r, rect.h * r, rect.x * k, (rect.y + pos.scrollY) * k, rect.w * k, rect.h * k);
+      if (bmp !== first) bmp.close?.();
+      lastTop = Math.max(lastTop, pos.scrollY);
+    }
+    // The box may stop short of the measured extent (rounding, a list that won't scroll all the way, scroll
+    // hijacking) — trim the canvas to what was actually revealed rather than leave an empty band.
+    const extra = Math.min(lastTop, maxTop);
+    if (extra < maxTop) {
+      const trimmed = new OffscreenCanvas(canvas.width, Math.round((viewH + extra) * k));
+      trimmed.getContext("2d").drawImage(canvas, 0, 0);
+      canvas = trimmed; ctx = trimmed.getContext("2d");
+    }
+    if (extra > 0 && first) {
+      const r = first.width / viewW;
+      const boxBottom = rect.y + rect.h, below = viewH - boxBottom;
+      // Sidebars beside the box: extend each with the most common color on its last row inside the box's band.
+      const fillSide = (x0, x1) => {
+        if (x1 - x0 < 1) return;
+        ctx.fillStyle = dominantRowColor(first, x0 * r, (boxBottom - 1) * r, (x1 - x0) * r);
+        ctx.fillRect(x0 * k, boxBottom * k, (x1 - x0) * k, (extra + Math.max(0, below)) * k);
+      };
+      fillSide(0, rect.x);
+      fillSide(rect.x + rect.w, viewW);
+      // Whatever sat below the box (a footer / status bar) moves down under the expanded content.
+      if (below > 0) ctx.drawImage(first, 0, boxBottom * r, first.width, below * r, 0, (boxBottom + extra) * k, viewW * k, below * k);
+    }
+    return canvas;
+  } finally {
+    first?.close?.();
+  }
+}
+
+// Most frequent color along one row segment of a bitmap, as a CSS color — the background to extend a sidebar
+// with. Flat UI backgrounds dominate a row even when a label or icon crosses it.
+function dominantRowColor(bmp, sx, sy, sw) {
+  const w = Math.max(1, Math.round(sw));
+  const c = new OffscreenCanvas(w, 1);
+  const cx = c.getContext("2d", { willReadFrequently: true });
+  cx.drawImage(bmp, Math.round(sx), Math.max(0, Math.round(sy)), w, 1, 0, 0, w, 1);
+  const px = cx.getImageData(0, 0, w, 1).data;
+  const counts = new Map();
+  let best = 0, bestN = 0;
+  for (let i = 0; i < px.length; i += 4) {
+    const key = (px[i] << 16) | (px[i + 1] << 8) | px[i + 2];
+    const n = (counts.get(key) || 0) + 1;
+    counts.set(key, n);
+    if (n > bestN) { bestN = n; best = key; }
+  }
+  return `#${best.toString(16).padStart(6, "0")}`;
 }
 
 let lastCaptureAt = 0;
@@ -453,6 +545,7 @@ async function startRecording(options) {
   // here (a dedicated extension page can prompt) before we start; if denied, record without it.
   let withMic = !!opts.withMic;
   if (withMic) withMic = await ensureMediaPermission("mic");
+  const q = qualityProfile(opts.videoQuality);
 
   // Two-phase: a 3-2-1 countdown first, then REC_GO begins the actual capture. The control is a Loom-style
   // on-page bar (recorder-control.js), bottom-left, collapsed/auto-hidden during recording so it stays out
@@ -460,7 +553,8 @@ async function startRecording(options) {
   await setState({
     phase: PHASE.PREPARING, source: SOURCE.TAB,
     withMic, withSystemAudio: opts.withSystemAudio, micMuted: false,
-    videoFormat: opts.videoFormat, videoFps: opts.videoFps, videoMaxHeight: opts.videoMaxHeight,
+    videoFormat: opts.videoFormat, videoFps: opts.videoFps,
+    videoQuality: opts.videoQuality, videoMaxHeight: q.maxHeight, videoBitsPerSecond: q.videoBitsPerSecond,
     countdownSec: opts.countdownSec, camHidden: false, drawActive: false,
     recordingTabId: tab.id, controlInjectable: isInjectable(tab.url),
     // startedAt is cleared here (it's only set on REC_STARTED): a previous take's value leaking into
@@ -491,11 +585,13 @@ async function startScreenRecording(opts) {
   const withCam = opts.recordSource === SOURCE.VIDEO_CIRCLE;
   let withMic = !!opts.withMic;
   if (withMic) withMic = await ensureMediaPermission("mic");
+  const q = qualityProfile(opts.videoQuality);
 
   await setState({
     phase: PHASE.PREPARING, source: withCam ? SOURCE.VIDEO_CIRCLE : SOURCE.SCREEN,
     withMic, withSystemAudio: opts.withSystemAudio, micMuted: false,
-    videoFormat: opts.videoFormat, videoFps: opts.videoFps, videoMaxHeight: opts.videoMaxHeight,
+    videoFormat: opts.videoFormat, videoFps: opts.videoFps,
+    videoQuality: opts.videoQuality, videoMaxHeight: q.maxHeight, videoBitsPerSecond: q.videoBitsPerSecond,
     countdownSec: 0, camHidden: false, drawActive: false, displaySurface: null, camIsPip: false, previewWinId: null,
     bubbleShape: opts.bubbleShape, bubbleSize: opts.bubbleSize, bubbleCorner: opts.bubbleCorner, camMirror: opts.camMirror,
     recordingTabId: tab ? tab.id : null, controlInjectable: tab ? isInjectable(tab.url) : false,
@@ -538,7 +634,7 @@ async function startScreenRecording(opts) {
     await sendOffscreen({
       type: MSG.OFFSCREEN_START, sourceKind: "screen", withCam, pipActive,
       withMic, withSystemAudio: opts.withSystemAudio,
-      videoFormat: opts.videoFormat || "mp4", fps: opts.videoFps || 30, maxHeight: opts.videoMaxHeight || 2160,
+      videoFormat: opts.videoFormat || "mp4", fps: opts.videoFps || 30, maxHeight: q.maxHeight, videoBitsPerSecond: q.videoBitsPerSecond,
       bubbleShape: cur.bubbleShape, bubbleSize: cur.bubbleSize, bubbleCorner: cur.bubbleCorner, camMirror: cur.camMirror,
     });
   } catch (e) {
@@ -592,7 +688,7 @@ async function beginCapture() {
   try {
     await closeOffscreen(); // a leftover doc would swallow OFFSCREEN_START — new take, fresh document
     await ensureOffscreen();
-    await sendOffscreen({ type: MSG.OFFSCREEN_START, streamId, sourceKind: "tab", withMic: st.withMic, withSystemAudio: st.withSystemAudio, videoFormat: st.videoFormat || "mp4", fps: st.videoFps || 30, maxHeight: st.videoMaxHeight || 2160, fixedWidth: fixed ? fixed.width : null, fixedHeight: fixed ? fixed.height : null });
+    await sendOffscreen({ type: MSG.OFFSCREEN_START, streamId, sourceKind: "tab", withMic: st.withMic, withSystemAudio: st.withSystemAudio, videoFormat: st.videoFormat || "mp4", fps: st.videoFps || 30, maxHeight: st.videoMaxHeight || 2160, videoBitsPerSecond: st.videoBitsPerSecond || 0, fixedWidth: fixed ? fixed.width : null, fixedHeight: fixed ? fixed.height : null });
   } catch (e) {
     startInFlight = false; await closeOffscreen(); await setState({ phase: PHASE.IDLE, error: String((e && e.message) || e) }); return { ok: false };
   }
@@ -622,14 +718,17 @@ async function ensureMediaPermission(kind) {
       if (sender.id === chrome.runtime.id && m && m.type === "media-permission-result" && m.kind === kind) finish(m.granted);
     };
     // If the user dismisses the permission window without answering, proceed without it immediately
-    // instead of stalling the recording until the 30s backstop.
+    // instead of stalling the recording until the backstop below.
     const onClosed = (id) => { if (id === winId) finish(false); };
     chrome.runtime.onMessage.addListener(onMsg);
     chrome.windows.onRemoved.addListener(onClosed);
     chrome.windows.create({ url: chrome.runtime.getURL("src/permission/media.html?kind=" + kind), type: "popup", width: 460, height: 280, focused: true })
       .then((w) => { winId = w && w.id; })
       .catch(() => finish(false));
-    setTimeout(() => finish(false), 30000); // ultimate backstop
+    // Ultimate backstop. The window now keeps this worker alive while it's open (it pings KEEPALIVE), so this
+    // really fires — give a person time to read the prompt, and close the window so it can't answer a take
+    // that has already moved on without the mic.
+    setTimeout(() => { if (!settled && winId != null) chrome.windows.remove(winId).catch(() => {}); finish(false); }, 120000);
   });
 }
 
@@ -656,7 +755,7 @@ function openPreviewWindow() {
     chrome.windows.create({ url: chrome.runtime.getURL("src/preview/preview.html"), type: "popup", width: 390, height: 560, focused: true })
       .then((w) => { winId = w && w.id; })
       .catch(() => done({ ready: false, winId: null }));
-    setTimeout(() => done({ ready: false, winId }), 120000); // backstop: window may still be open → caller closes it
+    setTimeout(() => done({ ready: false, winId }), 600000); // backstop (10 min — framing the camera can take a while): window may still be open → caller closes it
   });
 }
 

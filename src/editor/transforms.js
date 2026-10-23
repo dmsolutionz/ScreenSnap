@@ -54,6 +54,31 @@ export function videoBitrateFor(outW, outH, fps = 30) {
   return Math.round(clamp(raw, MIN_BITRATE, MAX_BITRATE));
 }
 
+// The source clip's average VIDEO bitrate (bits/s): whole-file size over duration, less an allowance
+// for its audio track. 0 when unknown (no size / duration), which disables the cap below.
+export const SRC_AUDIO_BPS = 128e3;
+export function sourceVideoBitrate(fileBytes, durationSec, hasAudio = true) {
+  if (!(fileBytes > 0) || !(durationSec > 0)) return 0;
+  const total = (fileBytes * 8) / durationSec;
+  return Math.max(total * 0.25, total - (hasAudio ? SRC_AUDIO_BPS : 0)); // never let the allowance eat it all
+}
+
+// Never let an edit INFLATE the file: cap the bpp-derived target at the source's own average video
+// bitrate (+15% headroom for the re-encode generation loss). pixelRatio = output content pixels /
+// source pixels (crop + downscale shrink it); the cap falls sublinearly with it (smaller frames
+// compress less efficiently per pixel). speed > 1 packs more source frames into each output second,
+// so the cap scales with it — the output file still ends up no bigger than the source. The floor
+// keeps tiny crops legible but never exceeds the source's own rate. No source rate → target as-is.
+const SRC_HEADROOM = 1.15;
+const CAP_FLOOR = 300e3;
+export function capToSource(targetBps, srcVideoBps, pixelRatio = 1, speed = 1) {
+  if (!(srcVideoBps > 0)) return Math.round(targetBps);
+  const r = clamp(pixelRatio > 0 ? pixelRatio : 1, 0, 1);
+  const cap = srcVideoBps * SRC_HEADROOM * Math.pow(r, 0.75) * Math.max(1, speed > 0 ? speed : 1);
+  const floor = Math.min(CAP_FLOOR, srcVideoBps * SRC_HEADROOM);
+  return Math.round(Math.max(floor, Math.min(targetBps, cap)));
+}
+
 // outScale null => source dims unchanged. {maxHeight} => scale down to fit that height (never up),
 // preserving aspect. crop (optional {x,y,w,h} source px) sets the BASE dimensions before scaling, so
 // a cropped export is sized to the crop, not the source. Both dims forced to nearest even int.

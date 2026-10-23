@@ -4,12 +4,19 @@
 // Message strings mirror src/lib/messages.js (no imports here).
 (() => {
   const HOST_ID = "__screensnap_editor";
-  document.getElementById(HOST_ID)?.remove();
 
   chrome.runtime.sendMessage({ type: "editor-get-image" }, (res) => {
     if (chrome.runtime.lastError || !res || !res.ok || !res.dataUrl) return;
     const img = new Image();
-    img.onload = () => new Editor(img, res.filename);
+    img.onload = () => {
+      // Re-injection (Annotate again while an editor is open) REPLACES the open editor with the latest
+      // capture: tear the old one down fully — listeners + canvases — without a cancel (the pending
+      // capture is the new one now), so there's only ever one editor and one Escape → one cancel. The
+      // stray-host sweep catches a host orphaned by an older content-script world (extension reload).
+      if (window.__screensnapEditor) window.__screensnapEditor.destroy(false);
+      document.getElementById(HOST_ID)?.remove();
+      window.__screensnapEditor = new Editor(img, res.filename);
+    };
     img.src = res.dataUrl;
   });
 
@@ -44,17 +51,30 @@
   const newAssetId = () =>
     (crypto && crypto.randomUUID) ? crypto.randomUUID() : `asset-${Date.now()}-${assetCounter++}`;
 
+  // [id, icon, label, shortcut key] — single-letter tool keys, Photoshop's letters where they map.
   const TOOLS = [
-    ["select", "move", "Move"],
-    ["pencil", "pencil", "Draw"],
-    ["arrow", "arrow", "Arrow"],
-    ["rect", "rect", "Rectangle"],
-    ["text", "type", "Text"],
-    ["highlight", "highlight", "Highlight"],
-    ["blur", "blur", "Blur / Redact"],
-    ["eraser", "eraser", "Eraser"],
-    ["crop", "crop", "Crop"],
+    ["select", "move", "Move", "v"],
+    ["pencil", "pencil", "Draw", "p"],
+    ["arrow", "arrow", "Arrow", "a"],
+    ["rect", "rect", "Rectangle", "r"],
+    ["text", "type", "Text", "t"],
+    ["highlight", "highlight", "Highlight", "h"],
+    ["blur", "blur", "Blur / Redact", "b"],
+    ["eraser", "eraser", "Eraser", "e"],
+    ["crop", "crop", "Crop", "c"],
   ];
+  const TOOL_KEYS = Object.fromEntries(TOOLS.map(([id, , , k]) => [k, id]));
+  // Transform / crop handle geometry, in SCREEN px (converted at the current scale).
+  const HANDLE_PX = 8;   // handle square size
+  const GRAB_PX = 8;     // reach of a handle / frame edge
+  const SNAP_PX = 8;     // smart-guide snap distance
+  const MIN_BOX = 4;     // smallest box (image px) a resize leaves
+  const MIN_CROP = 8;    // smallest crop frame (image px)
+  const NUDGE_RUN_MS = 1000; // arrow nudges closer together than this are one undo step
+  const GUIDE = "#d946ef"; // smart guides: magenta, as in Photoshop / photocraft, distinct from the green selection
+  // Handle positions as (hx, hy): -1 left/top, 0 middle, 1 right/bottom.
+  const HANDLES = [[-1, -1], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0]];
+  const resizeCursor = (hx, hy) => (hx && hy ? (hx === hy ? "nwse-resize" : "nesw-resize") : hx ? "ew-resize" : "ns-resize");
   const COLORS = ["#ef4444", "#f59e0b", "#22c55e", "#3b82f6", "#111111"];
   const WEIGHTS = [["sm", 2], ["md", 3.5], ["lg", 6]];
   // Crop aspect-ratio presets — [label, ratio]; ratio = width/height in image px, null = free.
@@ -96,6 +116,15 @@
       this.selected = null;
       this.drag = null;
       this.editingText = false;
+      this.textFinish = null;  // commit/cancel fn of the one open inline text box (see closeTextInput)
+      this.destroyed = false;
+      this.scale = 1;
+      this.hover = null;       // Move-tool rollover item (index), outlined thinly
+      this.guides = [];        // smart-guide lines of the move in progress: { x } | { y }
+      this.histSeq = 0;        // bumps on every history event (nudge runs coalesce while it holds)
+      this.nudgeRun = null;
+      this.prevTool = null;    // the tool to return to when Crop is applied / cancelled
+      this.exporting = false;
       this.crop = null;        // applied, non-destructive crop region in source-image coords {x,y,w,h}
       this.pendingCrop = null; // unconfirmed crop rect {x,y,w,h} awaiting Apply/Cancel
       this.cropRatio = null;   // null = free; else a number (w/h), e.g. 16/9 — constrains crop drags & preset fits
@@ -153,10 +182,12 @@
           .wt:hover { background: rgba(0,0,0,0.04); }
           .wt.on { background: rgba(22,163,74,0.1); border-color: rgba(22,163,74,0.25); }
           .wt i { width: 100%; border-radius: 4px; display: block; }
-          .stage { flex: 1; min-width: 0; min-height: 0; overflow: auto; background: #e9ebef; position: relative; text-align: center; padding: 24px; }
+          .stage { flex: 1; min-width: 0; min-height: 0; overflow: auto; scrollbar-gutter: stable; background: #e9ebef; position: relative; text-align: center; padding: 24px; }
           canvas { display: inline-block; vertical-align: top; box-shadow: 0 4px 24px rgba(0,0,0,0.12); background: #fff; }
           .txtin { position: absolute; background: transparent; border: 1px dashed ${GREEN}; outline: none;
             padding: 0 2px; margin: 0; font-family: ${SANS}; font-weight: 600; line-height: 1.1; }
+          .readout { position: absolute; display: none; z-index: 6; pointer-events: none; padding: 3px 7px; border-radius: 6px;
+            background: #1b1d21; color: #fff; font: 500 11px ${MONO}; white-space: nowrap; }
           .cropbar { position: absolute; display: none; gap: 6px; z-index: 5; padding: 5px;
             background: #1b1d21; border: 1px solid #2c2f36; border-radius: 10px;
             box-shadow: 0 6px 22px rgba(0,0,0,0.28); }
@@ -238,7 +269,7 @@
           </div>
           <div class="body">
             <div class="palette" id="palette"></div>
-            <div class="stage" id="stage"><canvas id="cv"></canvas><div class="cropbar" id="cropbar"><span class="ratios" id="ratios">${RATIOS.map(([label]) => `<button class="chip" data-ratio="${label}">${escapeHtml(label)}</button>`).join("")}</span><button class="ok" id="cropOk">${ico("crop", "#fff", 14)}Apply crop</button><button class="no" id="cropNo">${ico("x", "#e7e8ea", 14)}Cancel</button></div></div>
+            <div class="stage" id="stage"><canvas id="cv"></canvas><div class="cropbar" id="cropbar"><span class="ratios" id="ratios">${RATIOS.map(([label]) => `<button class="chip" data-ratio="${label}">${escapeHtml(label)}</button>`).join("")}</span><button class="ok" id="cropOk">${ico("crop", "#fff", 14)}Apply crop</button><button class="no" id="cropNo">${ico("x", "#e7e8ea", 14)}Cancel</button></div><div class="readout" id="readout"></div></div>
             <div class="layers" id="layers">
               <div class="ly-head"><span class="ttl">Layers</span><button class="ly-add" id="addImage" title="Add an image layer">${ico("image", "#3f3f46", 14)}Image</button></div>
               <div class="ly-list" id="lyList"></div>
@@ -262,7 +293,7 @@
 
       const pal = root.getElementById("palette");
       let html = "";
-      for (const [id, icon] of TOOLS) html += `<button class="tool ${id === this.tool ? "on" : ""}" data-tool="${id}" title="${TOOLS.find((t) => t[0] === id)[2]}">${ico(icon, id === this.tool ? GREEN : "#71717a")}</button>`;
+      for (const [id, icon, label, key] of TOOLS) html += `<button class="tool ${id === this.tool ? "on" : ""}" data-tool="${id}" title="${label} (${key.toUpperCase()})">${ico(icon, id === this.tool ? GREEN : "#71717a")}</button>`;
       html += `<div class="sep"></div>`;
       for (const c of COLORS) html += `<button class="sw ${c === this.color ? "on" : ""}" data-color="${c}" style="background:${c}"></button>`;
       html += `<div class="sep"></div>`;
@@ -282,6 +313,7 @@
       root.getElementById("save").onclick = () => this.save();
       root.getElementById("close").onclick = () => this.destroy(true);
       this.cropbar = root.getElementById("cropbar");
+      this.readout = root.getElementById("readout");
       root.getElementById("cropOk").onclick = () => this.applyCrop();
       root.getElementById("cropNo").onclick = () => this.cancelCrop();
       root.getElementById("ratios").addEventListener("click", (e) => {
@@ -313,40 +345,63 @@
       });
       this.renderLayers();
 
-      this.onKey = (e) => {
-        if (this.editingText) return; // let the text input handle its own keys
-        // A pending crop captures Enter (apply) / Escape (cancel) before global handlers.
-        if (this.pendingCrop) {
-          if (e.key === "Enter") { e.preventDefault(); return this.applyCrop(); }
-          if (e.key === "Escape") { e.preventDefault(); return this.cancelCrop(); }
-        }
-        if (e.key === "Escape") { e.preventDefault(); this.destroy(true); }
-        else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? this.redo() : this.undo(); }
-        else if ((e.key === "Delete" || e.key === "Backspace") && this.selected != null) { e.preventDefault(); this.deleteSelected(); }
-      };
+      this.onKey = (e) => this.key(e);
       window.addEventListener("keydown", this.onKey, true);
       this.canvas.addEventListener("pointerdown", (e) => this.down(e));
-      this.canvas.addEventListener("pointermove", (e) => this.move(e));
+      this.canvas.addEventListener("pointermove", (e) => (this.drag ? this.move(e) : this.hoverAt(e)));
       this.canvas.addEventListener("pointerup", () => this.up());
+      this.canvas.addEventListener("pointercancel", () => this.up());
+      this.canvas.addEventListener("pointerleave", () => { if (!this.drag) this.setHover(null); });
       // Double-click a text item to re-open its inline editor (any tool — it's an edit gesture).
       this.canvas.addEventListener("dblclick", (e) => this.onCanvasDblClick(e));
-      window.addEventListener("resize", () => this.render());
+      this.onResize = () => this.render();
+      window.addEventListener("resize", this.onResize);
+    }
+
+    // Keyboard, photocraft/Photoshop-style: tool letters, arrows nudge (⇧ ×10), Delete removes, ⌘/Ctrl+Z
+    // (⇧ redo), Esc steps back (crop frame → selection → close). Keys the editor acts on are swallowed so
+    // they neither scroll nor drive the page under the overlay.
+    key(e) {
+      if (this.editingText) return; // let the text input handle its own keys (incl. its own ⌘Z)
+      const k = e.key, mod = e.ctrlKey || e.metaKey;
+      const eat = () => { e.preventDefault(); e.stopPropagation(); };
+      const step = e.shiftKey ? 10 : 1;
+      const arrow = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[k];
+      if (this.tool === "crop") {
+        if (k === "Enter") { eat(); return this.applyCrop(); }
+        // Esc resets an edited frame first, then leaves the tool — it never closes the editor from here.
+        if (k === "Escape") { eat(); return this.cropDirty() ? this.resetCropFrame() : this.cancelCrop(); }
+        if (arrow && !mod) { eat(); return this.nudgeCrop(arrow[0], arrow[1]); }
+        if (mod && k.toLowerCase() === "z" && !e.shiftKey && this.cropDirty()) { eat(); return this.resetCropFrame(); }
+      }
+      if (k === "Escape") { eat(); return this.selected != null ? this.select(null) : this.destroy(true); }
+      if (mod && k.toLowerCase() === "z") { eat(); return e.shiftKey ? this.redo() : this.undo(); }
+      if ((k === "Delete" || k === "Backspace") && this.selected != null) { eat(); return this.deleteSelected(); }
+      if (arrow && !mod && this.selected != null) { eat(); return this.nudgeSelected(arrow[0], arrow[1]); }
+      const tool = !mod && !e.altKey && TOOL_KEYS[k.toLowerCase()];
+      if (tool) { eat(); if (tool !== this.tool) this.setTool(tool); }
     }
 
     setTool(t) {
-      // Switching tools abandons any un-applied crop selection.
-      if (t !== "crop") { this.pendingCrop = null; this.clearCropUI(); }
+      // Leaving Crop commits an edited frame (as photocraft / Photoshop do; it's undoable). Entering it
+      // shows the frame over the WHOLE image, starting from the applied crop, so it can be re-adjusted.
+      if (this.tool === "crop" && t !== "crop") { this.commitCrop(); this.pendingCrop = null; this.clearCropUI(); }
+      if (t === "crop" && this.tool !== "crop") { this.prevTool = this.tool; this.pendingCrop = this.cropBase(); }
       this.tool = t;
       if (t !== "select") this.selected = null;
+      this.hover = null;
       for (const b of this.root.querySelectorAll("[data-tool]")) {
         const on = b.dataset.tool === t;
         b.classList.toggle("on", on);
         b.querySelector("svg")?.setAttribute("stroke", on ? GREEN : "#71717a");
       }
-      this.canvas.style.cursor = t === "select" ? "default" : t === "text" ? "text" : "crosshair";
+      this.canvas.style.cursor = this.toolCursor();
       this.updateStatus();
       this.render();
+      if (t === "crop") this.showCropUI();
     }
+    toolCursor() { return this.tool === "select" ? "default" : this.tool === "text" ? "text" : "crosshair"; }
+    select(i) { this.selected = i; this.hover = null; this.render(); }
     setColor(c) { this.color = c; for (const b of this.root.querySelectorAll("[data-color]")) b.classList.toggle("on", b.dataset.color === c); if (this.selected != null) { this.pushHistory(); this.shapes[this.selected].color = c; this.render(); } this.updateStatus(); }
     setWeight(w) { this.weightId = w; for (const b of this.root.querySelectorAll("[data-weight]")) { const on = b.dataset.weight === w; b.classList.toggle("on", on); b.querySelector("i").style.background = on ? GREEN : "#9aa0ab"; } this.updateStatus(); }
     updateStatus() {
@@ -357,28 +412,32 @@
       r.getElementById("st-color").textContent = this.color;
     }
 
-    // Effective drawing surface (the applied crop, or the full image when uncropped).
-    curW() { return this.crop ? this.crop.w : this.iw; }
-    curH() { return this.crop ? this.crop.h : this.ih; }
-    cropOx() { return this.crop ? this.crop.x : 0; }
-    cropOy() { return this.crop ? this.crop.y : 0; }
+    // Effective drawing surface: the applied crop, or the full image when uncropped. While the Crop tool
+    // is up the view is the WHOLE image (no backdrop), so the frame can be moved or grown back past an
+    // applied crop; `exporting` forces the export view for Save / Copy.
+    cropEditing() { return this.tool === "crop" && !this.exporting; }
+    viewCrop() { return this.cropEditing() ? null : this.crop; }
+    curW() { const c = this.viewCrop(); return c ? c.w : this.iw; }
+    curH() { const c = this.viewCrop(); return c ? c.h : this.ih; }
+    cropOx() { const c = this.viewCrop(); return c ? c.x : 0; }
+    cropOy() { const c = this.viewCrop(); return c ? c.y : 0; }
+    // Grab reach for handles / edges, in image px (GRAB_PX on screen at the current scale).
+    grab() { return GRAB_PX / this.scale; }
 
     fit() {
-      const rect = this.stage.getBoundingClientRect();
-      const pad = 48;
-      // Fit the whole canvas (content + backdrop padding) so the displayed scale stays uniform.
-      const cw = this.fullW(), ch = this.fullH();
+      // clientWidth/Height exclude the scrollbar (the stage reserves its gutter), so a width-fit tall
+      // shot doesn't overflow sideways once its vertical scrollbar appears. 48 = the stage padding.
+      const availW = this.stage.clientWidth - 48, availH = this.stage.clientHeight - 48;
+      if (!(availW > 0 && availH > 0)) return; // not laid out: keep the last scale, never a bogus one
       // Tall full-page shots fit to WIDTH and scroll vertically (so they stay readable, not tiny);
       // normal/area shots are contained so they fit without scrolling.
-      const tall = ch > cw * 2.2;
-      let scale = tall
-        ? Math.min((rect.width - pad) / cw, 1)
-        : Math.min((rect.width - pad) / cw, (rect.height - pad) / ch, 1);
+      const fitScale = (w, h) => Math.min(availW / w, h > w * 2.2 ? 1 : availH / h, 1);
+      // Fit the whole canvas (content + backdrop padding) so the displayed scale stays uniform.
+      const cw = this.fullW(), ch = this.fullH();
       // Cropping must NOT magnify the content beyond how the full image was shown — otherwise cropping
-      // a downscaled screenshot suddenly zooms in. Cap at the uncropped image's fit scale so a crop
-      // keeps the same magnification (it just reframes).
-      const baseFit = Math.min((rect.width - pad) / this.iw, (rect.height - pad) / this.ih, 1);
-      scale = Math.min(scale, baseFit);
+      // a downscaled screenshot suddenly zooms in. Cap at the uncropped image's fit scale (same tall
+      // rule, or a tall shot would be capped to fit its HEIGHT) so a crop just reframes.
+      const scale = Math.min(fitScale(cw, ch), fitScale(this.iw, this.ih));
       this.scale = scale;
       this.canvas.style.width = Math.round(cw * scale) + "px";
       this.canvas.style.height = Math.round(ch * scale) + "px";
@@ -394,67 +453,203 @@
       };
     }
 
+    // Drags carry a `kind` for gestures on existing things ("move" / "resize" / "endpoint" on the selected
+    // item, "crop-*" on the crop frame); drawing a new item is a kind-less drag with the tool's fields.
     down(e) {
+      if (e.button !== 0) return;
       this.canvas.setPointerCapture(e.pointerId);
       const p = this.toImg(e);
-      if (this.tool === "select") {
-        const idx = this.topAt(p);
-        this.selected = idx;
-        if (idx != null) { this.drag = { move: true, idx, start: p, orig: JSON.parse(JSON.stringify(this.shapes[idx])) }; }
-        return this.render();
+      if (this.tool === "crop") return this.cropDown(p);
+      if (this.tool === "select") return this.selectDown(p, e);
+      if (this.tool === "text") {
+        // A click on existing text with the Text tool edits it, as Photoshop's Type tool does.
+        const i = this.topAt(p);
+        return i != null && this.shapes[i].type === "text" ? this.editText(i) : this.placeText(p, e);
       }
-      if (this.tool === "text") return this.placeText(p, e);
       if (this.tool === "eraser") return this.erase(p);
-      if (this.tool === "crop") {
-        // Starting a fresh crop drag discards any not-yet-applied selection.
-        this.pendingCrop = null;
-        this.clearCropUI();
-        this.selected = null;
-        this.drag = { tool: "crop", x1: p.x, y1: p.y, x2: p.x, y2: p.y };
-        return;
-      }
       const w = this.weightPx();
       this.selected = null;
       if (this.tool === "pencil" || this.tool === "highlight") this.drag = { tool: this.tool, color: this.color, width: w, points: [p] };
       else this.drag = { tool: this.tool, color: this.color, width: w, x1: p.x, y1: p.y, x2: p.x, y2: p.y };
     }
     move(e) {
-      if (!this.drag) return;
+      const d = this.drag;
+      if (!d) return;
       const p = this.toImg(e);
-      if (this.drag.move) {
-        // Snapshot the pre-move state on the FIRST actual movement (not a bare click), so a plain
-        // click-to-select neither adds a no-op undo entry nor wipes the redo stack.
-        if (!this.drag.moved) { this.drag.moved = true; this.pushHistory(); }
-        const dx = p.x - this.drag.start.x, dy = p.y - this.drag.start.y;
-        this.shapes[this.drag.idx] = translate(this.drag.orig, dx, dy);
-      } else if (this.drag.points) this.drag.points.push(p);
-      else { this.drag.x2 = p.x; this.drag.y2 = p.y; }
+      if (d.kind && d.kind.startsWith("crop")) return this.cropMove(d, p, e);
+      if (d.kind) return this.transformMove(d, p, e);
+      if (d.points) d.points.push(p);
+      else { d.x2 = p.x; d.y2 = p.y; }
       this.render();
     }
     up() {
-      if (!this.drag) return;
-      if (this.drag.tool === "crop") {
-        const rect = this.cropRect(this.drag);
-        this.drag = null;
-        // Too-small drags are ignored (no pending crop, no UI).
-        if (rect && rect.w >= 8 && rect.h >= 8) { this.pendingCrop = rect; this.showCropUI(); }
-        else { this.pendingCrop = null; this.clearCropUI(); }
-        return this.render();
-      }
-      if (!this.drag.move) {
-        const s = this.toShape(this.drag);
-        if (s) { this.pushHistory(); this.shapes.push(s); this.selected = null; this.redoStack = []; }
-      } else if (this.drag.moved) {
-        this.redoStack = []; // a real drag-move happened (history already pushed in move())
-      }
+      const d = this.drag;
+      if (!d) return;
       this.drag = null;
+      this.guides = [];
+      this.hideReadout();
+      if (d.kind && d.kind.startsWith("crop")) {
+        // A click (or a too-small drag) where a new frame would start keeps the frame it would replace.
+        const f = this.pendingCrop;
+        if (d.kind === "crop-draw" && (!f || f.w < MIN_CROP || f.h < MIN_CROP)) this.pendingCrop = d.prev;
+        this.render();
+        return this.showCropUI();
+      }
+      if (d.kind) {
+        if (d.moved) this.redoStack = []; // a real transform happened (history pushed on its first movement)
+      } else {
+        const s = this.toShape(d);
+        if (s) { this.pushHistory(); this.shapes.push(s); this.selected = null; this.redoStack = []; }
+      }
       this.render();
     }
+
+    // ── Move tool: select / move / resize, photocraft-style ──
+    // A press on the selected item's handles transforms it; on an item selects it and moves it (⌥ moves a
+    // copy); on empty space inside the selected item's box still moves it (strokes are thin); elsewhere
+    // deselects.
+    selectDown(p, e) {
+      const sel = this.selected != null ? this.shapes[this.selected] : null;
+      const h = sel && !sel.hidden ? this.handleAt(sel, p) : null;
+      if (h) {
+        this.drag = { kind: h.end ? "endpoint" : "resize", ...h, idx: this.selected, start: p, orig: clone(sel), box0: bbox(sel) };
+        return;
+      }
+      const top = this.topAt(p);
+      const idx = top != null ? top : sel && !sel.hidden && inBox(bbox(sel), p) ? this.selected : null;
+      if (idx != null) this.drag = { kind: "move", idx, start: p, orig: clone(this.shapes[idx]), box0: bbox(this.shapes[idx]), dup: e.altKey };
+      this.select(idx);
+    }
+    // The handle of selected item s under p: { hx, hy } on its box (corners only for text, whose corners
+    // scale it), { end } on an arrow's endpoint, or null.
+    handleAt(s, p) {
+      const tol = this.grab();
+      if (s.type === "arrow") {
+        if (Math.hypot(p.x - s.x2, p.y - s.y2) <= tol) return { end: 2 };
+        if (Math.hypot(p.x - s.x1, p.y - s.y1) <= tol) return { end: 1 };
+        return null;
+      }
+      const h = boxHit(bbox(s), p, tol, s.type !== "text");
+      return h && h !== "inside" ? h : null;
+    }
+    // Live transform of the selected item. History is snapshotted on the FIRST real movement (not a bare
+    // click), so click-to-select neither adds a no-op undo entry nor wipes redo; one gesture = one step.
+    transformMove(d, p, e) {
+      let dx = p.x - d.start.x, dy = p.y - d.start.y;
+      if (!d.moved) {
+        if (Math.hypot(dx, dy) * this.scale < 1) return; // sub-pixel jitter on a click isn't a move
+        d.moved = true;
+        this.pushHistory();
+        if (d.dup) { this.shapes.splice(d.idx + 1, 0, clone(d.orig)); d.idx += 1; this.selected = d.idx; } // ⌥-drag: move a copy
+      }
+      let s;
+      if (d.kind === "move") {
+        // ⇧ locks the move to the dominant axis; smart guides snap the free axes (⌘/Ctrl held: no snapping).
+        const lockX = e.shiftKey && Math.abs(dy) > Math.abs(dx), lockY = e.shiftKey && !lockX;
+        if (lockX) dx = 0;
+        if (lockY) dy = 0;
+        this.guides = [];
+        if (!(e.ctrlKey || e.metaKey)) {
+          const c = this.snapMove({ ...d.box0, x: d.box0.x + dx, y: d.box0.y + dy }, d.idx, !lockX, !lockY);
+          dx += c.x; dy += c.y;
+        }
+        s = translate(d.orig, dx, dy);
+      } else if (d.kind === "endpoint") {
+        // Drag one end of an arrow; ⇧ snaps the segment to 45° steps about the other end.
+        const o = d.orig, ax = d.end === 1 ? o.x2 : o.x1, ay = d.end === 1 ? o.y2 : o.y1;
+        let q = p;
+        if (e.shiftKey) {
+          const step = Math.PI / 4, a = Math.round(Math.atan2(p.y - ay, p.x - ax) / step) * step, len = Math.hypot(p.x - ax, p.y - ay);
+          q = { x: ax + len * Math.cos(a), y: ay + len * Math.sin(a) };
+        }
+        s = d.end === 1 ? { ...o, x1: q.x, y1: q.y } : { ...o, x2: q.x, y2: q.y };
+      } else {
+        // Resize: text always scales uniformly; images keep their proportions unless ⇧ (Photoshop CC's
+        // default, which photocraft follows); boxes and strokes are free unless ⇧. ⌥ resizes about the centre.
+        const t = d.orig.type, b0 = d.box0;
+        const keep = t === "text" || (t === "image" ? !e.shiftKey : e.shiftKey);
+        const ratio = keep && b0.w > 0 && b0.h > 0 ? b0.w / b0.h : null;
+        const box = resizeBox(b0, d.hx, d.hy, { x: dx, y: dy }, { ratio, alt: e.altKey, min: MIN_BOX });
+        s = resizeShape(d.orig, b0, box);
+        this.showReadout(e, box.w, box.h);
+      }
+      this.shapes[d.idx] = s;
+      this.render();
+    }
+    // Smart guides: a moving item's edges / centre snap to the visible image's edges / centre and to the
+    // other items' edges / centres within SNAP_PX screen px. Returns the correction to add on each free
+    // axis and records the guide lines render() draws.
+    snapMove(b, skip, snapX, snapY) {
+      const thr = SNAP_PX / this.scale;
+      const xs = [this.cropOx(), this.cropOx() + this.curW() / 2, this.cropOx() + this.curW()];
+      const ys = [this.cropOy(), this.cropOy() + this.curH() / 2, this.cropOy() + this.curH()];
+      this.shapes.forEach((s, i) => {
+        if (i === skip || s.hidden) return;
+        const o = bbox(s);
+        xs.push(o.x, o.x + o.w / 2, o.x + o.w);
+        ys.push(o.y, o.y + o.h / 2, o.y + o.h);
+      });
+      const best = (from, to) => {
+        let m = null;
+        for (const c of from) for (const t of to) { const dv = t - c; if (Math.abs(dv) <= thr && (!m || Math.abs(dv) < Math.abs(m.dv))) m = { dv, t }; }
+        return m;
+      };
+      const bx = snapX ? best([b.x, b.x + b.w / 2, b.x + b.w], xs) : null;
+      const by = snapY ? best([b.y, b.y + b.h / 2, b.y + b.h], ys) : null;
+      if (bx) this.guides.push({ x: bx.t });
+      if (by) this.guides.push({ y: by.t });
+      return { x: bx ? bx.dv : 0, y: by ? by.dv : 0 };
+    }
+    // Arrow-key nudge of the selected item, 1 image px (⇧ 10). A run of nudges (each within NUDGE_RUN_MS
+    // of the last, nothing else recorded in between) is ONE undo step, like photocraft's nudge bundling,
+    // so a held arrow key undoes in one go.
+    nudgeSelected(dx, dy) {
+      const i = this.selected, now = Date.now(), run = this.nudgeRun;
+      if (!(run && run.idx === i && run.seq === this.histSeq && now - run.t < NUDGE_RUN_MS)) { this.pushHistory(); this.redoStack = []; }
+      this.nudgeRun = { idx: i, seq: this.histSeq, t: now };
+      this.shapes[i] = translate(this.shapes[i], dx, dy);
+      this.render();
+    }
+
+    // Pointer feedback with no button down: the cursor says what a press would do (resize / move / draw),
+    // and with the Move tool the item a click would pick gets a thin rollover outline (photocraft's
+    // "highlight on rollover"). Repaints only when the rollover item changes.
+    hoverAt(e) {
+      const p = this.toImg(e);
+      let cursor = this.toolCursor(), hov = null;
+      if (this.tool === "crop" && this.pendingCrop) {
+        const h = boxHit(this.pendingCrop, p, this.grab());
+        if (h && h !== "inside") cursor = resizeCursor(h.hx, h.hy);
+        else if (h === "inside" && !sameRect(this.pendingCrop, this.fullRect())) cursor = "move";
+      } else if (this.tool === "select") {
+        const sel = this.selected != null ? this.shapes[this.selected] : null;
+        const h = sel && !sel.hidden ? this.handleAt(sel, p) : null;
+        if (h) cursor = h.end ? "move" : resizeCursor(h.hx, h.hy);
+        else {
+          const top = this.topAt(p);
+          if (top != null) { cursor = "move"; if (top !== this.selected) hov = top; }
+          else if (sel && !sel.hidden && inBox(bbox(sel), p)) cursor = "move";
+        }
+      }
+      this.canvas.style.cursor = cursor;
+      this.setHover(hov);
+    }
+    setHover(i) { if (i === this.hover) return; this.hover = i; this.render(); }
+
+    // W × H beside the pointer while a crop frame or an item is being sized (photocraft's sizing readout).
+    showReadout(e, w, h) {
+      const r = this.stage.getBoundingClientRect(), el = this.readout;
+      el.textContent = `${Math.round(w)} × ${Math.round(h)}`;
+      el.style.display = "block";
+      el.style.left = Math.round(e.clientX - r.left + this.stage.scrollLeft + 14) + "px";
+      el.style.top = Math.round(e.clientY - r.top + this.stage.scrollTop + 16) + "px";
+    }
+    hideReadout() { if (this.readout) this.readout.style.display = "none"; }
 
     // Top-most text item under the pointer → re-open its inline editor. Other shape types are ignored
     // (a double-click on them does nothing special).
     onCanvasDblClick(e) {
-      if (this.editingText) return;
+      if (this.editingText || this.tool === "crop") return;
       const p = this.toImg(e);
       const tol = 9 * this.unit;
       for (let i = this.shapes.length - 1; i >= 0; i--) {
@@ -464,20 +659,71 @@
       }
     }
 
+    // ── crop (non-destructive) ──
+    // The Crop tool always shows a frame over the whole image: the applied crop if there is one, else a
+    // frame around everything (photocraft / Photoshop do the same). Drag inside it to move it (clamped to
+    // the image), drag an edge or corner to resize it (a ratio preset — or ⇧ — keeps its proportions, ⌥
+    // resizes about the centre), drag outside it — or inside the untouched full frame — to draw a new one
+    // (⇧ square). Arrows nudge it. Apply / ↵ commits it as this.crop, Cancel discards the edit, Esc resets
+    // an edited frame and then leaves the tool, and switching tools commits an edited frame.
+    fullRect() { return { x: 0, y: 0, w: this.iw, h: this.ih }; }
+    cropBase() { return this.crop ? { ...this.crop } : this.fullRect(); }
+    cropDirty() { return !!this.pendingCrop && !sameRect(this.pendingCrop, this.cropBase()); }
+    commitCrop() {
+      if (!this.cropDirty()) return;
+      this.pushHistory();
+      const c = this.pendingCrop;
+      this.crop = sameRect(c, this.fullRect()) ? null : { x: c.x, y: c.y, w: c.w, h: c.h };
+      this.redoStack = [];
+    }
+    resetCropFrame() { this.pendingCrop = this.cropBase(); this.render(); this.showCropUI(); }
+    cropDown(p) {
+      const f = this.pendingCrop || (this.pendingCrop = this.cropBase());
+      const h = boxHit(f, p, this.grab());
+      if (h && h !== "inside") this.drag = { kind: "crop-resize", hx: h.hx, hy: h.hy, start: p, orig: { ...f } };
+      else if (h === "inside" && !sameRect(f, this.fullRect())) this.drag = { kind: "crop-move", start: p, orig: { ...f } };
+      else {
+        const x = clamp(p.x, 0, this.iw), y = clamp(p.y, 0, this.ih);
+        this.drag = { kind: "crop-draw", x1: x, y1: y, x2: x, y2: y, prev: { ...f } };
+      }
+      this.clearCropUI(); // the Apply bar steps aside during the gesture and comes back on release
+    }
+    cropMove(d, p, e) {
+      const W = this.iw, H = this.ih;
+      let r;
+      if (d.kind === "crop-draw") { d.x2 = p.x; d.y2 = p.y; r = this.cropRect(d, this.cropRatio || (e.shiftKey ? 1 : null)); }
+      else {
+        const dx = p.x - d.start.x, dy = p.y - d.start.y;
+        if (d.kind === "crop-move") r = { ...d.orig, x: clamp(d.orig.x + dx, 0, W - d.orig.w), y: clamp(d.orig.y + dy, 0, H - d.orig.h) };
+        else {
+          const ratio = this.cropRatio || (e.shiftKey ? d.orig.w / d.orig.h : null);
+          r = resizeBox(d.orig, d.hx, d.hy, { x: dx, y: dy }, { ratio, alt: e.altKey, bounds: { w: W, h: H }, min: MIN_CROP });
+        }
+      }
+      this.pendingCrop = intRect(r, W, H);
+      if (d.kind !== "crop-move") this.showReadout(e, this.pendingCrop.w, this.pendingCrop.h);
+      this.render();
+    }
+    nudgeCrop(dx, dy) {
+      const f = this.pendingCrop || this.cropBase();
+      this.pendingCrop = { ...f, x: clamp(f.x + dx, 0, this.iw - f.w), y: clamp(f.y + dy, 0, this.ih - f.h) };
+      this.render();
+      this.positionCropUI();
+    }
+
     // Normalize a crop drag into {x,y,w,h}, clamped to the source image bounds.
-    // With a fixed cropRatio, the rect grows from the drag's anchor corner (x1,y1) toward the
+    // With a fixed ratio, the rect grows from the drag's anchor corner (x1,y1) toward the
     // pointer (x2,y2): width is taken from the drag, height derived as w/ratio (or vice-versa,
     // whichever stays in bounds), then clamped so the ratio-locked rect never leaves the image.
-    cropRect(d) {
-      if (this.cropRatio) return this.cropRectRatio(d);
+    cropRect(d, ratio = this.cropRatio) {
+      if (ratio) return this.cropRectRatio(d, ratio);
       let x = Math.min(d.x1, d.x2), y = Math.min(d.y1, d.y2);
       let w = Math.abs(d.x2 - d.x1), h = Math.abs(d.y2 - d.y1);
       x = Math.max(0, Math.min(x, this.iw)); y = Math.max(0, Math.min(y, this.ih));
       w = Math.min(w, this.iw - x); h = Math.min(h, this.ih - y);
       return { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) };
     }
-    cropRectRatio(d) {
-      const ratio = this.cropRatio;
+    cropRectRatio(d, ratio) {
       const ax = d.x1, ay = d.y1;                 // fixed anchor corner
       const dirX = d.x2 >= ax ? 1 : -1, dirY = d.y2 >= ay ? 1 : -1;
       let w = Math.abs(d.x2 - ax);
@@ -497,7 +743,7 @@
     // Float the Apply/Cancel bar just below the selection's bottom-right (in stage coords),
     // clamped so it never spills outside the visible canvas.
     positionCropUI() {
-      const c = this.pendingCrop; if (!c || !this.cropbar) return;
+      const c = this.pendingCrop; if (!c || !this.cropbar || !this.cropEditing()) return;
       const sc = this.scale, ox = this.cropOx(), oy = this.cropOy(), pad = this.bdPadPx();
       // Canvas display now starts with the backdrop padding, so content px shift by (pad * sc).
       const left0 = this.canvas.offsetLeft + pad * sc, top0 = this.canvas.offsetTop + pad * sc;
@@ -513,26 +759,12 @@
       this.cropbar.style.top = Math.round(by) + "px";
     }
 
-    // Apply the pending crop non-destructively: it becomes (or replaces) this.crop, which
-    // render()/save() honor. Pushed to history so undo restores the prior crop + shapes.
-    applyCrop() {
-      const c = this.pendingCrop; if (!c) return;
-      this.pushHistory();
-      // pendingCrop is already in absolute source-image coords (toImg adds the current crop
-      // origin), so a re-crop of an already-cropped view composes correctly with no extra math.
-      this.crop = { x: c.x, y: c.y, w: c.w, h: c.h };
-      this.pendingCrop = null;
-      this.clearCropUI();
-      this.redoStack = [];
-      this.selected = null;
-      this.render();
-      this.updateStatus();
-    }
-    cancelCrop() {
-      this.pendingCrop = null;
-      this.clearCropUI();
-      this.render();
-    }
+    // Apply the frame non-destructively: it becomes (or replaces) this.crop, which render()/save()
+    // honor, in one undo step; the frame is in absolute source-image coords, so re-adjusting an applied
+    // crop needs no extra math. Then back to the tool used before Crop. Cancel drops the edit.
+    applyCrop() { this.commitCrop(); this.leaveCrop(); }
+    cancelCrop() { this.pendingCrop = this.cropBase(); this.leaveCrop(); }
+    leaveCrop() { this.setTool(this.prevTool && this.prevTool !== "crop" ? this.prevTool : "select"); }
 
     // ── crop aspect-ratio presets ──
     // Look up a ratio (number|null) by its preset label.
@@ -541,39 +773,20 @@
       const active = (RATIOS.find((r) => r[1] === this.cropRatio) || RATIOS[0])[0];
       for (const b of this.root.querySelectorAll("[data-ratio]")) b.classList.toggle("on", b.dataset.ratio === active);
     }
-    // Set the active aspect-ratio for cropping. The chips work whether or not the crop tool is
-    // active or a selection exists — picking a ratio refits any pending/applied crop, or creates a
-    // fresh centered selection over the current (cropped or full) image so the user can confirm it.
+    // Set the active aspect-ratio for cropping (switching to the Crop tool if needed). A preset refits
+    // the frame to the largest rect of that ratio centred in it — never adding area, as photocraft's
+    // presets don't — and then holds while the frame is drawn or resized. Free leaves the frame as-is.
     setCropRatio(label) {
       this.cropRatio = this.ratioFor(label);
       this.syncRatioChips();
-      // Switch to the crop tool so the affordance/Apply bar make sense.
       if (this.tool !== "crop") this.setTool("crop");
-      if (this.cropRatio == null) { this.render(); return; } // Free: leave any selection as-is
-      // Refit an existing pending selection (or the applied crop) around its center; otherwise make one.
-      const base = this.pendingCrop || this.crop;
-      const cx = base ? base.x + base.w / 2 : this.cropOx() + this.curW() / 2;
-      const cy = base ? base.y + base.h / 2 : this.cropOy() + this.curH() / 2;
-      this.pendingCrop = this.ratioRectAround(cx, cy, base ? Math.max(base.w, base.h) : null);
-      this.showCropUI();
+      if (this.cropRatio != null) {
+        const f = this.pendingCrop || this.cropBase(), r = this.cropRatio;
+        const w = Math.min(f.w, f.h * r), h = w / r;
+        this.pendingCrop = intRect({ x: f.x + (f.w - w) / 2, y: f.y + (f.h - h) / 2, w, h }, this.iw, this.ih);
+      }
       this.render();
-    }
-    // Build a ratio-locked rect centered on (cx,cy). `pref` biases the size (a prior selection's
-    // larger side) so a refit roughly preserves scale; falls back to a ~90% fit of the current
-    // (cropped or full) image. Always clamped to image bounds with the ratio preserved.
-    ratioRectAround(cx, cy, pref) {
-      const ratio = this.cropRatio;
-      const W = this.curW(), H = this.curH();
-      // Largest ratio-locked rect that fits the current image region.
-      let w = Math.min(W, H * ratio), h = w / ratio;
-      // 90% fit when creating fresh; honor a preferred long-side when refitting an existing crop.
-      if (pref != null) { const pw = ratio >= 1 ? pref : pref * ratio; w = Math.min(w, pw); h = w / ratio; }
-      else { w *= 0.9; h = w / ratio; }
-      let x = cx - w / 2, y = cy - h / 2;
-      // Clamp center so the whole rect stays inside the source image.
-      x = Math.max(0, Math.min(x, this.iw - w));
-      y = Math.max(0, Math.min(y, this.ih - h));
-      return { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) };
+      this.showCropUI();
     }
 
     // ── backdrop (the pretty-screenshot wrap) ──
@@ -611,7 +824,7 @@
       if (on) r.getElementById("bdPad").value = Math.round(this.backdrop.pad * 100);
     }
     // Backdrop padding in source-image px (a fraction of the content width). Content = cropped region.
-    bdPadPx() { return this.backdrop ? Math.round(this.curW() * this.backdrop.pad) : 0; }
+    bdPadPx() { return this.backdrop && !this.cropEditing() ? Math.round(this.curW() * this.backdrop.pad) : 0; }
     // Full canvas dimensions including the backdrop padding around the content.
     fullW() { return this.curW() + 2 * this.bdPadPx(); }
     fullH() { return this.curH() + 2 * this.bdPadPx(); }
@@ -624,13 +837,14 @@
     }
     erase(p) {
       const idx = this.topAt(p);
-      if (idx != null) { this.pushHistory(); this.shapes.splice(idx, 1); this.selected = null; this.redoStack = []; this.render(); }
+      if (idx != null) { this.pushHistory(); this.shapes.splice(idx, 1); this.selected = null; this.hover = null; this.redoStack = []; this.render(); }
     }
     deleteSelected() {
       if (this.selected == null) return;
       this.pushHistory();
       this.shapes.splice(this.selected, 1);
       this.selected = null;
+      this.hover = null;
       this.redoStack = [];
       this.render();
     }
@@ -737,6 +951,7 @@
     // edited text back into the SAME shape (position/color/size preserved). Empty → the shape is left
     // unchanged (we don't delete on clear here; the × / Delete handle removal). Escape cancels.
     editText(i) {
+      this.closeTextInput(true); // one box at a time — commit any open one before this one goes live
       const s = this.shapes[i];
       if (!s || s.type !== "text") return;
       this.editingText = true;
@@ -758,9 +973,10 @@
       let done = false;
       const finish = (commit) => {
         if (done) return; done = true;
+        if (this.textFinish === finish) this.textFinish = null;
+        this.editingText = !!this.textFinish;
         const text = input.value.trim();
         input.remove();
-        this.editingText = false;
         s.hidden = false; // restore visibility regardless of outcome
         if (commit && text && text !== s.text) {
           this.pushHistory();
@@ -769,6 +985,7 @@
         }
         this.render();
       };
+      this.textFinish = finish;
       input.addEventListener("blur", () => finish(true));
       input.addEventListener("keydown", (ev) => {
         ev.stopPropagation();
@@ -776,6 +993,11 @@
         else if (ev.key === "Escape") { ev.preventDefault(); finish(false); }
       });
     }
+    // Commit (or drop) the open inline text box, if any. Only one may be live: a box opened while
+    // another is up (click elsewhere with the Text tool) must close the old one FIRST — its late blur
+    // would otherwise clear editingText under the new box, so Escape / Ctrl+Z typed there would reach
+    // the editor (closing it, undoing the canvas) instead of the box.
+    closeTextInput(commit) { const f = this.textFinish; this.textFinish = null; if (f) f(commit); }
 
     // ── image layers ──
     // Decode a picked file into an ImageBitmap, register it in the asset map under a fresh id, and
@@ -815,6 +1037,7 @@
     }
 
     placeText(p, e) {
+      this.closeTextInput(true); // one box at a time — commit the open one before this one goes live
       this.editingText = true;
       this.selected = null;
       const size = this.textPx();
@@ -831,21 +1054,26 @@
       input.style.fontSize = size * sc + "px";
       this.stage.appendChild(input);
       setTimeout(() => input.focus(), 0);
-      const commit = () => {
-        const text = input.value.trim();
+      let done = false;
+      const finish = (commit) => {
+        if (done) return; done = true;
+        if (this.textFinish === finish) this.textFinish = null;
+        this.editingText = !!this.textFinish;
+        const text = commit ? input.value.trim() : "";
         input.remove();
-        this.editingText = false;
         if (text) { this.pushHistory(); this.shapes.push({ type: "text", color: this.color, size, x: p.x, y: p.y, text }); this.redoStack = []; this.render(); }
       };
-      input.addEventListener("blur", commit);
+      this.textFinish = finish;
+      input.addEventListener("blur", () => finish(true));
       input.addEventListener("keydown", (ev) => {
         ev.stopPropagation();
-        if (ev.key === "Enter") input.blur();
-        else if (ev.key === "Escape") { input.value = ""; input.blur(); }
+        if (ev.key === "Enter") { ev.preventDefault(); finish(true); }
+        else if (ev.key === "Escape") { ev.preventDefault(); finish(false); }
       });
     }
 
     render() {
+      if (this.destroyed) return; // a late blur / toBlob after close must not repaint freed canvases
       this.fit();
       const ctx = this.ctx;
       const pad = this.bdPadPx();
@@ -853,13 +1081,15 @@
       this.canvas.width = this.fullW();
       this.canvas.height = this.fullH();
 
-      // Paint the backdrop (background + shadowed rounded card) behind the content, if enabled.
-      if (this.backdrop) this.paintBackdrop(ctx, pad);
+      // Paint the backdrop (background + shadowed rounded card) behind the content, if enabled. Crop
+      // mode shows the bare image, so the frame reads against the real edges.
+      const bd = this.backdrop && !this.cropEditing();
+      if (bd) this.paintBackdrop(ctx, pad);
 
       ctx.save();
       // Content is clipped to a rounded-rect when a backdrop is on; the round corners read on the
       // image edges only (annotations inside stay sharp, the crop dim/guides draw on top, unclipped).
-      if (this.backdrop) {
+      if (bd) {
         const r = Math.round(this.curW() * this.backdrop.radius);
         ctx.beginPath();
         roundRectPath(ctx, pad, pad, this.curW(), this.curH(), r);
@@ -871,13 +1101,20 @@
       ctx.drawImage(this.img, 0, 0);
       // Hidden layers are skipped both on-canvas and (since save()/copy() re-render first) in export.
       for (const s of this.shapes) { if (!s.hidden) drawShape(ctx, s, this.unit, this.blurCanvas, this.assets); }
-      if (this.drag && !this.drag.move && this.drag.tool !== "crop") { const s = this.toShape(this.drag); if (s) drawShape(ctx, s, this.unit, this.blurCanvas, this.assets); }
-      if (this.selected != null && this.shapes[this.selected]) this.drawSelection(this.shapes[this.selected]);
-      // Live crop affordance: the in-progress drag rect, or the pending (awaiting-apply) rect.
-      const live = this.drag && this.drag.tool === "crop" ? this.cropRect(this.drag) : this.pendingCrop;
-      if (live && live.w > 0 && live.h > 0) this.drawCropOverlay(ctx, live);
+      if (this.drag && !this.drag.kind) { const s = this.toShape(this.drag); if (s) drawShape(ctx, s, this.unit, this.blurCanvas, this.assets); }
+      // Editing affordances (never in an export): the crop frame in Crop mode; otherwise the rollover
+      // outline, the selected item's transform box and any smart guides of the move in progress.
+      if (!this.exporting && this.cropEditing()) {
+        const f = this.pendingCrop;
+        if (f && f.w > 0 && f.h > 0) this.drawCropOverlay(ctx, f);
+      } else if (!this.exporting) {
+        const hov = this.hover != null && this.tool === "select" ? this.shapes[this.hover] : null;
+        if (hov && !hov.hidden && this.hover !== this.selected) this.drawRollover(hov);
+        if (this.selected != null && this.shapes[this.selected]) this.drawSelection(this.shapes[this.selected]);
+        if (this.guides.length) this.drawGuides();
+      }
       ctx.restore();
-      // Keep the floating Apply/Cancel buttons glued to the selection as it (or the view) changes.
+      // Keep the floating Apply/Cancel buttons glued to the frame as it (or the view) changes.
       if (this.pendingCrop) this.positionCropUI();
       // Re-paint the layers list to mirror the current stack / selection / visibility.
       this.renderLayers();
@@ -938,17 +1175,59 @@
       ctx.strokeStyle = "#fff";
       ctx.lineWidth = Math.max(1, u);
       ctx.strokeRect(c.x, c.y, c.w, c.h);
+      // 8 resize handles (the whole edge grabs; these show where)
+      for (const [hx, hy] of HANDLES) this.drawHandle(c.x + ((hx + 1) / 2) * c.w, c.y + ((hy + 1) / 2) * c.h, "#18181b");
       ctx.restore();
     }
+    // One square handle, HANDLE_PX on screen whatever the zoom (the canvas is image-resolution and
+    // CSS-scaled, so screen px are 1 / scale image px).
+    drawHandle(x, y, edge = GREEN) {
+      const ctx = this.ctx, k = 1 / this.scale, hs = HANDLE_PX * k;
+      ctx.save();
+      ctx.fillStyle = "#fff"; ctx.strokeStyle = edge; ctx.lineWidth = 1.5 * k; ctx.setLineDash([]);
+      ctx.fillRect(x - hs / 2, y - hs / 2, hs, hs);
+      ctx.strokeRect(x - hs / 2, y - hs / 2, hs, hs);
+      ctx.restore();
+    }
+    // The transform box: the item's bounds with square handles (corners only for text, whose corners
+    // scale it), or an arrow's two endpoint handles.
     drawSelection(s) {
-      const b = bbox(s, this.ctx);
-      const pad = 6 * this.unit;
-      const ctx = this.ctx;
+      const ctx = this.ctx, k = 1 / this.scale;
       ctx.save();
       ctx.strokeStyle = GREEN;
-      ctx.setLineDash([7 * this.unit, 5 * this.unit]);
-      ctx.lineWidth = 1.5 * this.unit;
-      ctx.strokeRect(b.x - pad, b.y - pad, b.w + pad * 2, b.h + pad * 2);
+      ctx.lineWidth = 1.5 * k;
+      if (s.type === "arrow") {
+        ctx.setLineDash([5 * k, 4 * k]);
+        ctx.beginPath(); ctx.moveTo(s.x1, s.y1); ctx.lineTo(s.x2, s.y2); ctx.stroke();
+        ctx.restore();
+        this.drawHandle(s.x1, s.y1); this.drawHandle(s.x2, s.y2);
+        return;
+      }
+      const b = bbox(s);
+      ctx.strokeRect(b.x, b.y, b.w, b.h);
+      ctx.restore();
+      for (const [hx, hy] of HANDLES) if (s.type !== "text" || (hx && hy)) this.drawHandle(b.x + ((hx + 1) / 2) * b.w, b.y + ((hy + 1) / 2) * b.h);
+    }
+    drawRollover(s) {
+      const ctx = this.ctx, k = 1 / this.scale, b = bbox(s);
+      ctx.save();
+      ctx.strokeStyle = GREEN; ctx.globalAlpha = 0.7; ctx.lineWidth = k;
+      if (s.type === "arrow") { ctx.beginPath(); ctx.moveTo(s.x1, s.y1); ctx.lineTo(s.x2, s.y2); ctx.stroke(); }
+      else ctx.strokeRect(b.x, b.y, b.w, b.h);
+      ctx.restore();
+    }
+    // Smart guides across the visible image, at the edge / centre lines a move snapped to.
+    drawGuides() {
+      const ctx = this.ctx, k = 1 / this.scale;
+      const x0 = this.cropOx(), y0 = this.cropOy(), x1 = x0 + this.curW(), y1 = y0 + this.curH();
+      ctx.save();
+      ctx.strokeStyle = GUIDE; ctx.lineWidth = k;
+      ctx.beginPath();
+      for (const g of this.guides) {
+        if (g.x != null) { ctx.moveTo(g.x, y0); ctx.lineTo(g.x, y1); }
+        else { ctx.moveTo(x0, g.y); ctx.lineTo(x1, g.y); }
+      }
+      ctx.stroke();
       ctx.restore();
     }
 
@@ -960,24 +1239,41 @@
     // `hidden` flag is plain data and round-trips automatically.
     snapshot() { return JSON.stringify({ shapes: this.shapes, crop: this.crop, backdrop: this.backdrop }); }
     restore(json) { const s = JSON.parse(json); this.shapes = s.shapes; this.crop = s.crop || null; this.backdrop = s.backdrop || null; this.syncBackdropUI(); }
-    pushHistory() { this.undoStack.push(this.snapshot()); if (this.undoStack.length > 80) this.undoStack.shift(); }
-    undo() { if (!this.undoStack.length) return; this.redoStack.push(this.snapshot()); this.restore(this.undoStack.pop()); this.selected = null; this.pendingCrop = null; this.clearCropUI(); this.render(); }
-    redo() { if (!this.redoStack.length) return; this.undoStack.push(this.snapshot()); this.restore(this.redoStack.pop()); this.selected = null; this.pendingCrop = null; this.clearCropUI(); this.render(); }
+    // histSeq counts history events, so a nudge run can tell nothing else was recorded since it began.
+    pushHistory() { this.histSeq++; this.undoStack.push(this.snapshot()); if (this.undoStack.length > 80) this.undoStack.shift(); }
+    undo() { if (!this.undoStack.length) return; this.redoStack.push(this.snapshot()); this.restore(this.undoStack.pop()); this.afterHistory(); }
+    redo() { if (!this.redoStack.length) return; this.undoStack.push(this.snapshot()); this.restore(this.redoStack.pop()); this.afterHistory(); }
+    // In Crop mode the frame follows the restored crop; elsewhere there is no frame.
+    afterHistory() {
+      this.histSeq++;
+      this.selected = null; this.hover = null;
+      if (this.tool === "crop") this.pendingCrop = this.cropBase();
+      else { this.pendingCrop = null; this.clearCropUI(); }
+      this.render();
+    }
 
+    // Paint the export view — applied crop + backdrop, no frame / handles / rollover / guides — and return
+    // a function that restores the editing view. A frame edited in Crop is committed first (as leaving
+    // the tool would), so Save / Copy take the crop the user is looking at; it stays undoable.
+    exportView() {
+      if (this.tool === "crop") { this.commitCrop(); this.pendingCrop = this.cropBase(); }
+      const sel = this.selected, hov = this.hover;
+      this.selected = null; this.hover = null; this.exporting = true;
+      this.render();
+      return () => { this.exporting = false; this.selected = sel; this.hover = hov; this.render(); };
+    }
     async copy() {
+      let restore = null;
       try {
-        // Drop any un-applied crop overlay so it isn't baked into the exported pixels.
-        this.pendingCrop = null; this.clearCropUI(); this.selected = null; this.render();
+        restore = this.exportView();
         const blob = await new Promise((r) => this.canvas.toBlob(r, "image/png"));
+        restore(); restore = null;
         await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
         this.flash("copy", "Copied ✓");
-      } catch { this.flash("copy", "Blocked"); }
+      } catch { if (restore) restore(); this.flash("copy", "Blocked"); }
     }
     save() {
-      // Drop any un-applied crop overlay so the dim/guides aren't baked into the PNG.
-      this.pendingCrop = null; this.clearCropUI();
-      this.selected = null;
-      this.render();
+      this.exportView(); // no restore: the editor closes once the PNG is handed off
       const dataUrl = this.canvas.toDataURL("image/png");
       chrome.runtime.sendMessage({ type: "editor-save", dataUrl, filename: this.filename }, () => this.destroy(false));
     }
@@ -988,9 +1284,22 @@
       setTimeout(() => (b.innerHTML = prev), 1200);
     }
     destroy(cancelled) {
+      if (this.destroyed) return;
+      this.destroyed = true;
+      this.textFinish = null; // an open text box dies with the host
       window.removeEventListener("keydown", this.onKey, true);
+      window.removeEventListener("resize", this.onResize);
       if (cancelled) chrome.runtime.sendMessage({ type: "editor-cancel" });
       this.host.remove();
+      // Free the big pixel buffers now instead of whenever GC gets to them: a Retina full-page shot is
+      // ~190 MB per canvas (main + blur), plus the decoded image and any image layers.
+      this.canvas.width = this.canvas.height = 0;
+      this.blurCanvas.width = this.blurCanvas.height = 0;
+      for (const bm of this.assets.values()) bm.close?.();
+      this.assets.clear();
+      this.img = null;
+      this.undoStack = []; this.redoStack = [];
+      if (window.__screensnapEditor === this) window.__screensnapEditor = null;
     }
   }
 
@@ -1018,10 +1327,13 @@
     ctx.lineTo(s.x2 - head * Math.cos(ang + Math.PI / 6), s.y2 - head * Math.sin(ang + Math.PI / 6));
     ctx.closePath(); ctx.fill();
   }
-  function bbox(s, ctx) {
+  // Text is measured on one shared scratch context, so hit-testing, the transform box and resizing all
+  // agree on its width (hit() used to fall back to a character-count guess).
+  const MEASURE = document.createElement("canvas").getContext("2d");
+  function bbox(s) {
     if (s.type === "rect" || s.type === "blur" || s.type === "image") return { x: s.x, y: s.y, w: s.w, h: s.h };
     if (s.type === "arrow") return { x: Math.min(s.x1, s.x2), y: Math.min(s.y1, s.y2), w: Math.abs(s.x2 - s.x1), h: Math.abs(s.y2 - s.y1) };
-    if (s.type === "text") { let w = s.size * s.text.length * 0.6; try { ctx.save(); ctx.font = `600 ${s.size}px ${SANS}`; w = ctx.measureText(s.text).width; ctx.restore(); } catch {} return { x: s.x, y: s.y, w, h: s.size }; }
+    if (s.type === "text") { MEASURE.font = `600 ${s.size}px ${SANS}`; return { x: s.x, y: s.y, w: MEASURE.measureText(s.text).width, h: s.size }; }
     const xs = s.points.map((p) => p.x), ys = s.points.map((p) => p.y);
     return { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
   }
@@ -1031,6 +1343,73 @@
     if (s.type === "arrow") return distToSeg(p, { x: s.x1, y: s.y1 }, { x: s.x2, y: s.y2 }) < (s.width || 6) + tol;
     if (s.points) return s.points.some((pt) => Math.hypot(pt.x - p.x, pt.y - p.y) < (s.width || 6) + tol);
     return false;
+  }
+  const clone = (o) => JSON.parse(JSON.stringify(o));
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const sameRect = (a, b) => !!a && !!b && a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
+  const inBox = (b, p) => p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h;
+  // Whole-pixel copy of r, at least 1 px and kept inside a W × H image.
+  function intRect(r, W, H) {
+    const w = clamp(Math.round(r.w), 1, W), h = clamp(Math.round(r.h), 1, H);
+    return { x: clamp(Math.round(r.x), 0, W - w), y: clamp(Math.round(r.y), 0, H - h), w, h };
+  }
+  // What part of box b point p is on: { hx, hy } for an edge or corner (-1 left/top, 1 right/bottom, 0 not
+  // that axis), "inside", or null. Edges grab along their whole length within `tol` image px; on the inner
+  // side the reach shrinks to a quarter of the side so a small box still has a middle to move it by.
+  // With edges=false only corners count (text), and a pure edge falls through to inside / null.
+  function boxHit(b, p, tol, edges = true) {
+    const axis = (lo, hi, v, near) => {
+      if (!near) return 0;
+      const t = Math.max(0, Math.min(tol, (hi - lo) / 4));
+      const atLo = v >= lo - tol && v <= lo + t, atHi = v <= hi + tol && v >= hi - t;
+      if (atLo && atHi) return Math.abs(v - lo) <= Math.abs(v - hi) ? -1 : 1;
+      return atLo ? -1 : atHi ? 1 : 0;
+    };
+    const nearX = p.x >= b.x - tol && p.x <= b.x + b.w + tol, nearY = p.y >= b.y - tol && p.y <= b.y + b.h + tol;
+    const hx = axis(b.x, b.x + b.w, p.x, nearY), hy = axis(b.y, b.y + b.h, p.y, nearX);
+    if ((hx || hy) && (edges || (hx && hy))) return { hx, hy };
+    return p.x > b.x && p.x < b.x + b.w && p.y > b.y && p.y < b.y + b.h ? "inside" : null;
+  }
+  // Box b with handle (hx, hy) dragged by d. `ratio` (w / h) locks the proportions — a corner follows
+  // whichever side was stretched more, an edge drags the other side along about its centre line; `alt`
+  // resizes about the centre; `bounds` ({ w, h }) keeps the result inside the image by shrinking it (ratio
+  // intact) instead of letting a side run off. Sides never go below `min`; no flipping past the anchor.
+  function resizeBox(b, hx, hy, d, { ratio = null, alt = false, bounds = null, min = MIN_BOX } = {}) {
+    // Per axis: the fixed coordinate, which way the side grows (1 / -1, or 0 = centred) and the new length.
+    const axis = (lo, len, h, dv) => {
+      if (h === 0) return { fix: lo + len / 2, dir: 0, len };
+      if (alt) return { fix: lo + len / 2, dir: 0, len: Math.max(min, len + 2 * h * dv) };
+      return h > 0 ? { fix: lo, dir: 1, len: Math.max(min, len + dv) } : { fix: lo + len, dir: -1, len: Math.max(min, len - dv) };
+    };
+    const ax = axis(b.x, b.w, hx, d.x), ay = axis(b.y, b.h, hy, d.y);
+    let w = ax.len, h = ay.len;
+    if (ratio) {
+      if (hx && hy) { const s = Math.max(w / ratio, h); w = s * ratio; h = s; }
+      else if (hx) h = w / ratio;
+      else w = h * ratio;
+    }
+    if (bounds) {
+      // Room from the fixed point in the growth direction (centred: twice the nearer side).
+      const room = (a, total) => (a.dir > 0 ? total - a.fix : a.dir < 0 ? a.fix : 2 * Math.min(a.fix, total - a.fix));
+      const mw = room(ax, bounds.w), mh = room(ay, bounds.h);
+      if (ratio) { const s = Math.min(1, mw / w, mh / h); w *= s; h *= s; }
+      else { w = Math.min(w, mw); h = Math.min(h, mh); }
+    }
+    const place = (a, len) => (a.dir > 0 ? a.fix : a.dir < 0 ? a.fix - len : a.fix - len / 2);
+    return { x: place(ax, w), y: place(ay, h), w, h };
+  }
+  // Shape s (as it was when the resize began, bounds b0) fitted to new bounds b: boxes take b, strokes
+  // scale their points (stroke width kept), text scales its font size (it only resizes uniformly).
+  function resizeShape(s, b0, b) {
+    const c = clone(s);
+    if (c.type === "text") { c.size = Math.max(4, s.size * (b.h / (b0.h || 1))); c.x = b.x; c.y = b.y; return c; }
+    if (c.points) {
+      const sx = b0.w ? b.w / b0.w : 1, sy = b0.h ? b.h / b0.h : 1;
+      c.points = s.points.map((p) => ({ x: b.x + (p.x - b0.x) * sx, y: b.y + (p.y - b0.y) * sy }));
+      return c;
+    }
+    c.x = b.x; c.y = b.y; c.w = b.w; c.h = b.h;
+    return c;
   }
   function translate(s, dx, dy) {
     const c = JSON.parse(JSON.stringify(s));

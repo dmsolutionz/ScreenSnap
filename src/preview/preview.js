@@ -91,8 +91,20 @@ function openPip() {
     // Seed the strip with the current recording state (the picker may not have started yet → 00:00).
     chrome.runtime.sendMessage({ type: MSG.GET_STATE }, (res) => { if (!chrome.runtime.lastError && res && res.state) { recState = res.state; updatePipBar(); } });
     updatePipBar();
-    win.addEventListener("pagehide", () => { send({ type: MSG.PREVIEW_CLOSED }); });
+    win.addEventListener("pagehide", () => {
+      // The floating camera is gone, so release the camera too or its light stays on until the take ends.
+      // On an entire-screen share the PiP WAS the recorded camera; the composite path holds its own stream.
+      releaseCamera();
+      send({ type: MSG.PREVIEW_CLOSED });
+    });
   });
+}
+
+function releaseCamera() {
+  if (camStream) camStream.getTracks().forEach((t) => t.stop());
+  camStream = null;
+  camEl.srcObject = null;
+  if (pipVideo) pipVideo.srcObject = null;
 }
 
 // Reflect the live recording state into the PiP control strip (paused look, stop hidden while finalizing).
@@ -110,7 +122,12 @@ function updatePipBar() {
 async function minimizeSelf() {
   try { const w = await chrome.windows.getCurrent(); chrome.windows.update(w.id, { state: "minimized" }); } catch {}
 }
-function ready(pipOn) { if (sentReady) return; sentReady = true; send({ type: MSG.PREVIEW_READY, pip: !!pipOn }); }
+function ready(pipOn) { if (sentReady) return; sentReady = true; clearInterval(keepalive); send({ type: MSG.PREVIEW_READY, pip: !!pipOn }); }
+
+// The service worker waits for PREVIEW_READY in memory, and nothing else reaches it while the user frames
+// themselves here — MV3 stops an idle worker after ~30 s, and Start would then wake a fresh one that isn't
+// listening (the take never starts). Ping it until Start so it outlives a slow setup.
+const keepalive = setInterval(() => { try { chrome.runtime.sendMessage({ type: MSG.KEEPALIVE }).catch(() => {}); } catch {} }, 20000);
 
 // Keep the PiP control strip in sync with the recording, and tick the clock while running.
 chrome.runtime.onMessage.addListener((m, sender) => {

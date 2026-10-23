@@ -3,7 +3,7 @@
 // FOUNDATION-OWNED and final — feature work happens inside the modules this orchestrates.
 import { loadClip, pickFile, toInput } from "./source.js";
 import { listIds } from "./idb.js";
-import { defaultTransforms, composeDims, outDuration, segmentsOf, outTimestamp, srcTimestamp } from "./transforms.js";
+import { defaultTransforms, composeDims, cropRect, outDuration, segmentsOf, outTimestamp, srcTimestamp } from "./transforms.js";
 import { createLayerStore, createLayerHistory, newImageLayer, newShapeLayer } from "./layers-model.js";
 import { translate } from "./shapes.js";
 import { buildShell } from "./ui-shell.js";
@@ -73,14 +73,28 @@ openBtn?.addEventListener("click", async () => {
 });
 
 async function start(blob, fileName) {
+  // Probe the file BEFORE building any UI: an unreadable / non-video file (Mediabunny throws
+  // UnsupportedInputFormatError) must land back on the open screen with a reason, not a blank page.
+  let input, width, height, durationSec;
+  try {
+    input = toInput(blob);
+    const vTrack = await input.getPrimaryVideoTrack();
+    if (!vTrack) throw new Error("no video track");
+    width = await vTrack.getDisplayWidth();
+    height = await vTrack.getDisplayHeight();
+    // Screen capture is variable-frame-rate: a static ending leaves the video track ending at its last
+    // frame while the audio (narration) runs on. Use the longer track so that tail isn't silently
+    // trimmed off — the export's frame clock holds the last frame across it.
+    const aTrack = await input.getPrimaryAudioTrack().catch(() => null);
+    const aDur = aTrack ? await aTrack.computeDuration().catch(() => 0) : 0;
+    durationSec = Math.max(await vTrack.computeDuration(), aDur || 0);
+    if (!(width > 0 && height > 0 && durationSec > 0)) throw new Error("empty video track");
+  } catch (err) {
+    console.warn("[screensnap] couldn't open clip:", err);
+    return showEmpty(`“${fileName || "That file"}” couldn’t be opened — it isn’t a video this editor can read. Try an MP4 or WebM recording.`);
+  }
   if (empty) empty.style.display = "none";
   root.style.display = "block";
-
-  const input = toInput(blob);
-  const vTrack = await input.getPrimaryVideoTrack();
-  const width = vTrack ? await vTrack.getDisplayWidth() : 0;
-  const height = vTrack ? await vTrack.getDisplayHeight() : 0;
-  const durationSec = vTrack ? await vTrack.computeDuration() : 0;
   const meta = { durationSec, width, height };
   const transforms = defaultTransforms(meta);
 
@@ -106,6 +120,8 @@ async function start(blob, fileName) {
     getTool: () => tool,
     getColor: () => color,
     getTransforms: () => transforms,
+    srcW: width,
+    srcH: height,
     onSelectionChange: (id) => selectLayer(id),
     onDraft: (rect) => session && session.selectionOverlay.setDraft(rect),
     // Draw-once: after a shape is committed, return to Select with the new shape selected — the very
@@ -493,7 +509,9 @@ async function addImageFromPicker() {
   if (!session) return;
   const file = await pickImageFile();
   if (!file) return;
-  await addImageLayer(file, session.store, session.meta.width);
+  // Place it inside the visible content (the crop rect, or the full frame): a fixed source-px spot
+  // like (24,24) is off-canvas once a crop excludes the top-left.
+  await addImageLayer(file, session.store, cropRect(session.transforms, session.meta.width, session.meta.height));
 }
 
 // ⌘D: duplicate the selected layer, offset slightly, and select the copy.
@@ -516,6 +534,8 @@ function duplicateSelected() {
 // Close the editor tab. The page was opened via chrome.tabs.create, so window.close() isn't reliable;
 // remove the current tab through the tabs API (needs no extra permission) and fall back to close().
 function closeEditor() {
+  // tabs.remove skips the beforeunload prompt, so ask here too rather than silently killing an export.
+  if (exportBusy && !confirm("An export is still running. Close the editor and cancel it?")) return;
   if (session && session.preview) session.preview.pause();
   try {
     chrome.tabs.getCurrent((tab) => {
@@ -591,15 +611,17 @@ function fitScale(imgW, videoW) {
 }
 
 // Add an image (or animated GIF) as an overlay layer. GIFs are decoded to frames so they animate;
-// if decode fails we fall back to the first frame as a static image.
-async function addImageLayer(file, store, width) {
+// if decode fails we fall back to the first frame as a static image. `base` is the visible content
+// rect in source px ({x,y,w,h}); the image is sized to it and inset from its top-left corner.
+async function addImageLayer(file, store, base) {
+  const inset = Math.max(24, Math.round(base.w / 40));
   try {
     if (file.type === "image/gif") {
       try {
         const g = await decodeGif(file);
-        const scale = fitScale(g.width, width);
+        const scale = fitScale(g.width, base.w);
         store.add(newImageLayer({
-          bitmap: g.frames[0].bitmap, x: 24, y: 24, w: g.width * scale, h: g.height * scale,
+          bitmap: g.frames[0].bitmap, x: base.x + inset, y: base.y + inset, w: g.width * scale, h: g.height * scale,
           frames: g.frames, totalMs: g.totalMs,
         }));
         return;
@@ -608,8 +630,8 @@ async function addImageLayer(file, store, width) {
       }
     }
     const bitmap = await createImageBitmap(file);
-    const scale = fitScale(bitmap.width, width);
-    store.add(newImageLayer({ bitmap, x: 24, y: 24, w: bitmap.width * scale, h: bitmap.height * scale }));
+    const scale = fitScale(bitmap.width, base.w);
+    store.add(newImageLayer({ bitmap, x: base.x + inset, y: base.y + inset, w: bitmap.width * scale, h: bitmap.height * scale }));
   } catch (err) {
     console.warn("[screensnap] couldn't add image layer:", err);
     alert("Sorry — that image couldn't be added.");
@@ -920,29 +942,75 @@ function stepBy(sec) {
   session.preview.seekTo(target);
 }
 
-async function doExport(btn, format) {
-  if (!session) return;
-  const orig = btn.textContent;
-  btn.disabled = true;
-  session.preview.pause();
-  updateTransport();
-  const args = {
+// ── export lock ───────────────────────────────────────────────────────────────────────────────
+// An export of a long clip runs for minutes while the editor stays interactive, so each run works
+// from a SNAPSHOT of the edit (transforms + layers) — the live objects keep changing under the user's
+// hands, and a mid-run trim/cut/speed edit used to rewind output timestamps and abort the muxer.
+// While one runs, every export entry point is disabled (no concurrent second transcode) and leaving
+// the page asks first.
+let exportBusy = false;
+function lockExports(on) {
+  for (const id of ["ss-export", "ss-export-caret", "ss-share-btn"]) {
+    const b = document.getElementById(id);
+    if (b) b.disabled = on;
+  }
+}
+window.addEventListener("beforeunload", (e) => {
+  if (!exportBusy) return;
+  e.preventDefault();
+  e.returnValue = ""; // legacy browsers need a value to show the prompt
+});
+
+// Deep-enough copy of the layer store for an export: positional/style data is copied (so drags and
+// deletes don't reach the running export), bitmaps / GIF frames are shared by reference (immutable).
+function snapshotLayers(store) {
+  const layers = store.visibleOrdered().map((l) => ({
+    ...l,
+    shape: l.shape ? JSON.parse(JSON.stringify(l.shape)) : l.shape,
+    image: l.image ? { ...l.image } : l.image,
+    range: l.range ? { ...l.range } : l.range,
+  }));
+  return { visibleOrdered: () => layers };
+}
+
+function exportArgs(btn) {
+  return {
     input: session.input,
-    transforms: session.transforms,
-    store: session.store,
+    transforms: structuredClone(session.transforms),
+    store: snapshotLayers(session.store),
     fileName: session.fileName,
+    sourceBytes: session.blob ? session.blob.size : 0, // caps the export bitrate at the source's own
     extraAudioInput: session.extraAudioInput, // ignored by the GIF path
     onProgress: (frac) => { btn.textContent = `Exporting ${Math.round(frac * 100)}%`; },
   };
+}
+
+// Claim the export lock (false if one is already running). The caller restores the button label after
+// its result beat and then calls lockExports(false); exportBusy itself drops as soon as the work ends.
+function beginExport() {
+  if (!session || exportBusy) return false;
+  exportBusy = true;
+  lockExports(true);
+  session.preview.pause();
+  updateTransport();
+  return true;
+}
+
+async function doExport(btn, format) {
+  if (!beginExport()) return;
+  const orig = btn.textContent;
+  const args = exportArgs(btn);
   try {
     if (format === "gif") await runGifExport(args);
     else await runExport(args);
+    exportBusy = false;
     btn.textContent = "Saved ✓";
-    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 1800);
+    setTimeout(() => { btn.textContent = orig; lockExports(false); }, 1800);
   } catch (err) {
+    exportBusy = false;
     btn.textContent = "Export failed";
     setStatus(session.shell.statusEl, session.meta, session.transforms, String((err && err.message) || err));
-    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2600);
+    setTimeout(() => { btn.textContent = orig; lockExports(false); }, 2600);
   }
 }
 
@@ -994,52 +1062,32 @@ chrome.runtime?.onMessage?.addListener((m, sender) => {
 // Only reachable when Drive is connected (the menu item reads "Set up" otherwise); the upload runs
 // here in the editor page, so progress lives on the button and closing the tab cancels it.
 async function driveExport(btn) {
-  if (!session) return;
+  if (!beginExport()) return;
   const orig = btn.textContent;
-  btn.disabled = true;
-  session.preview.pause();
-  updateTransport();
   try {
-    const { blob, fileName } = await runExport({
-      input: session.input,
-      transforms: session.transforms,
-      store: session.store,
-      fileName: session.fileName,
-      extraAudioInput: session.extraAudioInput,
-      onProgress: (frac) => { btn.textContent = `Exporting ${Math.round(frac * 100)}%`; },
-      download: false,
-    });
+    const { blob, fileName } = await runExport({ ...exportArgs(btn), download: false });
     btn.textContent = "Uploading 0%";
     await uploadToDrive(blob, fileName, {
       onProgress: (done, total) => { btn.textContent = `Uploading ${total ? Math.round((done / total) * 100) : 0}%`; },
     });
+    exportBusy = false;
     btn.textContent = "Uploaded ✓";
-    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 1800);
+    setTimeout(() => { btn.textContent = orig; lockExports(false); }, 1800);
   } catch (err) {
+    exportBusy = false;
     btn.textContent = "Upload failed";
     setStatus(session.shell.statusEl, session.meta, session.transforms, String((err && err.message) || err));
-    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2600);
+    setTimeout(() => { btn.textContent = orig; lockExports(false); }, 2600);
   }
 }
 
 // Export the edited MP4, push it to Drive, make it "anyone with link", and hand back a screensnap
 // share URL: opened in a new tab (so the user lands on the branded player) and copied to the clipboard.
 async function shareExport(btn) {
-  if (!session) return;
+  if (!beginExport()) return;
   const orig = btn.textContent;
-  btn.disabled = true;
-  session.preview.pause();
-  updateTransport();
   try {
-    const { blob, fileName } = await runExport({
-      input: session.input,
-      transforms: session.transforms,
-      store: session.store,
-      fileName: session.fileName,
-      extraAudioInput: session.extraAudioInput,
-      onProgress: (frac) => { btn.textContent = `Exporting ${Math.round(frac * 100)}%`; },
-      download: false,
-    });
+    const { blob, fileName } = await runExport({ ...exportArgs(btn), download: false });
     btn.textContent = "Uploading 0%";
     const res = await uploadToDrive(blob, fileName, {
       onProgress: (done, total) => { btn.textContent = `Uploading ${total ? Math.round((done / total) * 100) : 0}%`; },
@@ -1052,15 +1100,17 @@ async function shareExport(btn) {
     // be blocked after the long export/upload), so the link reliably opens on the branded player.
     if (chrome.tabs?.create) chrome.tabs.create({ url });
     else window.open(url, "_blank", "noopener");
+    exportBusy = false;
     btn.textContent = "Link ready ✓";
     const el = session.shell.statusEl;
     el.classList.remove("ss-status-err");
     el.textContent = "Share link copied to clipboard";
-    setTimeout(() => { if (session) setStatus(el, session.meta, session.transforms); btn.textContent = orig; btn.disabled = false; }, 3200);
+    setTimeout(() => { if (session) setStatus(el, session.meta, session.transforms); btn.textContent = orig; lockExports(false); }, 3200);
   } catch (err) {
+    exportBusy = false;
     btn.textContent = "Share failed";
     setStatus(session.shell.statusEl, session.meta, session.transforms, String((err && err.message) || err));
-    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2600);
+    setTimeout(() => { btn.textContent = orig; lockExports(false); }, 2600);
   }
 }
 

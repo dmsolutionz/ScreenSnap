@@ -26,6 +26,9 @@ body {
 .tab-t:hover { color: #18181b !important; }
 .ghost-b { transition: background 0.12s, color 0.12s; }
 .ghost-b:hover { background: rgba(0,0,0,0.05) !important; color: #18181b !important; }
+.rec-b { transition: background 0.12s, border-color 0.12s; }
+.rec-b:hover { background: rgba(220,38,38,0.14) !important; border-color: rgba(220,38,38,0.40) !important; }
+.rec-b:focus-visible, .ghost-b:focus-visible, .prim-b:focus-visible { outline: 2px solid rgba(22,163,74,0.55); outline-offset: 2px; }
 .stop-b { transition: background 0.12s; }
 .stop-b:hover { background: rgba(220,38,38,0.12) !important; }
 .prim-b { transition: background 0.12s; }

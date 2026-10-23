@@ -5,6 +5,16 @@ Plain text only: no markdown, no emojis, no em dashes.
 
 ---
 
+v1.6 has been released with the following updates:
+• Pick your recording quality: Small (720p), Standard (1080p, the new default) or High (full resolution). Standard is about 15 MB a minute, so a 7 minute walkthrough lands around 100 MB, small enough to drop into Slack. Recordings used to come out up to three times that size.
+• Clearer record buttons. Each source in the Record tab now has its own Rec button, so tapping a row no longer starts a recording by surprise, and the popup shows a get ready screen with Cancel while the countdown or the screen picker is up.
+• Full page screenshots now work on web apps that scroll inside a panel, such as Gmail, and on sites with smooth scrolling or headers that turn sticky as you scroll.
+• A proper crop in the screenshot editor. Drag the crop box to move it, pull its edges or corners to resize, nudge it with the arrow keys, and come back later to adjust it. Ratio presets keep their shape as you resize.
+• Move and resize anything you have drawn. Selected items get handles, images keep their proportions, guides snap items into line, and the arrow keys nudge them.
+• Edited exports never come out bigger than the original recording, and exports with a music track finish in seconds instead of many minutes.
+• The video editor keeps time-limited overlays and zooms on screen during still moments, places annotations correctly after a crop or a resolution change, and no longer breaks an export if you keep editing while it runs.
+• Lots of smaller fixes: the Screen + Cam setup window no longer stalls if you take your time, closing the floating camera turns the camera light off, Disconnect stops a Drive upload in progress, Escape in a text box no longer closes the screenshot editor, and full page screenshots open at a readable size.
+
 v1.5 has been released with the following updates:
 • Share a recording with a link. From the recording-done card or the editor's Export menu, screensnap uploads the clip to your own Google Drive, marks it "anyone with the link", and gives you a share page that plays it back. Sharing is per recording and opt-in, so your other recordings stay private.
 • A branded share page at screensnap.xyz that plays your recording for anyone you send the link to. Nothing is hosted by screensnap; the video streams from your own Drive.
@@ -32,6 +42,7 @@ RECORD ANYTHING, FREE AND UNLIMITED
 • Your whole screen, any app window, or a single browser tab, saved as native MP4 (H.264/AAC).
 • Screen + Cam puts your webcam in an always-on-top bubble with pause and stop right on it. Set it up first (circle or square, mirrored or not), then record.
 • Capture system or tab audio and your microphone, with pause, resume, and mic mute.
+• Choose Small, Standard or High quality to balance file size and sharpness. Standard (1080p) is about 15 MB a minute.
 • On-page and floating controls, plus global keyboard shortcuts for stop, pause, and restart.
 • Draw on the screen while you record (strokes fade out on their own), restart a take, or hide the camera mid-recording.
 • No upgrade prompts and no "pro" tier. It's all just free.
@@ -44,17 +55,18 @@ A REAL VIDEO EDITOR, ALSO FREE
 • Undo and redo. Ctrl+Z (cmd+Z on Mac) reverts a move, resize, or delete, and shift redoes it.
 • Edit the audio. Mute regions without cutting the picture, change the volume, or mix in a voiceover or music track from a file.
 • Crop free-form or to a ratio (16:9, 1:1, 9:16, 4:3), change the speed, or wrap the video in a gradient backdrop with rounded corners and a shadow.
-• Export a native MP4 (pick 720p or 1080p to shrink the file) or an animated GIF, or download the original untouched. Every frame is encoded on your device.
+• Export a native MP4 (pick 720p or 1080p to shrink the file, and an edit never comes out bigger than the original) or an animated GIF, or download the original untouched. Every frame is encoded on your device.
 
 SCREENSHOTS
-• Visible area or full page, saved as PNG.
+• Visible area or full page, saved as PNG. Full page also works on web apps that scroll inside a panel, like Gmail.
 • Annotate before saving with text, arrows, shapes, highlight, and blur.
-• Crop, reorder layers, add an image or logo, and come back later to re-edit your text.
+• Crop with a box you can move and resize, drag handles to resize anything you have drawn, reorder layers, add an image or logo, and come back later to re-edit your text.
 • Add a padded backdrop, then copy to the clipboard or save to your computer.
 
 OPTIONAL CLOUD BACKUP (YOUR DRIVE, NOT OURS)
 • Connect your own Google Drive and finished recordings can upload themselves to a private screensnap folder, with progress shown as they go.
 • Or upload one clip at a time from the recording-done card or the editor's Export menu.
+• Share a recording with a link that plays it from your own Drive. Only the recordings you choose to share can be seen by others.
 • Straight from your browser to Google. No screensnap servers, no middleman, no account with us, and it only uses Google's narrowest Drive permission, so screensnap can only ever see the files it created.
 • Off by default. Disconnect anytime and the access is revoked at Google.
 

@@ -53,6 +53,9 @@ export const MSG = Object.freeze({
   // Screen + Cam live preview window (src/preview/) -> service worker
   PREVIEW_READY: "preview-ready", // {pip} the floating camera preview is up (pip=true) or skipped (pip=false)
   PREVIEW_CLOSED: "preview-closed", // the user closed the floating preview — drop it, don't stop the take
+  // setup / permission windows -> service worker: no-op ping every ~20s while they wait on the user. MV3 kills
+  // an idle worker after 30s, which would drop the in-memory listener waiting on that window's answer.
+  KEEPALIVE: "keepalive",
 
   // service worker -> popup / recorder window / overlays (broadcast)
   STATE_CHANGED: "state-changed",
@@ -93,7 +96,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   withMic: true,
   withSystemAudio: true,
   videoFormat: "mp4", // mp4 | webm (no UI toggle; MP4 by default per design)
-  videoMaxHeight: 2160,
+  videoQuality: "standard", // small | standard | high — see QUALITY (sets max height + bitrate)
   videoFps: 30,
   countdownSec: 3, // 0 = start instantly; otherwise the 3-2-1 length before capture
   bubbleShape: "circle", // circle | square — Screen + Cam camera bubble
@@ -108,6 +111,21 @@ export const DEFAULT_SETTINGS = Object.freeze({
 export const COUNTDOWN_OPTIONS = Object.freeze([0, 3, 5, 10]);
 export const BUBBLE_SIZES = Object.freeze({ sm: 104, md: 140, lg: 184 }); // diameter in px
 export const BUBBLE_SHAPES = Object.freeze(["circle", "square"]);
+
+// Recording quality presets (Record tab → Quality). Resolution is the real size lever: Chrome's H.264
+// encoder (hardware on macOS) treats videoBitsPerSecond as a loose target and overshoots it ~1.5–2× on
+// busy screen content, so the old full-res Retina capture at Chrome's 2.5 Mbps default landed around
+// 5–6 Mbps (~300 MB for 7 minutes). Capping the height and asking for an explicit bitrate keeps a
+// Standard take Slack-sized; High keeps full resolution for crisp Retina text. `hint` is the popup copy
+// (sizes measured on busy, scrolling content; quiet recordings come out smaller).
+export const QUALITY = Object.freeze({
+  small: Object.freeze({ maxHeight: 720, videoBitsPerSecond: 800e3, label: "Small", hint: "720p · ~10 MB a minute" }),
+  standard: Object.freeze({ maxHeight: 1080, videoBitsPerSecond: 1.2e6, label: "Standard", hint: "1080p · ~15 MB a minute" }),
+  high: Object.freeze({ maxHeight: 2160, videoBitsPerSecond: 4e6, label: "High", hint: "Full resolution · ~30 MB a minute" }),
+});
+export function qualityProfile(q) {
+  return QUALITY[q] || QUALITY.standard;
+}
 
 export function normalizeCountdown(sec) {
   const n = Math.round(Number(sec));
@@ -131,7 +149,7 @@ export function restartOptions(state) {
     withSystemAudio: s.withSystemAudio,
     videoFormat: s.videoFormat,
     videoFps: s.videoFps,
-    videoMaxHeight: s.videoMaxHeight,
+    videoQuality: s.videoQuality,
     countdownSec: s.countdownSec,
     bubbleShape: s.bubbleShape,
     bubbleSize: s.bubbleSize,

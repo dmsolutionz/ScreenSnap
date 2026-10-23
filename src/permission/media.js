@@ -5,7 +5,10 @@
 const kind = new URLSearchParams(location.search).get("kind") === "cam" ? "cam" : "mic";
 const isCam = kind === "cam";
 const status = document.getElementById("status");
-const report = (granted) => { try { chrome.runtime.sendMessage({ type: "media-permission-result", kind, granted }); } catch {} };
+// The service worker awaits our answer in memory; ping it while the prompt is up so MV3's ~30 s idle stop
+// can't hand the answer to a fresh worker that isn't listening.
+const keepalive = setInterval(() => { try { chrome.runtime.sendMessage({ type: "keepalive" }).catch(() => {}); } catch {} }, 20000);
+const report = (granted) => { clearInterval(keepalive); try { chrome.runtime.sendMessage({ type: "media-permission-result", kind, granted }); } catch {} };
 
 document.getElementById("title").textContent = isCam ? "Allow camera access" : "Allow microphone access";
 document.getElementById("desc").innerHTML = isCam

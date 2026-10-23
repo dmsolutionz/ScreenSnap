@@ -3,7 +3,7 @@
 // and on Apply converts the selection — expressed as a fraction of the displayed canvas — into a crop
 // rect in SOURCE pixels. Crops COMPOSE: the selection is measured against the current crop rect (the
 // "base"), so cropping an already-cropped view narrows further. Reset clears the crop entirely.
-import { cropRect } from "./transforms.js";
+import { cropRect, composeDims } from "./transforms.js";
 
 // { stageEl, canvas, getTransforms, srcW, srcH, onApply(crop|null), onExit }
 export function createCropOverlay({ stageEl, canvas, getTransforms, srcW, srcH, onApply, onExit }) {
@@ -27,6 +27,17 @@ export function createCropOverlay({ stageEl, canvas, getTransforms, srcW, srcH, 
       width: cr.width,
       height: cr.height,
     };
+  }
+
+  // The CONTENT rect inside the overlay (host-local px): composeDims' dest. With a backdrop the canvas
+  // also shows the padded background, so selections are confined to and measured against this rect —
+  // measuring against the whole canvas skewed and shifted the crop. Without a backdrop it is the canvas.
+  function contentBox() {
+    const box = canvasBoxInStage();
+    const cd = composeDims((getTransforms && getTransforms()) || {}, srcW, srcH);
+    const kx = box.width / (cd.outW || 1);
+    const ky = box.height / (cd.outH || 1);
+    return { x: cd.dest.x * kx, y: cd.dest.y * ky, width: cd.dest.w * kx, height: cd.dest.h * ky };
   }
 
   function build() {
@@ -67,27 +78,29 @@ export function createCropOverlay({ stageEl, canvas, getTransforms, srcW, srcH, 
       paint();
     });
     // Start with the whole frame selected so Apply/Reset read naturally.
-    sel = { x: 0, y: 0, w: box.width, h: box.height };
+    const cb = contentBox();
+    sel = { x: cb.x, y: cb.y, w: cb.width, h: cb.height };
     paint();
   }
 
-  function localPoint(e) {
+  function localPoint(e, cb = contentBox()) {
     const r = host.getBoundingClientRect();
-    return { x: clamp(e.clientX - r.left, 0, r.width), y: clamp(e.clientY - r.top, 0, r.height) };
+    return { x: clamp(e.clientX - r.left, cb.x, cb.x + cb.width), y: clamp(e.clientY - r.top, cb.y, cb.y + cb.height) };
   }
 
   function onDown(e) {
     if (e.target.closest(".ss-crop-bar")) return; // let the buttons work
     e.preventDefault();
     host.setPointerCapture?.(e.pointerId);
-    const p = localPoint(e);
-    drag = { x0: p.x, y0: p.y, box: canvasBoxInStage() }; // cache the box for the whole drag
+    const box = contentBox(); // cache the box for the whole drag
+    const p = localPoint(e, box);
+    drag = { x0: p.x, y0: p.y, box };
     sel = { x: p.x, y: p.y, w: 0, h: 0 };
     paint();
   }
   function onMove(e) {
     if (!drag) return;
-    const p = localPoint(e);
+    const p = localPoint(e, drag.box);
     if (ratio) sel = ratioRect(drag.x0, drag.y0, p.x, p.y, ratio, drag.box);
     else sel = { x: Math.min(drag.x0, p.x), y: Math.min(drag.y0, p.y), w: Math.abs(p.x - drag.x0), h: Math.abs(p.y - drag.y0) };
     paint();
@@ -98,17 +111,18 @@ export function createCropOverlay({ stageEl, canvas, getTransforms, srcW, srcH, 
     host.releasePointerCapture?.(e.pointerId);
     if (sel && (sel.w < 8 || sel.h < 8)) { // tiny drag → "select all" (at the locked ratio, if any)
       if (ratio) applyRatioToSelection();
-      else { const box = canvasBoxInStage(); sel = { x: 0, y: 0, w: box.width, h: box.height }; }
+      else { const cb = contentBox(); sel = { x: cb.x, y: cb.y, w: cb.width, h: cb.height }; }
     }
     paint();
   }
 
-  // Constrain a drag to the locked aspect ratio, clamped to the available space in the drag direction.
+  // Constrain a drag to the locked aspect ratio, clamped to the available space (within the content
+  // box) in the drag direction.
   function ratioRect(ax, ay, px, py, r, box) {
     let w = Math.abs(px - ax);
     let h = w / r;
-    const availX = px >= ax ? box.width - ax : ax;
-    const availY = py >= ay ? box.height - ay : ay;
+    const availX = px >= ax ? box.x + box.width - ax : ax - box.x;
+    const availY = py >= ay ? box.y + box.height - ay : ay - box.y;
     if (w > availX) { w = availX; h = w / r; }
     if (h > availY) { h = availY; w = h * r; }
     const x = px >= ax ? ax : ax - w;
@@ -116,20 +130,20 @@ export function createCropOverlay({ stageEl, canvas, getTransforms, srcW, srcH, 
     return { x, y, w, h };
   }
 
-  // Reshape the current selection to the locked ratio, centered on its center (or the canvas center),
-  // fitting within ~90% of the canvas. No-op in free mode.
+  // Reshape the current selection to the locked ratio, centered on its center (or the content center),
+  // fitting within ~90% of the content box. No-op in free mode.
   function applyRatioToSelection() {
     if (!ratio) return;
-    const box = canvasBoxInStage();
-    const cx = sel ? sel.x + sel.w / 2 : box.width / 2;
-    const cy = sel ? sel.y + sel.h / 2 : box.height / 2;
+    const box = contentBox();
+    const cx = sel ? sel.x + sel.w / 2 : box.x + box.width / 2;
+    const cy = sel ? sel.y + sel.h / 2 : box.y + box.height / 2;
     let w = box.width * 0.9;
     let h = w / ratio;
     if (h > box.height * 0.9) { h = box.height * 0.9; w = h * ratio; }
     let x = cx - w / 2;
     let y = cy - h / 2;
-    x = Math.max(0, Math.min(x, box.width - w));
-    y = Math.max(0, Math.min(y, box.height - h));
+    x = Math.max(box.x, Math.min(x, box.x + box.width - w));
+    y = Math.max(box.y, Math.min(y, box.y + box.height - h));
     sel = { x, y, w, h };
   }
 
@@ -149,18 +163,18 @@ export function createCropOverlay({ stageEl, canvas, getTransforms, srcW, srcH, 
     if (hint) hint.style.display = has ? "none" : "";
   }
 
-  // A crop only matters if the selection is meaningfully smaller than the whole canvas.
+  // A crop only matters if the selection is meaningfully smaller than the whole content box.
   function isCropMeaningful() {
-    const box = canvasBoxInStage();
+    const box = contentBox();
     if (!sel || sel.w < 8 || sel.h < 8) return false;
     return sel.w < box.width - 2 || sel.h < box.height - 2;
   }
 
   function selToCrop() {
-    const box = canvasBoxInStage();
+    const box = contentBox();
     const t = getTransforms ? getTransforms() : null;
-    const base = cropRect(t, srcW, srcH); // current crop (or full frame) = what the canvas displays
-    const fx = sel.x / box.width, fy = sel.y / box.height;
+    const base = cropRect(t, srcW, srcH); // current crop (or full frame) = what the content box displays
+    const fx = (sel.x - box.x) / box.width, fy = (sel.y - box.y) / box.height;
     const fw = sel.w / box.width, fh = sel.h / box.height;
     let w = Math.round(base.w * fw);
     let h = Math.round(base.h * fh);

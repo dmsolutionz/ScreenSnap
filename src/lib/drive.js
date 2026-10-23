@@ -74,9 +74,26 @@ export async function driveConnect() {
   return account;
 }
 
+// Disconnect must stop an upload that is already streaming: the resumable session URI needs no bearer
+// token, so revoking the grant alone wouldn't. Each upload captures the controller current at its
+// start and threads its signal through every fetch; driveDisconnect aborts it (in-flight chunk
+// included) and swaps in a fresh one. Uploads running in ANOTHER context (the editor page has its own
+// copy of this module) are stopped by the per-chunk driveAccount check in assertLive() instead.
+const disconnectedError = () => new DOMException("Drive disconnected", "AbortError");
+let uploadAbort = new AbortController();
+
+// Throws the AbortError when this context disconnected or the account is gone (disconnected elsewhere).
+async function assertLive(signal) {
+  if (signal.aborted) throw signal.reason;
+  const { driveAccount } = await chrome.storage.local.get("driveAccount");
+  if (!driveAccount) throw disconnectedError();
+}
+
 // Drop cached tokens, revoke the grant at Google, and forget everything local. After this the
 // extension is back to zero network capability until the user connects again.
 export async function driveDisconnect() {
+  uploadAbort.abort(disconnectedError());
+  uploadAbort = new AbortController();
   try {
     const token = tokenFromResult(await chrome.identity.getAuthToken({ interactive: false }));
     if (token) {
@@ -145,12 +162,28 @@ async function destinationFolderName() {
 // query only ever sees folders screensnap created itself, so renaming to a folder made elsewhere
 // makes a fresh one rather than merging into it. The id is cached per name and re-validated, so
 // deleting the folder or changing the name just re-resolves on the next upload. Returns { id, name }.
-async function ensureFolder(token) {
+//
+// Single-flight: two uploads starting together (auto-backup + an editor export) would otherwise both
+// miss the cache, both find nothing, and create two "screensnap" folders. Callers in this context share
+// one in-flight resolution; a Web Lock serializes it across contexts (service worker vs editor page),
+// so the second one in finds the first one's cached id.
+let folderInFlight = null; // { signal, promise }
+function ensureFolder(token, signal) {
+  if (folderInFlight && folderInFlight.signal === signal) return folderInFlight.promise;
+  const run = () => resolveFolder(token, signal);
+  const promise = (navigator.locks ? navigator.locks.request("screensnap-drive-folder", { signal }, run) : run())
+    .finally(() => { if (folderInFlight && folderInFlight.promise === promise) folderInFlight = null; });
+  folderInFlight = { signal, promise };
+  return promise;
+}
+
+async function resolveFolder(token, signal) {
   const name = await destinationFolderName();
   const cache = await chrome.storage.local.get(["driveFolderId", "driveFolderName"]);
   if (cache.driveFolderId && cache.driveFolderName === name) {
     const res = await fetch(`${API}/files/${cache.driveFolderId}?fields=id,trashed`, {
       headers: { Authorization: `Bearer ${token}` },
+      signal,
     });
     if (res.ok) {
       const meta = await res.json();
@@ -162,16 +195,18 @@ async function ensureFolder(token) {
     `name = '${escaped}' and mimeType = 'application/vnd.google-apps.folder' ` +
       `and trashed = false and 'root' in parents`
   );
-  const found = await driveFetch(token, `${API}/files?q=${q}&fields=files(id)`).then((r) => r.json());
+  const found = await driveFetch(token, `${API}/files?q=${q}&fields=files(id)`, { signal }).then((r) => r.json());
   let id = found?.files?.[0]?.id;
   if (!id) {
     const created = await driveFetch(token, `${API}/files?fields=id`, {
       method: "POST",
       headers: { "Content-Type": "application/json; charset=UTF-8" },
       body: JSON.stringify({ name, mimeType: "application/vnd.google-apps.folder" }),
+      signal,
     }).then((r) => r.json());
     id = created.id;
   }
+  if (signal.aborted) throw signal.reason; // don't re-cache a folder id after Disconnect cleared it
   await chrome.storage.local.set({ driveFolderId: id, driveFolderName: name });
   return { id, name };
 }
@@ -180,9 +215,12 @@ async function ensureFolder(token) {
 // (a) onProgress gets real ticks — fetch has no upload-progress events and MV3 workers have no
 // XHR — and (b) each chunk's in-flight fetch keeps the service worker alive for the duration.
 // Resolves to { id, name, webViewLink }.
+// Throws a DOMException "AbortError" ("Drive disconnected") if the user disconnects mid-upload.
 export async function uploadToDrive(blob, name, { onProgress } = {}) {
+  const { signal } = uploadAbort;
+  await assertLive(signal);
   const token = await getToken(false);
-  const folder = await ensureFolder(token);
+  const folder = await ensureFolder(token, signal);
   const folderId = folder.id;
   const mime = blob.type || "video/mp4";
 
@@ -197,6 +235,7 @@ export async function uploadToDrive(blob, name, { onProgress } = {}) {
         "X-Upload-Content-Type": mime,
       },
       body: JSON.stringify({ name, parents: [folderId], mimeType: mime }),
+      signal,
     }
   );
   const session = start.headers.get("Location");
@@ -204,7 +243,9 @@ export async function uploadToDrive(blob, name, { onProgress } = {}) {
 
   let offset = 0;
   let attempts = 0;
+  const backoff = async () => { await new Promise((r) => setTimeout(r, 1000 * attempts)); if (signal.aborted) throw signal.reason; };
   while (offset < blob.size) {
+    await assertLive(signal);
     const end = Math.min(offset + CHUNK, blob.size);
     let res;
     try {
@@ -212,26 +253,31 @@ export async function uploadToDrive(blob, name, { onProgress } = {}) {
         method: "PUT",
         headers: { "Content-Range": `bytes ${offset}-${end - 1}/${blob.size}` },
         body: blob.slice(offset, end),
+        signal,
       });
     } catch (err) {
+      if (signal.aborted) throw signal.reason;
       // Network blip: ask the session where it actually got to, then continue from there.
       if (++attempts > 5) throw new Error("Upload failed: network connection lost.");
-      await new Promise((r) => setTimeout(r, 1000 * attempts));
-      offset = await queryResumeOffset(session, blob.size);
+      await backoff();
+      offset = await queryResumeOffset(session, blob.size, signal);
       continue;
     }
     if (res.status === 308) {
-      const range = res.headers.get("Range"); // "bytes=0-N" for the bytes Drive has so far
-      offset = range ? Number(range.split("-")[1]) + 1 : end;
-      attempts = 0;
+      // Progress resets the retry budget; a 308 that didn't move us forward (no Range header = Drive
+      // has nothing, so we resend from 0) spends it, so a session that never accepts data can't spin.
+      const next = persistedOffset(res);
+      if (next > offset) attempts = 0;
+      else if (++attempts > 5) throw new Error("Upload failed: Google Drive isn't accepting the data.");
+      offset = next;
       onProgress?.(offset, blob.size);
     } else if (res.ok) {
       onProgress?.(blob.size, blob.size);
       const meta = await res.json();
       return { ...meta, folderId, folderName: folder.name };
     } else if (res.status >= 500 && ++attempts <= 5) {
-      await new Promise((r) => setTimeout(r, 1000 * attempts));
-      offset = await queryResumeOffset(session, blob.size);
+      await backoff();
+      offset = await queryResumeOffset(session, blob.size, signal);
     } else {
       throw new Error(`Upload failed (HTTP ${res.status}).`);
     }
@@ -239,16 +285,20 @@ export async function uploadToDrive(blob, name, { onProgress } = {}) {
   throw new Error("Upload ended without a confirmation from Google Drive.");
 }
 
+// Next byte offset from a 308's Range header ("bytes=0-N" for the bytes Drive has persisted). Per the
+// resumable protocol a 308 WITHOUT a Range header means no bytes were received at all → 0.
+function persistedOffset(res) {
+  const range = res.headers.get("Range");
+  return range ? Number(range.split("-")[1]) + 1 : 0;
+}
+
 // Content-Range "bytes */total" probe: returns the next byte offset the session expects.
-async function queryResumeOffset(session, total) {
+async function queryResumeOffset(session, total, signal) {
   const res = await fetch(session, {
     method: "PUT",
     headers: { "Content-Range": `bytes */${total}` },
+    signal,
   }).catch(() => null);
-  if (!res) return 0;
-  if (res.status === 308) {
-    const range = res.headers.get("Range");
-    return range ? Number(range.split("-")[1]) + 1 : 0;
-  }
-  return 0;
+  if (signal.aborted) throw signal.reason;
+  return res && res.status === 308 ? persistedOffset(res) : 0;
 }

@@ -15,7 +15,7 @@ import { cropRect, composeDims } from "./transforms.js";
 //   rect/blur/arrow, so the controller can show a live bounding box; null when the drag ends.
 //   onCreate(id, shiftHeld) -> fired after a new shape is committed, so the controller can auto-return
 //   to Select and select it (unless the tool is locked / shift is held to keep drawing).
-export function createAnnotator({ canvas, store, getTool, getColor, getTransforms, onSelectionChange, onDraft, onCreate }) {
+export function createAnnotator({ canvas, store, getTool, getColor, getTransforms, onSelectionChange, onDraft, onCreate, srcW: knownW, srcH: knownH }) {
   let tool = (getTool && getTool()) || "select";
   let color = (getColor && getColor()) || "#22c55e";
   let drag = null;       // in-progress create drag: { tool,color,width,x1,y1,x2,y2 }
@@ -35,20 +35,19 @@ export function createAnnotator({ canvas, store, getTool, getColor, getTransform
     if (!drag) { onDraft(null); return; }
     onDraft({ x: Math.min(drag.x1, drag.x2), y: Math.min(drag.y1, drag.y2), w: Math.abs(drag.x2 - drag.x1), h: Math.abs(drag.y2 - drag.y1) });
   }
-  // Latched SOURCE dimensions. The compositor draws shapes in source-pixel space and scales them by
+  // SOURCE dimensions. The compositor draws shapes in source-pixel space and scales them by
   // outW/srcW, so every shape we store MUST be in source coords. preview.js sizes this canvas to the
-  // *output* (outputDims w/ outScale): at "Original" (outScale:null) canvas.width === srcW, but at
-  // 720p/1080p it is the downscaled output. We therefore can't trust canvas.width as source space.
-  // We recover srcW/srcH by latching the canvas size whenever the resolution is Original, which is
-  // the boot state (defaultTransforms => outScale:null, then preview.seekTo(0) sizes it to source).
-  let srcW = 0;
-  let srcH = 0;
+  // *output* (crop / 720p / backdrop padding), so canvas.width is NOT source space. The controller
+  // passes the real track dims (srcW/srcH) — authoritative from the first pointer event, even when a
+  // crop or downscale was set before the canvas was ever clicked (latching alone got that wrong:
+  // crop-first annotations landed off-canvas). Latching remains only as a fallback without them.
+  let srcW = knownW > 0 ? knownW : 0;
+  let srcH = knownH > 0 ? knownH : 0;
 
-  // Refresh the latched source dims when we can trust the canvas to be source-sized: Original res AND
-  // no crop. (Boot seeks at default transforms — no outScale, no crop — so this latches the true full
-  // source dims once before any crop/downscale is applied.) When a crop is active the canvas is sized
-  // to the crop, so we must NOT re-latch from it.
+  // Fallback latch (no dims passed): trust the canvas only when it is source-sized — Original res, no
+  // crop, no backdrop padding.
   function syncSrcDims() {
+    if (knownW > 0 && knownH > 0) return;
     const t = getTransforms ? getTransforms() : null;
     const downscaled = !!(t && t.outScale && t.outScale.maxHeight);
     const cropped = !!(t && t.crop);

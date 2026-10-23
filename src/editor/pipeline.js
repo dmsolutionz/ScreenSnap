@@ -7,8 +7,9 @@ import {
   Input, ALL_FORMATS, BlobSource, VideoSampleSink, AudioBufferSink,
   Output, Mp4OutputFormat, BufferTarget, CanvasSource, AudioBufferSource, getEncodableCodecs,
 } from "../vendor/mediabunny.mjs";
-import { composeDims, keepFrame, outTimestamp, outFrameDuration, outDuration, audioEnabled, effectiveSrcRect, videoBitrateFor, audioGainFor, segmentsOf } from "./transforms.js";
+import { composeDims, keepFrame, outTimestamp, outDuration, audioEnabled, effectiveSrcRect, videoBitrateFor, audioGainFor, segmentsOf, sourceVideoBitrate, capToSource } from "./transforms.js";
 import { drawComposite } from "./compositor.js";
+import { outputFrames } from "./frame-clock.js";
 
 // Scale an AudioBuffer's samples in place by g (0..1) — used by the streaming (no-mix) audio path.
 function applyGain(buffer, g) {
@@ -30,13 +31,62 @@ async function firstBufferFormat(track, startSec) {
   return null;
 }
 
+// Packs decoded slices into a few large contiguous AudioBuffers (about CHUNKS_PER_TRACK per track,
+// each 10–120s of output) and schedules ONE source node per chunk. An OfflineAudioContext touches every
+// scheduled node on every 128-frame render quantum, so cost is nodes × duration: the old
+// one-node-per-~21ms-packet scheme made a 4-min mix render for ~6 min (~30 for 7), and even fixed-size
+// chunks still grow with the clip — sizing them to the clip keeps the node count ~constant. Each slice
+// is written at its exact output sample position (ripple-cut joins stay sample-exact, gaps silent),
+// with its gain baked into the copied samples; a zero-gain (muted) slice simply copies nothing.
+const CHUNKS_PER_TRACK = 8;
+function makeChunker(ctx, totalOut) {
+  const chunkSec = Math.min(120, Math.max(10, totalOut / CHUNKS_PER_TRACK));
+  let cur = null; // { startOut, sr, ch, cap, used, data: Float32Array[] }
+  const flush = () => {
+    const c = cur;
+    cur = null;
+    if (!c || !c.used) return;
+    const buf = ctx.createBuffer(c.ch, c.used, c.sr);
+    for (let k = 0; k < c.ch; k++) buf.copyToChannel(c.data[k].subarray(0, c.used), k);
+    const node = ctx.createBufferSource();
+    node.buffer = buf;
+    node.connect(ctx.destination);
+    node.start(Math.max(0, c.startOut));
+  };
+  // Copy `durSec` of `buffer` starting `fromSec` into it, landing at output time `outSec`.
+  const add = (buffer, fromSec, durSec, outSec, gain) => {
+    if (!(gain > 0) || !(durSec > 0) || outSec >= totalOut) return;
+    const sr = buffer.sampleRate, ch = buffer.numberOfChannels;
+    const off = Math.max(0, Math.round(fromSec * sr));
+    const len = Math.min(buffer.length - off, Math.round(durSec * sr));
+    if (len <= 0) return;
+    let p = cur ? Math.round((outSec - cur.startOut) * sr) : -1;
+    if (cur && p < 0 && p >= -4) p = 0; // timestamp rounding jitter at a chunk's start
+    if (!cur || cur.sr !== sr || cur.ch !== ch || p < 0 || p + len > cur.cap) {
+      flush();
+      const cap = Math.max(len, Math.ceil(chunkSec * sr));
+      cur = { startOut: outSec, sr, ch, cap, used: 0, data: Array.from({ length: ch }, () => new Float32Array(cap)) };
+      p = 0;
+    }
+    for (let k = 0; k < ch; k++) {
+      const src = buffer.getChannelData(k).subarray(off, off + len);
+      const dst = cur.data[k];
+      if (gain === 1) dst.set(src, p);
+      else for (let i = 0; i < len; i++) dst[p + i] = src[i] * gain;
+    }
+    cur.used = Math.max(cur.used, p + len);
+  };
+  return { add, flush };
+}
+
 // Mix the (trimmed / mute-masked) main audio and the imported track into ONE AudioBuffer via an
-// OfflineAudioContext (standard Web Audio — no ffmpeg, no WASM). Each kept slice of each source buffer
-// is scheduled at its true OUTPUT-time position through its own GainNode; slices are trimmed to their
-// kept-segment intersection (node.start(when, offset, duration)) so ripple-cut joins are sample-exact
-// with no overlap or gap. Anything past the context's fixed length renders as nothing.
-// NOTE: this renders the full output as one PCM buffer (~11MB/min stereo 48k), so it's only used when
-// an imported track actually needs mixing — the plain path streams (see transcode below).
+// OfflineAudioContext (standard Web Audio — no ffmpeg, no WASM; it also resamples a track whose rate
+// differs from the mix rate). Each kept slice of each source buffer lands at its true OUTPUT-time
+// position, trimmed to its kept-segment intersection, so ripple-cut joins are sample-exact with no
+// overlap or gap. Anything past the context's fixed length renders as nothing.
+// NOTE: this renders the full output as one PCM buffer (~11MB/min stereo 48k) and holds the decoded
+// sources (packed into chunks) until rendering, so it's only used when an imported track actually
+// needs mixing — the plain path streams (see transcode below).
 // -> AudioBuffer, or null if there was genuinely nothing to render.
 async function mixAudio({ transforms, aTrack, wantMainAudio, extraTrack, extraAudio, totalOut, signal }) {
   // Size the context to the RICHEST of the two sources (mono up-mixes losslessly into stereo, lower
@@ -50,17 +100,8 @@ async function mixAudio({ transforms, aTrack, wantMainAudio, extraTrack, extraAu
   const length = Math.max(1, Math.ceil(totalOut * fmt.sampleRate));
   const ctx = new OfflineAudioContext(Math.max(1, fmt.channels), length, fmt.sampleRate);
 
-  const schedule = (buffer, outSec, gain, offset = 0, durSec) => {
-    if (!(gain > 0) || outSec >= totalOut || !(durSec > 0)) return;
-    const node = ctx.createBufferSource();
-    node.buffer = buffer;
-    const g = ctx.createGain();
-    g.gain.value = gain;
-    node.connect(g).connect(ctx.destination);
-    node.start(Math.max(0, outSec), offset, durSec);
-  };
-
   if (wantMainAudio) {
+    const chunks = makeChunker(ctx, totalOut);
     const sink = new AudioBufferSink(aTrack);
     const baseGain = audioGainFor(transforms); // global volume; global mute already excluded upstream
     const segs = segmentsOf(transforms);
@@ -74,15 +115,17 @@ async function mixAudio({ transforms, aTrack, wantMainAudio, extraTrack, extraAu
         const to = Math.min(bufEnd, s.out);
         if (to - from <= 1e-6) continue;
         const audible = transforms.audio ? keepFrame(from, transforms.audio) : true; // mute mask
-        schedule(buffer, outTimestamp(from, transforms), audible ? baseGain : 0, from - timestamp, to - from);
+        chunks.add(buffer, from - timestamp, to - from, outTimestamp(from, transforms), audible ? baseGain : 0);
       }
     }
+    chunks.flush();
   }
 
   if (extraTrack && extraAudio) {
     const sink = new AudioBufferSink(extraTrack);
     const gain = extraAudio.muted ? 0 : (typeof extraAudio.volume === "number" ? extraAudio.volume : 1);
     if (gain > 0) {
+      const chunks = makeChunker(ctx, totalOut);
       for await (const { buffer, timestamp } of sink.buffers(extraAudio.trimIn, extraAudio.trimOut)) {
         if (signal && signal.aborted) throw new DOMException("Export cancelled", "AbortError");
         // Trim boundary buffers to the [trimIn, trimOut] window, mapped so the window's start lands
@@ -91,8 +134,9 @@ async function mixAudio({ transforms, aTrack, wantMainAudio, extraTrack, extraAu
         const from = Math.max(timestamp, extraAudio.trimIn);
         const to = Math.min(bufEnd, extraAudio.trimOut);
         if (to - from <= 1e-6) continue;
-        schedule(buffer, extraAudio.offsetSec + (from - extraAudio.trimIn), gain, from - timestamp, to - from);
+        chunks.add(buffer, from - timestamp, to - from, extraAudio.offsetSec + (from - extraAudio.trimIn), gain);
       }
+      chunks.flush();
     }
   }
 
@@ -102,8 +146,9 @@ async function mixAudio({ transforms, aTrack, wantMainAudio, extraTrack, extraAu
 // input: a Mediabunny Input (from source.toInput). transforms: see transforms.js. store: layer store
 // (compositor reads visibleOrdered()). onProgress(0..1). signal: optional AbortSignal. extraAudioInput:
 // an optional second Mediabunny Input for an imported audio track (mixed in per transforms.extraAudio).
+// sourceBytes: the source file's size, used to cap the export bitrate at the source's own (see below).
 // -> Blob('video/mp4')
-export async function transcode({ input, transforms, store, onProgress, signal, extraAudioInput }) {
+export async function transcode({ input, transforms, store, onProgress, signal, extraAudioInput, sourceBytes }) {
   const codecs = await getEncodableCodecs();
   if (!codecs || !codecs.includes("avc")) {
     throw new Error("This browser can't encode H.264 (AVC) video, so MP4 export isn't available here. Try a recent Chrome.");
@@ -125,8 +170,18 @@ export async function transcode({ input, transforms, store, onProgress, signal, 
   const ctx = canvas.getContext("2d");
   const unit = Math.max(1, srcW / 900);
 
+  const aTrack = await input.getPrimaryAudioTrack();
+
+  // Video bitrate: the bpp-derived target for the output size, capped at the source clip's own average
+  // video bitrate so an edit never makes the file bigger than the recording (scaled down with the
+  // output's content pixels — crop / downscale — and up with speed). Backdrop padding is ignored: it's
+  // static and nearly free to encode.
+  const srcDur = sourceBytes > 0 ? await vTrack.computeDuration() : 0;
+  const srcVideoBps = sourceVideoBitrate(sourceBytes, srcDur, !!aTrack);
+  const bitrate = capToSource(videoBitrateFor(outW, outH), srcVideoBps, (dest.w * dest.h) / Math.max(1, srcW * srcH), transforms.speed || 1);
+
   const output = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() });
-  const vSrc = new CanvasSource(canvas, { codec: "avc", bitrate: videoBitrateFor(outW, outH) });
+  const vSrc = new CanvasSource(canvas, { codec: "avc", bitrate });
   output.addVideoTrack(vSrc, { frameRate: 30 });
 
   // Audio: the main track is carried when the transform allows it (1x speed in v1) and it isn't
@@ -134,7 +189,6 @@ export async function transcode({ input, transforms, store, onProgress, signal, 
   // one. "Mute all audio" is a master mute covering both. An output audio track is added only when
   // something actually audible contributes — a muted/zero-volume/out-of-range source never forces a
   // silent AAC track into the file.
-  const aTrack = await input.getPrimaryAudioTrack();
   const masterMuted = !!(transforms.audio && transforms.audio.muted);
   const wantMainAudio = !!aTrack && audioEnabled(transforms) && !masterMuted && audioGainFor(transforms) > 0;
   const ea = transforms.extraAudio;
@@ -164,18 +218,14 @@ export async function transcode({ input, transforms, store, onProgress, signal, 
   const layers = store && typeof store.visibleOrdered === "function" ? store.visibleOrdered() : [];
 
   try {
-    for await (const sample of vSink.samples(transforms.trimIn, transforms.trimOut)) {
-      if (signal && signal.aborted) { sample.close(); throw new DOMException("Export cancelled", "AbortError"); }
-      const srcSec = sample.timestamp;
-      if (keepFrame(srcSec, transforms)) {
-        const srcRect = effectiveSrcRect(transforms, srcSec, srcW, srcH);
-        drawComposite(ctx, sample, layers, { outW, outH, srcW, srcH, unit, blurCanvas: null, srcRect, timeSec: srcSec, dest, backdrop });
-        const ts = outTimestamp(srcSec, transforms);
-        const dur = outFrameDuration(sample.duration || 1 / 30, transforms);
-        await vSrc.add(Math.max(0, ts), Math.max(1 / 1000, dur));
-        report(ts / totalOut);
-      }
-      sample.close(); // REQUIRED: release the frame to avoid decoder backpressure / leaks
+    // outputFrames() holds a frame across static (variable-frame-rate) stretches so time-ranged
+    // overlays / zoom render there too, and owns every decoded sample's close() — including when an
+    // add() below throws (the old inline close() was skipped on that path, leaking the frame).
+    for await (const f of outputFrames({ vSink, transforms, totalOut, signal })) {
+      const srcRect = effectiveSrcRect(transforms, f.srcSec, srcW, srcH);
+      drawComposite(ctx, f.sample, layers, { outW, outH, srcW, srcH, unit, blurCanvas: null, srcRect, timeSec: f.srcSec, dest, backdrop });
+      await vSrc.add(Math.max(0, f.outTs), Math.max(1 / 1000, f.dur));
+      report(f.outTs / totalOut);
     }
 
     if (hasAnyAudioSource) {

@@ -1,7 +1,7 @@
 // screensnap. popup — UI + message dispatch (light theme). Ports the screensnap design to vanilla
 // DOM. All capture/record work happens in the service worker + offscreen document; the popup just
 // reflects live state (GET_STATE / STATE_CHANGED) and can close at any time without interrupting.
-import { MSG, PHASE, SOURCE, getSettings, setSettings, elapsedMs, fmtClock } from "../lib/messages.js";
+import { MSG, PHASE, SOURCE, getSettings, setSettings, qualityProfile, elapsedMs, fmtClock } from "../lib/messages.js";
 import { driveStatus } from "../lib/drive.js";
 
 const app = document.getElementById("app");
@@ -28,6 +28,7 @@ const C = {
 const MONO = "'Geist Mono',ui-monospace,'SF Mono',Menlo,monospace";
 const clockStr = (ms) => fmtClock((ms || 0) / 1000);
 const shortName = (f) => (f || "").split("/").pop();
+const fmtSize = (b) => (b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : b >= 1e6 ? `${Math.round(b / 1e6)} MB` : `${Math.max(1, Math.round(b / 1e3))} KB`);
 // Escape anything interpolated into innerHTML. Today these fields (filenames, notes) are all
 // extension-controlled, but the popup is a privileged page — escape so a future state field that
 // becomes page-influenced can't inject markup here.
@@ -110,6 +111,19 @@ function navRow(attrs, icon, label, desc, hot) {
       <div style="font-family:${MONO};font-size:11px;color:${C.muted};text-transform:uppercase;letter-spacing:0.05em">${desc}</div>
     </div>${ico("chev", { sz: 14, c: C.chev })}</div>`;
 }
+// Record-source row. Unlike navRow the row itself is NOT clickable — testers kept tapping a row expecting to
+// *select* that source (then tweak audio/quality below) and instead started recording. The Rec button on the
+// right edge is the one explicit touch target.
+function sourceRow(src, icon, label, desc) {
+  return `<div style="display:flex;align-items:center;gap:12px;padding:12px 12px 12px 14px;border:1px solid ${C.boxLine};border-radius:11px;margin:0 14px 9px;background:#fff">
+    <div style="width:36px;height:36px;border-radius:9px;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:${C.box};border:1px solid ${C.boxLine}">${ico(icon, { sz: 16, c: C.icon })}</div>
+    <div style="flex:1;min-width:0">
+      <div style="font-size:15px;font-weight:500;color:${C.fg};margin-bottom:3px">${label}</div>
+      <div style="font-family:${MONO};font-size:10.5px;color:${C.muted};text-transform:uppercase;letter-spacing:0.04em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${desc}</div>
+    </div>
+    <button class="rec-b" data-act="rec" data-src="${src}" title="Start recording · ${label}" style="flex-shrink:0;display:flex;align-items:center;gap:7px;height:36px;padding:0 14px;border-radius:9px;border:1px solid ${C.redLine};background:${C.redTint};color:${C.red};font-family:inherit;font-size:13px;font-weight:600;cursor:pointer"><span style="width:8px;height:8px;border-radius:50%;background:${C.red}"></span>Rec</button>
+  </div>`;
+}
 function captureTab() {
   return `<div style="padding-top:13px">
     ${navRow(`data-act="cap" data-mode="visible"`, "camera", "Visible Tab", capturing === "visible" ? "Capturing…" : "PNG · instant", capturing === "visible")}
@@ -132,20 +146,25 @@ function segmented(key, opts) {
 }
 function recordTab() {
   return `<div style="padding-top:13px;padding-bottom:5px">
-    ${navRow(`data-act="rec" data-src="tab"`, "tab", "Current Tab", "No picker · tab audio", false)}
-    ${navRow(`data-act="rec" data-src="screen"`, "monitor", "Screen / Window", "Whole screen or any app", false)}
-    ${navRow(`data-act="rec" data-src="videocircle"`, "video", "Screen + Cam", "Picker · webcam corner", false)}
+    ${sourceRow(SOURCE.TAB, "tab", "Current Tab", "No picker · tab audio")}
+    ${sourceRow(SOURCE.SCREEN, "monitor", "Screen / Window", "Any screen or app")}
+    ${sourceRow(SOURCE.VIDEO_CIRCLE, "video", "Screen + Cam", "Picker · webcam corner")}
     <div style="padding:13px 16px;border-top:1px solid ${C.line};margin-top:5px">
       ${sectionLabel("Audio")}
       ${audioRow("vol", "System audio", "withSystemAudio")}
       ${audioRow("mic", "Microphone", "withMic")}
     </div>
     <div style="padding:13px 16px;border-top:1px solid ${C.line}">
+      ${sectionLabel("Quality")}
+      ${segmented("videoQuality", [["small", "Small"], ["standard", "Standard"], ["high", "High"]])}
+      <div style="font-family:${MONO};font-size:11px;color:${C.faint};margin-top:8px">${esc(qualityProfile(settings.videoQuality).hint)}</div>
+    </div>
+    <div style="padding:13px 16px;border-top:1px solid ${C.line}">
       ${sectionLabel("Countdown")}
       ${segmented("countdownSec", [[0, "Off"], [3, "3s"], [5, "5s"], [10, "10s"]])}
     </div>
     <div style="padding:13px 16px;border-top:1px solid ${C.line}">
-      ${sectionLabel("Camera bubble")}
+      ${sectionLabel("Camera bubble · Screen + Cam")}
       <div style="margin-bottom:8px">${segmented("bubbleShape", [["circle", "● Circle"], ["square", "▢ Square"]])}</div>
       ${segmented("bubbleSize", [["sm", "Small"], ["md", "Medium"], ["lg", "Large"]])}
       <div style="display:flex;align-items:center;gap:11px;margin-top:11px">
@@ -264,6 +283,23 @@ function recVideoCircle() {
     <button class="ghost-b" data-act="discard" style="align-self:center;padding:5px 12px;background:none;border:none;color:${C.faint};font-size:12px;cursor:pointer;border-radius:6px">Discard</button>
   </div>`;
 }
+// Between clicking Rec and the recorder actually running: the on-page countdown (Current Tab) or Chrome's
+// screen picker / the camera setup window (Screen, Screen + Cam). Showing the Record tab here invited a second
+// Rec click that restarted the take; this gives a clear "getting ready" state with a way out.
+function preparingView() {
+  const tab = rec.source === SOURCE.TAB;
+  const title = tab ? (rec.countdownSec ? "Get ready…" : "Starting…") : "Choose what to record";
+  const sub = tab
+    ? (rec.countdownSec ? "Countdown running on the page" : "Recording starts in a moment")
+    : rec.source === SOURCE.VIDEO_CIRCLE ? "Set up your camera, then pick a screen" : "Pick a screen or window in Chrome's picker";
+  return `<div style="padding:34px 20px 26px;display:flex;flex-direction:column;align-items:center">
+    ${pingDot(10)}
+    <div style="font-size:15px;font-weight:500;color:${C.fg};margin-top:15px">${title}</div>
+    <div style="font-family:${MONO};font-size:11px;color:${C.muted};text-transform:uppercase;letter-spacing:0.05em;margin-top:7px;text-align:center">${sub}</div>
+    <div style="font-family:${MONO};font-size:11px;color:${C.faint};margin-top:4px">${srcName()} · ${esc(qualityProfile(rec.videoQuality).label)} quality</div>
+    <button class="ghost-b" data-act="discard" style="margin-top:20px;padding:9px 24px;background:#fff;border:1px solid ${C.boxLine};border-radius:9px;color:${C.fg2};font-size:12px;font-weight:500;cursor:pointer">Cancel</button>
+  </div>`;
+}
 function savingView() {
   return `<div style="padding:38px 20px 32px;display:flex;flex-direction:column;align-items:center;gap:11px">
     <div style="font-family:${MONO};font-size:12px;text-transform:uppercase;letter-spacing:0.08em;color:${C.muted}">Finalizing · ${clockStr(rec.recordedDurationMs)} recorded</div>
@@ -272,7 +308,7 @@ function savingView() {
         <div style="position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,0.6),transparent);animation:shimmer 1.2s ease-in-out infinite"></div>
       </div>
     </div>
-    <div style="font-family:${MONO};font-size:11px;color:${C.faint};text-transform:uppercase;letter-spacing:0.05em">Writing native MP4 to Downloads…</div>
+    <div style="font-family:${MONO};font-size:11px;color:${C.faint};text-transform:uppercase;letter-spacing:0.05em">Writing native MP4…</div>
   </div>`;
 }
 // The Drive line on the done card: live upload progress / result from state.drive, or a manual
@@ -335,9 +371,10 @@ function doneView() {
   const note = doneInfo.note ? `<div style="font-family:${MONO};font-size:11px;color:${C.amber};margin-top:7px;text-align:center;max-width:260px">${esc(doneInfo.note)}</div>` : "";
   return `<div style="padding:38px 20px 30px;display:flex;flex-direction:column;align-items:center">
     <div style="width:46px;height:46px;border-radius:50%;background:${C.greenTint};border:1px solid ${C.greenLine};display:flex;align-items:center;justify-content:center">${ico("check", { sz: 22, c: C.green })}</div>
-    <div style="font-size:15px;font-weight:500;color:${C.fg};margin-top:15px">Saved to Downloads</div>
+    <div style="font-size:15px;font-weight:500;color:${C.fg};margin-top:15px">${doneInfo.clipId ? "Recording ready" : "Saved to Downloads"}</div>
+    ${doneInfo.clipId ? `<div style="font-size:12px;color:${C.muted};margin-top:5px">Opened in the editor · Download there saves it as-is</div>` : ""}
     <div style="font-family:${MONO};font-size:11px;color:${C.muted};margin-top:6px">${esc(shortName(doneInfo.filename))}</div>
-    <div style="font-family:${MONO};font-size:11px;color:${C.faint};margin-top:3px">${clockStr(doneInfo.durationMs)} · ${shortName(doneInfo.filename).endsWith(".mp4") ? "H.264 + AAC" : "VP9 + Opus"}</div>${note}${driveDoneRow()}
+    <div style="font-family:${MONO};font-size:11px;color:${C.faint};margin-top:3px">${clockStr(doneInfo.durationMs)}${doneInfo.size ? ` · ${fmtSize(doneInfo.size)}` : ""} · ${shortName(doneInfo.filename).endsWith(".mp4") ? "H.264 + AAC" : "VP9 + Opus"}</div>${note}${driveDoneRow()}
     <button class="prim-b" data-act="done" style="margin-top:20px;padding:11px 30px;background:${C.green};border:none;border-radius:9px;color:#fff;font-size:13px;font-weight:600;cursor:pointer">Done</button>
     ${doneInfo.clipId ? `<button class="ghost-b" data-act="edit-video" style="margin-top:10px;padding:9px 22px;background:#fff;border:1px solid ${C.boxLine};border-radius:9px;color:${C.fg};font-size:12px;font-weight:500;cursor:pointer;display:flex;align-items:center;gap:7px">${ico("video", { sz: 13, c: C.muted })}Edit video</button>` : ""}
   </div>`;
@@ -347,11 +384,13 @@ function render() {
   const phase = rec.phase || PHASE.IDLE;
   const recording = phase === PHASE.RECORDING;
   const converting = phase === PHASE.TRANSCODING || phase === PHASE.SAVING;
+  const preparing = phase === PHASE.PREPARING;
   const showTabs = phase === PHASE.IDLE && !doneInfo;
 
   let body;
   if (doneInfo) body = doneView();
   else if (converting) body = savingView();
+  else if (preparing) body = preparingView();
   else if (recording) body = rec.source === SOURCE.VIDEO_CIRCLE ? recVideoCircle() : recRegular();
   else if (captured && localTab === "capture") body = capturedView();
   else if (localTab === "capture") body = captureTab();
@@ -393,8 +432,8 @@ app.addEventListener("click", async (e) => {
   if (act === "set") { const k = node.dataset.key; let v = node.dataset.val; if (v !== "" && !isNaN(v)) v = Number(v); settings = await setSettings({ [k]: v }); return render(); }
   if (act === "bubble-pos") { bubPos = node.dataset.pos; send({ type: MSG.SET_BUBBLE, pos: bubPos }); return render(); }
   if (act === "bubble-size") { settings.bubbleSize = node.dataset.size; send({ type: MSG.SET_BUBBLE, size: node.dataset.size }); return render(); }
-  if (act === "annotate") { await send({ type: MSG.SHOT_ANNOTATE }); window.close(); return; }
-  if (act === "save") { await send({ type: MSG.SHOT_SAVE }); captured = null; localTab = "capture"; return render(); }
+  if (act === "annotate") { const r = await send({ type: MSG.SHOT_ANNOTATE }).catch(() => null); if (r && r.ok === false) { captured = null; render(); return flashError(r.error || "Couldn't open the editor"); } window.close(); return; }
+  if (act === "save") { const r = await send({ type: MSG.SHOT_SAVE }).catch(() => null); captured = null; localTab = "capture"; render(); if (r && r.ok === false) flashError(r.error || "Couldn't save"); return; }
   if (act === "copy") return doCopy(node);
   if (act === "shot-discard") { await send({ type: MSG.SHOT_DISCARD }); captured = null; return render(); }
   if (act === "done") { doneInfo = null; localTab = "record"; return render(); }
@@ -494,7 +533,7 @@ function onState(state) {
   if (phase === PHASE.RECORDING) captured = null;
   if (prevPhase && prevPhase !== PHASE.IDLE && phase === PHASE.IDLE) {
     if (next.error) flashError(next.error);
-    else if (next.lastSaved) doneInfo = { filename: next.lastSaved, durationMs: next.recordedDurationMs, note: next.note, clipId: next.clipId || null };
+    else if (next.lastSaved) doneInfo = { filename: next.lastSaved, durationMs: next.recordedDurationMs, size: next.lastSize || null, note: next.note, clipId: next.clipId || null };
     if (next.lastSaved || next.error) localTab = "record";
   }
   rec = next;
@@ -503,6 +542,9 @@ function onState(state) {
 }
 
 async function init() {
+  // Keep the service worker alive while the popup is open: it holds the pending screenshot in memory, and
+  // MV3 stops an idle worker after 30s — deliberating over the captured card used to lose the shot.
+  setInterval(() => send({ type: MSG.KEEPALIVE }).catch(() => {}), 20000);
   settings = await getSettings();
   drive = await driveStatus().catch(() => drive);
   bubPos = settings.bubbleCorner || "br";

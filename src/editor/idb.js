@@ -32,10 +32,44 @@ export async function putBlob(id, blob, meta) {
       t.onerror = () => reject(t.error);
       t.onabort = () => reject(t.error || new Error("put aborted"));
     });
+    // Best-effort housekeeping AFTER the new clip is durably in: a failure here must never fail the save.
+    try { await pruneOld(db, id); } catch { /* keep everything */ }
   } finally {
     db.close();
   }
   return id;
+}
+
+// Every finished recording is stashed here for the editor handoff and nothing else ever removes it, so
+// a heavy user accumulated GBs (hundreds of MB per clip) indefinitely. Drop clips older than a week,
+// but always keep the KEEP_RECENT newest (an editor tab may still be open on one) and never the one
+// just written. A Blob an open editor already holds stays readable after its record is deleted.
+const KEEP_RECENT = 3;
+const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+async function pruneOld(db, keepId) {
+  const recs = await new Promise((resolve, reject) => {
+    const out = [];
+    const req = tx(db, "readonly").openCursor();
+    req.onsuccess = () => {
+      const c = req.result;
+      if (!c) return resolve(out);
+      out.push({ id: c.value.id, savedAt: c.value.savedAt || 0 });
+      c.continue();
+    };
+    req.onerror = () => reject(req.error);
+  });
+  recs.sort((a, b) => b.savedAt - a.savedAt);
+  const now = Date.now();
+  const doomed = recs.slice(KEEP_RECENT).filter((r) => r.id !== keepId && now - r.savedAt > MAX_AGE_MS);
+  if (!doomed.length) return;
+  await new Promise((resolve, reject) => {
+    const t = db.transaction(DB.store, "readwrite");
+    const s = t.objectStore(DB.store);
+    for (const r of doomed) s.delete(r.id);
+    t.oncomplete = () => resolve();
+    t.onerror = () => reject(t.error);
+    t.onabort = () => reject(t.error || new Error("prune aborted"));
+  });
 }
 
 export async function getBlob(id) {

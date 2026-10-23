@@ -1,0 +1,87 @@
+# Builds the Chrome Web Store zip (scripts/package.mjs) on every PR and push to main, and publishes a GitHub
+# release for each new version: bump "version" in manifest.json + package.json, push to main, and a
+# vX.Y.Z release appears with screensnap-X.Y.Z.zip and its SHA-256. A version that already has a tag is
+# skipped, so re-runs and ordinary pushes never re-release.
+#
+# Actions are pinned to full commit SHAs (tag in the trailing comment). The release job never runs
+# `npm install`, so no third-party package code executes while it holds the write token.
+name: Package
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: package-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - name: Check versions agree
+        run: |
+          m=$(node -p "require('./manifest.json').version")
+          p=$(node -p "require('./package.json').version")
+          if [ "$m" != "$p" ]; then echo "::error::manifest.json ($m) and package.json ($p) versions differ"; exit 1; fi
+          echo "VERSION=$m" >> "$GITHUB_ENV"
+      - run: npm ci --ignore-scripts
+      - run: npm test
+      - run: npm run lint
+      - run: node scripts/package.mjs
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: screensnap-${{ env.VERSION }}
+          path: dist/screensnap-${{ env.VERSION }}.zip
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Is this version already released?
+        id: ver
+        run: |
+          v=$(node -p "require('./manifest.json').version")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          if gh release view "v$v" >/dev/null 2>&1 || git ls-remote --exit-code --tags origin "refs/tags/v$v" >/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "v$v is already released — bump the version in manifest.json + package.json to publish a new one." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build zip + checksum
+        if: steps.ver.outputs.exists == 'false'
+        run: |
+          node scripts/package.mjs
+          cd dist && sha256sum "screensnap-${{ steps.ver.outputs.version }}.zip" > "screensnap-${{ steps.ver.outputs.version }}.zip.sha256"
+          cat "screensnap-${{ steps.ver.outputs.version }}.zip.sha256"
+      - name: Publish release
+        if: steps.ver.outputs.exists == 'false'
+        run: |
+          v="${{ steps.ver.outputs.version }}"
+          gh release create "v$v" "dist/screensnap-$v.zip" "dist/screensnap-$v.zip.sha256" \
+            --target "$GITHUB_SHA" \
+            --title "screensnap v$v" \
+            --generate-notes \
+            --notes "Upload \`screensnap-$v.zip\` to the Chrome Web Store, or unzip it and use **Load unpacked** at chrome://extensions. Verify with \`sha256sum -c screensnap-$v.zip.sha256\`."
+          echo "Published [v$v]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/v$v)" >> "$GITHUB_STEP_SUMMARY"

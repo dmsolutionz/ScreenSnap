@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import {
   elapsedMs, fmtClock, stamp, mergeSettings, DEFAULT_SETTINGS,
   normalizeCountdown, bubbleSizePx, bubbleRadius, clampToViewport, BUBBLE_SIZES, restartOptions,
-  SOURCE,
+  SOURCE, QUALITY, qualityProfile,
 } from "../src/lib/messages.js";
 
 test("elapsedMs: zero when no state or no startedAt", () => {
@@ -121,7 +121,7 @@ test("bubbleRadius: circle is half the diameter, square is a small corner", () =
 test("restartOptions: carries settings + pins the tab, drops transient fields", () => {
   const state = {
     phase: "recording", recordingTabId: 42, source: "videocircle", withMic: false, withSystemAudio: true,
-    videoFormat: "mp4", videoFps: 60, videoMaxHeight: 1440, countdownSec: 5, bubbleShape: "square",
+    videoFormat: "mp4", videoFps: 60, videoQuality: "high", countdownSec: 5, bubbleShape: "square",
     bubbleSize: "lg", camMirror: false,
     // transient — must NOT be carried:
     startedAt: 123456, paused: true, pausedAt: 200000, pausedTotalMs: 9999, clipId: "abc", micMuted: true, drawActive: true,
@@ -129,7 +129,7 @@ test("restartOptions: carries settings + pins the tab, drops transient fields", 
   const o = restartOptions(state);
   assert.deepEqual(o, {
     tabId: 42, recordSource: "videocircle", withMic: false, withSystemAudio: true,
-    videoFormat: "mp4", videoFps: 60, videoMaxHeight: 1440, countdownSec: 5,
+    videoFormat: "mp4", videoFps: 60, videoQuality: "high", countdownSec: 5,
     bubbleShape: "square", bubbleSize: "lg", camMirror: false,
   });
   // explicitly assert transients are absent
@@ -141,6 +141,26 @@ test("restartOptions: carries settings + pins the tab, drops transient fields", 
 test("restartOptions: tolerates missing state", () => {
   assert.equal(restartOptions(null).tabId, undefined);
   assert.equal(restartOptions(undefined).recordSource, undefined);
+});
+
+test("qualityProfile: maps presets, falls back to standard for unknown/legacy values", () => {
+  assert.equal(qualityProfile("small"), QUALITY.small);
+  assert.equal(qualityProfile("standard"), QUALITY.standard);
+  assert.equal(qualityProfile("high"), QUALITY.high);
+  assert.equal(qualityProfile(undefined), QUALITY.standard); // settings saved before the Quality control existed
+  assert.equal(qualityProfile("bogus"), QUALITY.standard);
+});
+
+test("QUALITY: presets get strictly bigger (height + bitrate), Standard is the 1080p default", () => {
+  const order = [QUALITY.small, QUALITY.standard, QUALITY.high];
+  for (let i = 1; i < order.length; i++) {
+    assert.ok(order[i].maxHeight > order[i - 1].maxHeight);
+    assert.ok(order[i].videoBitsPerSecond > order[i - 1].videoBitsPerSecond);
+  }
+  assert.equal(DEFAULT_SETTINGS.videoQuality, "standard");
+  assert.equal(qualityProfile(DEFAULT_SETTINGS.videoQuality).maxHeight, 1080);
+  // Standard must stay Slack-sized: even with Chrome's ~2x encoder overshoot, 7 minutes < ~150 MB.
+  assert.ok((QUALITY.standard.videoBitsPerSecond * 2 * 420) / 8 / 1e6 < 150);
 });
 
 test("SOURCE: includes the screen kind alongside tab and video-circle", () => {

@@ -48,7 +48,12 @@ async function startRecording(opts) {
   }
   acquiring = false;
   const mime = pickMime(opts.videoFormat !== "webm");
-  const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+  // Explicit bitrate from the Quality preset — without one Chrome uses 2.5 Mbps whatever the resolution,
+  // which its hardware H.264 encoder overshoots badly on full-res Retina captures (see QUALITY).
+  const recOpts = {};
+  if (mime) recOpts.mimeType = mime;
+  if (opts.videoBitsPerSecond > 0) recOpts.videoBitsPerSecond = opts.videoBitsPerSecond;
+  const recorder = new MediaRecorder(stream, recOpts);
   const chunks = [];
 
   recorder.ondataavailable = (e) => {
@@ -125,8 +130,10 @@ async function buildStream(opts) {
     // "include" surfaces the picker's "Share audio" checkbox — the user decides, we can't force it. On
     // macOS there's no system-audio loopback for a full-screen share, so "Entire Screen" is usually
     // video-only; window/tab shares can still carry audio. A dismissed picker throws (handled upstream).
+    // max (not just ideal) caps the frame height for the Quality preset; display capture keeps the aspect
+    // ratio and never upscales, so a smaller screen just records at its own size.
     av = await navigator.mediaDevices.getDisplayMedia({
-      video: { frameRate: { ideal: fps || 30 }, height: { ideal: maxHeight || 2160 } },
+      video: { frameRate: { ideal: fps || 30 }, height: { ideal: maxHeight || 2160, max: maxHeight || 2160 } },
       audio: !!withSystemAudio,
       ...(withSystemAudio ? { systemAudio: "include" } : {}),
     });
@@ -348,7 +355,7 @@ async function finalize() {
   if (!clipId) await downloadBlob(blob, filename);
 
   cleanupTracks();
-  send({ type: MSG.REC_DONE, filename, note, clipId });
+  send({ type: MSG.REC_DONE, filename, note, clipId, size: blob.size });
   resetCurrent();
 }
 
