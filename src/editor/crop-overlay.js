@@ -1,219 +1,232 @@
-// Crop overlay for the video stage. While active it sits on top of the preview canvas (so it also
-// suspends annotation), lets the user drag a rectangle with a dim-outside + rule-of-thirds affordance,
-// and on Apply converts the selection — expressed as a fraction of the displayed canvas — into a crop
-// rect in SOURCE pixels. Crops COMPOSE: the selection is measured against the current crop rect (the
-// "base"), so cropping an already-cropped view narrows further. Reset clears the crop entirely.
-import { cropRect, composeDims } from "./transforms.js";
+// Crop tool for the video stage. While active it shows the WHOLE frame (the editor feeds it a transforms
+// getter with the applied crop and zooms suppressed) with a persistent crop box on top: dimmed outside,
+// rule-of-thirds inside, eight handles. Drag inside the box to move it, drag an edge or corner to resize it
+// (a ratio preset, or ⇧, keeps its shape; ⌥ resizes about the centre), drag outside it to draw a new one,
+// arrow keys nudge. Ratio chips, exact W × H and a portrait/landscape swap live in the options row under the
+// toolbar (the same slot the layer inspector uses). ↵ / Apply commits the box as transforms.crop in SOURCE
+// pixels (null when it covers the whole frame), Esc / Cancel discards the edit, and the box is re-editable
+// any time because it is always measured against the full frame. All the math is in crop-geometry.js.
+import { composeDims } from "./transforms.js";
+import { RATIOS, MIN_CROP, clamp, sameRect, intRect, boxHit, resizeBox, dragRect, ratioFit, swapRect, sizeRect } from "./crop-geometry.js";
 
-// { stageEl, canvas, getTransforms, srcW, srcH, onApply(crop|null), onExit }
-export function createCropOverlay({ stageEl, canvas, getTransforms, srcW, srcH, onApply, onExit }) {
-  let host = null;
-  let sel = null;     // current selection in overlay-local px: { x, y, w, h }
-  let drag = null;    // { x0, y0 }
+const GRAB = 10; // screen px: how close the pointer must be to an edge / corner to take hold of it
+const PAD = 16;  // the host reaches this far past the canvas so edge handles stay grabbable at the border
+const CURSORS = { "-1,-1": "nwse-resize", "1,1": "nwse-resize", "1,-1": "nesw-resize", "-1,1": "nesw-resize", "0,-1": "ns-resize", "0,1": "ns-resize", "-1,0": "ew-resize", "1,0": "ew-resize" };
+const HANDLES = ["-1,-1", "0,-1", "1,-1", "1,0", "1,1", "0,1", "-1,1", "-1,0"];
+
+// { stageEl, canvas, inspectorEl, getTransforms, getCrop, srcW, srcH, onEnter(), onApply(crop|null), onExit() }
+//   getTransforms() -> the transforms the stage is DRAWN with (full frame while cropping)
+//   getCrop()       -> the crop currently applied to the edit ({x,y,w,h} source px) or null
+export function createCropOverlay({ stageEl, canvas, inspectorEl, getTransforms, getCrop, srcW, srcH, onEnter, onApply, onExit }) {
+  let host = null, frameEl = null, chipEl = null;
   let active = false;
-  let ratio = 0;      // locked aspect ratio (w/h); 0 = free-form
+  let frame = null;   // the crop box, source px: { x, y, w, h }
+  let ratio = null;   // locked aspect ratio (w/h); null = free
+  let drag = null;
+  const full = () => ({ x: 0, y: 0, w: srcW, h: srcH });
+  const base = () => { const c = getCrop && getCrop(); return c ? { ...c } : full(); };
+  const dirty = () => !!frame && !sameRect(frame, base());
 
-  const PRESETS = [["0", "Free"], ["1.7777778", "16:9"], ["1", "1:1"], ["0.5625", "9:16"], ["1.3333333", "4:3"]];
+  // ── geometry: canvas box in the stage, the content rect inside it (a backdrop pads the canvas), and the
+  // source ⇄ host-local maps built from them ──
+  function geom() {
+    const cr = canvas.getBoundingClientRect(), sr = stageEl.getBoundingClientRect();
+    const box = { left: cr.left - sr.left + stageEl.scrollLeft, top: cr.top - sr.top + stageEl.scrollTop, width: cr.width, height: cr.height };
+    const cd = composeDims((getTransforms && getTransforms()) || {}, srcW, srcH);
+    const kx = box.width / (cd.outW || 1), ky = box.height / (cd.outH || 1);
+    const cb = { x: PAD + cd.dest.x * kx, y: PAD + cd.dest.y * ky, w: cd.dest.w * kx, h: cd.dest.h * ky };
+    return { box, cb, sx: cb.w / srcW, sy: cb.h / srcH };
+  }
+  const toSrc = (g, e) => {
+    const r = host.getBoundingClientRect();
+    return { x: ((e.clientX - r.left) - g.cb.x) / g.sx, y: ((e.clientY - r.top) - g.cb.y) / g.sy };
+  };
 
-  function canvasBoxInStage() {
-    // The canvas is centered inside the (position:relative, scrollable, padded) stage. Compute its box
-    // relative to the stage's content origin via bounding rects + scroll — robust to the padding and
-    // any scroll offset, which raw offsetLeft/Top can get wrong.
-    const cr = canvas.getBoundingClientRect();
-    const sr = stageEl.getBoundingClientRect();
-    return {
-      left: cr.left - sr.left + stageEl.scrollLeft,
-      top: cr.top - sr.top + stageEl.scrollTop,
-      width: cr.width,
-      height: cr.height,
+  // ── options row ──
+  function buildOptions() {
+    inspectorEl.innerHTML = `<div class="ss-insp ss-crop-row">
+      <span class="ss-insp-title">Crop</span>
+      <div class="ss-crop-presets" id="ss-crop-presets">${RATIOS.map(([label]) => `<button class="ss-crop-preset" data-ratio="${label}" type="button">${label}</button>`).join("")}</div>
+      <span class="ss-insp-sep"></span>
+      <span class="ss-insp-ctl">size
+        <input class="ss-crop-num" id="ss-crop-w" inputmode="numeric" aria-label="Crop width" /> ×
+        <input class="ss-crop-num" id="ss-crop-h" inputmode="numeric" aria-label="Crop height" /> px
+        <button class="ss-insp-btn" id="ss-crop-swap" type="button" title="Swap portrait / landscape">⇄</button></span>
+      <span class="ss-insp-spacer"></span>
+      <span class="ss-insp-hint ss-crop-hint">drag to move · pull edges to resize · ⇧ keep shape · ⌥ from centre</span>
+      <button class="ss-btn ss-btn-ghost ss-btn-sm" id="ss-crop-reset" type="button" title="Back to the whole frame">Reset</button>
+      <button class="ss-btn ss-btn-ghost ss-btn-sm" id="ss-crop-cancel" type="button" title="Discard (Esc)">Cancel</button>
+      <button class="ss-btn ss-btn-primary ss-btn-sm" id="ss-crop-apply" type="button" title="Apply (Enter)">Apply crop</button>
+    </div>`;
+    const q = (s) => inspectorEl.querySelector(s);
+    q("#ss-crop-presets").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-ratio]");
+      if (b) setRatio(b.dataset.ratio);
+    });
+    const typed = (changed) => () => {
+      const next = sizeRect(frame, Number(q("#ss-crop-w").value), Number(q("#ss-crop-h").value), changed, ratio, srcW, srcH);
+      if (next) frame = next;
+      paint(); // an invalid entry just snaps back
     };
+    q("#ss-crop-w").addEventListener("change", typed("w"));
+    q("#ss-crop-h").addEventListener("change", typed("h"));
+    for (const id of ["#ss-crop-w", "#ss-crop-h"]) q(id).addEventListener("focus", (e) => e.target.select());
+    q("#ss-crop-swap").addEventListener("click", () => { if (ratio) ratio = 1 / ratio; frame = swapRect(frame, srcW, srcH); paint(); });
+    q("#ss-crop-reset").addEventListener("click", () => { frame = full(); paint(); });
+    q("#ss-crop-cancel").addEventListener("click", () => cancel());
+    q("#ss-crop-apply").addEventListener("click", () => commit());
   }
 
-  // The CONTENT rect inside the overlay (host-local px): composeDims' dest. With a backdrop the canvas
-  // also shows the padded background, so selections are confined to and measured against this rect —
-  // measuring against the whole canvas skewed and shifted the crop. Without a backdrop it is the canvas.
-  function contentBox() {
-    const box = canvasBoxInStage();
-    const cd = composeDims((getTransforms && getTransforms()) || {}, srcW, srcH);
-    const kx = box.width / (cd.outW || 1);
-    const ky = box.height / (cd.outH || 1);
-    return { x: cd.dest.x * kx, y: cd.dest.y * ky, width: cd.dest.w * kx, height: cd.dest.h * ky };
+  // A preset refits the box to the largest rect of that ratio centred in it (never adding area) and then
+  // holds while the box is drawn or resized; Free keeps the box as it is.
+  function setRatio(label) {
+    const r = RATIOS.find((x) => x[0] === label);
+    ratio = r ? r[1] : null;
+    if (ratio) frame = ratioFit(frame, ratio, srcW, srcH);
+    paint();
   }
 
   function build() {
     host = document.createElement("div");
     host.className = "ss-crop";
-    const box = canvasBoxInStage();
-    host.style.cssText = `position:absolute;left:${box.left}px;top:${box.top}px;width:${box.width}px;height:${box.height}px;z-index:30;touch-action:none;cursor:crosshair;`;
-    host.innerHTML = `
-      <div class="ss-crop-shade" id="ss-crop-shade"></div>
-      <div class="ss-crop-rect" id="ss-crop-rect">
+    host.style.cssText = "position:absolute;z-index:30;touch-action:none;user-select:none;cursor:crosshair;";
+    host.innerHTML = `<div class="ss-crop-frame" id="ss-crop-frame">
         <span class="ss-crop-g ss-crop-gv1"></span><span class="ss-crop-g ss-crop-gv2"></span>
         <span class="ss-crop-g ss-crop-gh1"></span><span class="ss-crop-g ss-crop-gh2"></span>
-      </div>
-      <div class="ss-crop-bar" id="ss-crop-bar">
-        <div class="ss-crop-presets" id="ss-crop-presets">
-          ${PRESETS.map(([r, label], i) => `<button class="ss-crop-preset ${i === 0 ? "on" : ""}" data-ratio="${r}" type="button">${label}</button>`).join("")}
-        </div>
-        <span class="ss-crop-hint" id="ss-crop-hint">Drag to select a crop area</span>
-        <button class="ss-btn ss-btn-ghost ss-crop-reset" id="ss-crop-reset" type="button">Reset</button>
-        <button class="ss-btn ss-btn-ghost" id="ss-crop-cancel" type="button">Cancel</button>
-        <button class="ss-btn ss-btn-primary" id="ss-crop-apply" type="button" disabled>Apply crop</button>
+        ${HANDLES.map((h) => `<i class="ss-crop-h" data-h="${h}"></i>`).join("")}
+        <span class="ss-crop-chip" id="ss-crop-chip" hidden></span>
       </div>`;
     stageEl.appendChild(host);
-
+    frameEl = host.querySelector("#ss-crop-frame");
+    chipEl = host.querySelector("#ss-crop-chip");
     host.addEventListener("pointerdown", onDown);
     host.addEventListener("pointermove", onMove);
     host.addEventListener("pointerup", onUp);
-    host.querySelector("#ss-crop-apply").addEventListener("click", apply);
-    host.querySelector("#ss-crop-cancel").addEventListener("click", () => exit());
-    host.querySelector("#ss-crop-reset").addEventListener("click", reset);
-    host.querySelector("#ss-crop-presets").addEventListener("pointerdown", (e) => e.stopPropagation());
-    host.querySelector("#ss-crop-presets").addEventListener("click", (e) => {
-      const b = e.target.closest("[data-ratio]");
-      if (!b) return;
-      ratio = Number(b.dataset.ratio) || 0;
-      host.querySelectorAll(".ss-crop-preset").forEach((x) => x.classList.toggle("on", x === b));
-      applyRatioToSelection();
-      paint();
-    });
-    // Start with the whole frame selected so Apply/Reset read naturally.
-    const cb = contentBox();
-    sel = { x: cb.x, y: cb.y, w: cb.width, h: cb.height };
-    paint();
+    host.addEventListener("pointercancel", onUp);
+    host.addEventListener("dblclick", () => { if (dirty()) commit(); });
   }
 
-  function localPoint(e, cb = contentBox()) {
-    const r = host.getBoundingClientRect();
-    return { x: clamp(e.clientX - r.left, cb.x, cb.x + cb.width), y: clamp(e.clientY - r.top, cb.y, cb.y + cb.height) };
-  }
-
-  function onDown(e) {
-    if (e.target.closest(".ss-crop-bar")) return; // let the buttons work
-    e.preventDefault();
-    host.setPointerCapture?.(e.pointerId);
-    const box = contentBox(); // cache the box for the whole drag
-    const p = localPoint(e, box);
-    drag = { x0: p.x, y0: p.y, box };
-    sel = { x: p.x, y: p.y, w: 0, h: 0 };
-    paint();
-  }
-  function onMove(e) {
-    if (!drag) return;
-    const p = localPoint(e, drag.box);
-    if (ratio) sel = ratioRect(drag.x0, drag.y0, p.x, p.y, ratio, drag.box);
-    else sel = { x: Math.min(drag.x0, p.x), y: Math.min(drag.y0, p.y), w: Math.abs(p.x - drag.x0), h: Math.abs(p.y - drag.y0) };
-    paint();
-  }
-  function onUp(e) {
-    if (!drag) return;
-    drag = null;
-    host.releasePointerCapture?.(e.pointerId);
-    if (sel && (sel.w < 8 || sel.h < 8)) { // tiny drag → "select all" (at the locked ratio, if any)
-      if (ratio) applyRatioToSelection();
-      else { const cb = contentBox(); sel = { x: cb.x, y: cb.y, w: cb.width, h: cb.height }; }
-    }
-    paint();
-  }
-
-  // Constrain a drag to the locked aspect ratio, clamped to the available space (within the content
-  // box) in the drag direction.
-  function ratioRect(ax, ay, px, py, r, box) {
-    let w = Math.abs(px - ax);
-    let h = w / r;
-    const availX = px >= ax ? box.x + box.width - ax : ax - box.x;
-    const availY = py >= ay ? box.y + box.height - ay : ay - box.y;
-    if (w > availX) { w = availX; h = w / r; }
-    if (h > availY) { h = availY; w = h * r; }
-    const x = px >= ax ? ax : ax - w;
-    const y = py >= ay ? ay : ay - h;
-    return { x, y, w, h };
-  }
-
-  // Reshape the current selection to the locked ratio, centered on its center (or the content center),
-  // fitting within ~90% of the content box. No-op in free mode.
-  function applyRatioToSelection() {
-    if (!ratio) return;
-    const box = contentBox();
-    const cx = sel ? sel.x + sel.w / 2 : box.x + box.width / 2;
-    const cy = sel ? sel.y + sel.h / 2 : box.y + box.height / 2;
-    let w = box.width * 0.9;
-    let h = w / ratio;
-    if (h > box.height * 0.9) { h = box.height * 0.9; w = h * ratio; }
-    let x = cx - w / 2;
-    let y = cy - h / 2;
-    x = Math.max(box.x, Math.min(x, box.x + box.width - w));
-    y = Math.max(box.y, Math.min(y, box.y + box.height - h));
-    sel = { x, y, w, h };
+  function place() {
+    const { box } = geom();
+    host.style.left = `${box.left - PAD}px`;
+    host.style.top = `${box.top - PAD}px`;
+    host.style.width = `${box.width + PAD * 2}px`;
+    host.style.height = `${box.height + PAD * 2}px`;
   }
 
   function paint() {
-    if (!host) return;
-    const rectEl = host.querySelector("#ss-crop-rect");
-    const shade = host.querySelector("#ss-crop-shade");
-    const apply = host.querySelector("#ss-crop-apply");
-    const hint = host.querySelector("#ss-crop-hint");
-    const has = sel && sel.w >= 8 && sel.h >= 8;
-    rectEl.style.cssText =
-      `position:absolute;left:${sel.x}px;top:${sel.y}px;width:${sel.w}px;height:${sel.h}px;` +
-      "box-sizing:border-box;border:1px solid #fff;box-shadow:0 0 0 9999px rgba(0,0,0,0.45);pointer-events:none;";
-    rectEl.style.display = has ? "block" : "none";
-    shade.style.cssText = has ? "display:none" : "position:absolute;inset:0;background:rgba(0,0,0,0.35);pointer-events:none;";
-    apply.disabled = !isCropMeaningful();
-    if (hint) hint.style.display = has ? "none" : "";
+    if (!host || !frame) return;
+    place();
+    const g = geom();
+    frameEl.style.cssText = `left:${g.cb.x + frame.x * g.sx}px;top:${g.cb.y + frame.y * g.sy}px;width:${frame.w * g.sx}px;height:${frame.h * g.sy}px;`;
+    frameEl.classList.toggle("whole", sameRect(frame, full()));
+    frameEl.classList.toggle("dragging", !!drag);
+    const q = (s) => inspectorEl.querySelector(s);
+    const wEl = q("#ss-crop-w"), hEl = q("#ss-crop-h");
+    if (wEl && document.activeElement !== wEl) wEl.value = String(frame.w);
+    if (hEl && document.activeElement !== hEl) hEl.value = String(frame.h);
+    inspectorEl.querySelectorAll(".ss-crop-preset").forEach((b) => {
+      const r = RATIOS.find((x) => x[0] === b.dataset.ratio);
+      b.classList.toggle("on", (r[1] == null ? ratio == null : ratio != null && Math.abs(r[1] - ratio) < 1e-6));
+    });
+    q("#ss-crop-apply").disabled = !dirty();
+    q("#ss-crop-reset").disabled = sameRect(frame, full());
+    if (chipEl) { chipEl.hidden = !drag || drag.kind === "move"; chipEl.textContent = `${frame.w} × ${frame.h}`; }
   }
 
-  // A crop only matters if the selection is meaningfully smaller than the whole content box.
-  function isCropMeaningful() {
-    const box = contentBox();
-    if (!sel || sel.w < 8 || sel.h < 8) return false;
-    return sel.w < box.width - 2 || sel.h < box.height - 2;
+  // ── pointer ──
+  function onDown(e) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const g = geom(), p = toSrc(g, e);
+    const hit = boxHit(frame, p, GRAB / g.sx);
+    if (hit && hit !== "inside") drag = { kind: "resize", hx: hit.hx, hy: hit.hy, start: p, orig: { ...frame } };
+    else if (hit === "inside" && !sameRect(frame, full())) drag = { kind: "move", start: p, orig: { ...frame } };
+    else { const x = clamp(p.x, 0, srcW), y = clamp(p.y, 0, srcH); drag = { kind: "draw", x1: x, y1: y, x2: x, y2: y, prev: { ...frame } }; }
+    host.setPointerCapture?.(e.pointerId);
+    paint();
   }
 
-  function selToCrop() {
-    const box = contentBox();
-    const t = getTransforms ? getTransforms() : null;
-    const base = cropRect(t, srcW, srcH); // current crop (or full frame) = what the content box displays
-    const fx = (sel.x - box.x) / box.width, fy = (sel.y - box.y) / box.height;
-    const fw = sel.w / box.width, fh = sel.h / box.height;
-    let w = Math.round(base.w * fw);
-    let h = Math.round(base.h * fh);
-    let x = Math.round(base.x + base.w * fx);
-    let y = Math.round(base.y + base.h * fy);
-    w = clamp(w, 2, srcW);
-    // With a locked ratio, derive height from width so the crop lands at the nominal aspect (the
-    // independent rounding above could otherwise drift it by a pixel).
-    h = clamp(ratio ? Math.round(w / ratio) : h, 2, srcH);
-    x = clamp(x, 0, srcW - w); y = clamp(y, 0, srcH - h);
-    return { x, y, w, h };
+  function onMove(e) {
+    const g = geom(), p = toSrc(g, e);
+    if (!drag) { // hover: show what a press here would do
+      const hit = boxHit(frame, p, GRAB / g.sx);
+      host.style.cursor = hit && hit !== "inside" ? CURSORS[`${hit.hx},${hit.hy}`] : hit === "inside" && !sameRect(frame, full()) ? "move" : "crosshair";
+      return;
+    }
+    let r;
+    if (drag.kind === "draw") {
+      drag.x2 = p.x; drag.y2 = p.y;
+      r = dragRect(drag, ratio || (e.shiftKey ? 1 : null), srcW, srcH);
+    } else {
+      const d = { x: p.x - drag.start.x, y: p.y - drag.start.y };
+      if (drag.kind === "move") r = { ...drag.orig, x: clamp(drag.orig.x + d.x, 0, srcW - drag.orig.w), y: clamp(drag.orig.y + d.y, 0, srcH - drag.orig.h) };
+      else r = resizeBox(drag.orig, drag.hx, drag.hy, d, { ratio: ratio || (e.shiftKey ? drag.orig.w / drag.orig.h : null), alt: e.altKey, bounds: { w: srcW, h: srcH }, min: MIN_CROP });
+    }
+    frame = intRect(r, srcW, srcH);
+    paint();
   }
 
-  function apply() {
-    if (!isCropMeaningful()) return;
-    const crop = selToCrop();
-    exit();
-    if (onApply) onApply(crop);
+  function onUp(e) {
+    if (!drag) return;
+    const d = drag;
+    drag = null;
+    host.releasePointerCapture?.(e.pointerId);
+    // A click (or a sliver) while drawing is not a new box: keep the one that was there.
+    if (d.kind === "draw" && (frame.w < MIN_CROP || frame.h < MIN_CROP)) frame = d.prev;
+    paint();
   }
-  function reset() {
-    exit();
-    if (onApply) onApply(null); // clear crop entirely
+
+  // ── keyboard (capture phase, so the editor's frame-step / tool shortcuts don't also fire) ──
+  function onKey(e) {
+    if (!active) return;
+    const t = e.target, typing = !!t && (t.tagName === "INPUT" || t.tagName === "SELECT" || t.isContentEditable);
+    const swallow = () => { e.preventDefault(); e.stopImmediatePropagation(); };
+    if (e.key === "Escape") { swallow(); if (typing) t.blur(); cancel(); return; }
+    if (e.key === "Enter" && !(t && t.tagName === "BUTTON")) { swallow(); if (typing) t.blur(); commit(); return; }
+    if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+    const step = e.shiftKey ? 10 : 1;
+    const d = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
+    if (!d) return;
+    swallow();
+    frame = { ...frame, x: clamp(frame.x + d[0], 0, srcW - frame.w), y: clamp(frame.y + d[1], 0, srcH - frame.h) };
+    paint();
+  }
+
+  function enter() {
+    if (active) return;
+    active = true;
+    if (onEnter) onEnter();
+    frame = base();
+    ratio = null;
+    buildOptions();
+    build();
+    window.addEventListener("keydown", onKey, true);
+    paint();
   }
 
   function exit() {
-    if (!host) return;
-    host.remove();
-    host = null;
-    sel = null;
-    drag = null;
+    if (!active) return;
     active = false;
+    window.removeEventListener("keydown", onKey, true);
+    if (host) host.remove();
+    host = frameEl = chipEl = null;
+    frame = null; drag = null;
+    inspectorEl.innerHTML = "";
     if (onExit) onExit();
   }
 
-  function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+  function commit() {
+    if (!active) return;
+    if (dirty() && onApply) onApply(sameRect(frame, full()) ? null : { ...frame });
+    exit();
+  }
+  function cancel() { exit(); }
 
   return {
-    enter() { if (active) return; active = true; build(); },
-    exit,
+    enter, exit, commit, cancel,
+    refresh() { if (active) paint(); },
     isActive: () => active,
+    isDirty: () => active && dirty(),
   };
 }

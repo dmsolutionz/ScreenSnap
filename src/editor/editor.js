@@ -9,6 +9,7 @@ import { translate } from "./shapes.js";
 import { buildShell } from "./ui-shell.js";
 import { createPreview } from "./preview.js";
 import { createTimeline } from "./timeline.js";
+import { createFilmstrip } from "./filmstrip.js";
 import { createAnnotator } from "./annotate.js";
 import { runExport, runGifExport } from "./export.js";
 import { driveStatus, uploadToDrive, makeShareable, shareUrl } from "../lib/drive.js";
@@ -44,6 +45,7 @@ let lastTime = 0;        // latest preview playhead (source seconds) — anchor 
 let selectedZoomId = null; // id of the zoom block currently being edited (focus box shown)
 let selectedLayerId = null; // id of the layer currently selected on the stage (resize box shown for images)
 let audioPeaks = null; // { peaks, buckets } from computeWaveformPeaks(), or null (no track / not decoded yet)
+let cropMode = false;  // the crop tool is open: the stage shows the WHOLE frame (no crop, no zoom) under the crop box
 const NEW_ZOOM_SCALE = 2;  // default magnification for a freshly-added zoom block
 
 async function boot() {
@@ -109,7 +111,7 @@ async function start(blob, fileName) {
   const preview = createPreview({
     canvas: shell.stageCanvas,
     blob,
-    getTransforms: () => transforms,
+    getTransforms: () => (cropMode ? stageTransforms(transforms) : transforms),
     store,
     onTime: (sec) => onPreviewTime(sec),
     onStop: (err) => onPreviewStop(err),
@@ -132,6 +134,10 @@ async function start(blob, fileName) {
       selectLayer(id);
     },
   });
+
+  // Filmstrip: small frames tiled across the Video clip, decoded in the background (the clip is a flat
+  // bar until they land).
+  const film = createFilmstrip({ blob, durationSec, onUpdate: () => session?.timeline.redrawFilm() });
 
   const timeline = createTimeline({
     el: shell.timelineEl,
@@ -183,6 +189,20 @@ async function start(blob, fileName) {
       preview.redraw();
     },
     getAudioEnabled: () => transforms.speed === 1,
+    // The Audio track header's own mute + volume (the same master state as Project ▾ → Volume / Mute all).
+    getAudioState: () => ({ muted: !!transforms.audio.muted, volume: typeof transforms.audio.volume === "number" ? transforms.audio.volume : 1 }),
+    onAudioMute: () => {
+      transforms.audio.muted = !transforms.audio.muted;
+      if (!transforms.audio.muted && !(transforms.audio.volume > 0)) transforms.audio.volume = 1;
+      audioStateChanged();
+    },
+    onAudioVolume: (v) => {
+      transforms.audio.volume = v;
+      transforms.audio.muted = v === 0 ? transforms.audio.muted : false; // dragging the slider up un-mutes
+      audioStateChanged();
+    },
+    getFilmstrip: () => film,
+    getClipName: () => fileName,
     // Overlay layer tracks (one row per layer): the range block, plus the header controls the Layers
     // sidebar used to own (eye / opacity / reorder = z-order / delete).
     store,
@@ -229,7 +249,6 @@ async function start(blob, fileName) {
       timeline.refresh();
     },
     onExtraRemove: () => removeExtraAudio(),
-    onScaleChange: () => syncTlZoomSlider(),
   });
 
   // Waveform decode is fire-and-forget — a long recording can take real time to fully decode, and the
@@ -239,23 +258,37 @@ async function start(blob, fileName) {
     .then((peaks) => { audioPeaks = peaks; timeline.refresh(); })
     .catch((err) => console.warn("[screensnap] waveform decode failed:", err));
 
-  // Crop overlay: a "Crop" toolbar toggle enters it; Apply sets transforms.crop (source px) and the
-  // preview/export recompute from there. The annotator's canvas is covered while it's active.
+  // Crop overlay: the "Crop" toolbar button (or C) opens it. It edits a persistent box over the WHOLE frame
+  // (the preview draws the uncropped, unzoomed frame while it is open); Apply sets transforms.crop in source
+  // px (null clears) and the preview/export recompute from there. Its options row lives in the inspector slot.
   const cropOverlay = createCropOverlay({
     stageEl: shell.stageCanvas.parentElement,
     canvas: shell.stageCanvas,
-    getTransforms: () => transforms,
+    inspectorEl: shell.inspectorEl,
+    getTransforms: () => (cropMode ? stageTransforms(transforms) : transforms),
+    getCrop: () => transforms.crop,
     srcW: width,
     srcH: height,
+    onEnter: () => {
+      selectZoom(null);
+      selectLayer(null);
+      preview.pause();
+      updateTransport();
+      cropMode = true;
+      preview.redraw();
+      markCropBtn(true);
+    },
     onApply: (crop) => {
       transforms.crop = crop; // null clears
       setStatus(shell.statusEl, meta, transforms);
+    },
+    onExit: () => {
+      cropMode = false;
       preview.redraw();
       zoomOverlay.refresh(); // crop changes the content rect — re-place the focus box if shown
       selectionOverlay.refresh();
       markCropBtn(false);
     },
-    onExit: () => markCropBtn(false),
   });
 
   // Zoom focus overlay: shown over the stage while a zoom block is selected. Drag the box to move the
@@ -296,7 +329,7 @@ async function start(blob, fileName) {
   // (add/remove/move/opacity/visibility), so annotations show live without a second subscription
   // here — adding one would double-composite each edit.
 
-  session = { input, meta, transforms, store, history, preview, timeline, annotator, cropOverlay, zoomOverlay, selectionOverlay, shell, fileName, blob, extraAudioInput: null, extraAudioBlob: null };
+  session = { input, meta, transforms, store, history, preview, timeline, film, annotator, cropOverlay, zoomOverlay, selectionOverlay, shell, fileName, blob, extraAudioInput: null, extraAudioBlob: null };
 
   // The stage overlays position from the canvas rect, but the stage reflows when the chrome around it
   // changes size (inspector row appearing on selection, window resize) — re-place them when that happens.
@@ -305,6 +338,7 @@ async function start(blob, fileName) {
     if (!session) return;
     session.zoomOverlay.refresh();
     session.selectionOverlay.refresh();
+    session.cropOverlay.refresh();
   }) : null;
   if (stageResizeObserver) {
     stageResizeObserver.observe(shell.stageCanvas.parentElement);
@@ -313,7 +347,7 @@ async function start(blob, fileName) {
 
   // Prominent transport: a play/pause button + time readout, plus a click-to-play overlay centred on
   // the stage (hidden while playing and while a drawing tool is active so it never blocks annotation).
-  buildTransport(shell.transportEl, durationSec);
+  buildTransport(shell.transportEl);
   updateTransport();
 
   // Render the first frame.
@@ -325,9 +359,9 @@ const BD_OPTS = [["grad-violet", "Violet"], ["grad-ocean", "Ocean"], ["grad-suns
 function buildToolbar(el, transforms) {
   el.innerHTML = `
     <div class="ss-tb-group">
-      <button class="ss-tool" id="ss-crop-btn" title="Crop the frame">Crop</button>
-      <button class="ss-tool" id="ss-cut-btn" title="Cut mode: drag on the Video track to remove a section">Cut</button>
-      <button class="ss-tool" id="ss-zoom-add" title="Add a zoom at the playhead">+ Zoom</button>
+      <button class="ss-tool" id="ss-crop-btn" title="Crop the frame (C)">Crop</button>
+      <button class="ss-tool" id="ss-cut-btn" title="Cut mode (X): drag on the Video track to remove a section">Cut</button>
+      <button class="ss-tool" id="ss-zoom-add" title="Add a zoom at the playhead (Z)">+ Zoom</button>
       <button class="ss-tool" id="ss-zoom-remove" title="Remove the selected zoom" disabled>Remove zoom</button>
     </div>
     <span class="ss-tb-sep"></span>
@@ -388,17 +422,8 @@ function buildToolbar(el, transforms) {
   document.addEventListener("click", (e) => { if (!e.target.closest("[data-pop],[data-popbody]")) closePopovers(); });
 
   // ── clip actions (tools live in the left rail now) ────────────────────────────────────────────
-  el.querySelector("#ss-crop-btn").addEventListener("click", () => {
-    if (!session?.cropOverlay) return;
-    if (session.cropOverlay.isActive()) { session.cropOverlay.exit(); markCropBtn(false); }
-    else { session.preview.pause(); updateTransport(); session.cropOverlay.enter(); markCropBtn(true); }
-  });
-  el.querySelector("#ss-cut-btn").addEventListener("click", (e) => {
-    if (!session?.timeline) return;
-    const on = !session.timeline.isCutMode();
-    session.timeline.setCutMode(on);
-    e.currentTarget.classList.toggle("on", on);
-  });
+  el.querySelector("#ss-crop-btn").addEventListener("click", () => toggleCrop());
+  el.querySelector("#ss-cut-btn").addEventListener("click", () => toggleCut());
   el.querySelector("#ss-zoom-add").addEventListener("click", () => addZoom());
   el.querySelector("#ss-zoom-remove").addEventListener("click", () => removeSelectedZoom());
 
@@ -434,14 +459,12 @@ function buildToolbar(el, transforms) {
   const muteCb = el.querySelector("#ss-audio-mute-cb");
   muteCb.addEventListener("change", (e) => {
     transforms.audio.muted = e.target.checked;
-    setStatus(session.shell.statusEl, session.meta, transforms);
-    session?.preview.redraw();
+    audioStateChanged();
   });
   el.querySelector("#ss-audio-vol").addEventListener("input", (e) => {
     transforms.audio.volume = Number(e.target.value);
-    if (transforms.audio.volume > 0 && transforms.audio.muted) { transforms.audio.muted = false; muteCb.checked = false; }
-    setStatus(session.shell.statusEl, session.meta, transforms);
-    session?.preview.redraw();
+    if (transforms.audio.volume > 0 && transforms.audio.muted) transforms.audio.muted = false;
+    audioStateChanged();
   });
   el.querySelector("#ss-add-audio").addEventListener("click", () => onAddAudioClick());
   el.querySelector("#ss-remove-audio").addEventListener("click", () => removeExtraAudio());
@@ -470,13 +493,26 @@ function buildToolbar(el, transforms) {
     });
 }
 
+// The recording's master audio changed (from the timeline's Audio header or Project ▾): keep the status line,
+// the preview, the popover's controls and the timeline header all saying the same thing.
+function audioStateChanged() {
+  if (!session) return;
+  const a = session.transforms.audio;
+  const cb = document.getElementById("ss-audio-mute-cb"), vol = document.getElementById("ss-audio-vol");
+  if (cb) cb.checked = !!a.muted;
+  if (vol && document.activeElement !== vol) vol.value = String(typeof a.volume === "number" ? a.volume : 1);
+  setStatus(session.shell.statusEl, session.meta, session.transforms);
+  session.preview.redraw();
+  session.timeline.refresh();
+}
+
 // Switch the active drawing tool, updating the rail highlight. `lock` keeps the tool armed after a
 // shape is drawn (double-click / ⇧); otherwise drawing auto-returns to Select (draw-once).
 function setActiveTool(t, lock = false) {
   tool = t;
   toolLocked = lock && t !== "select";
   session?.annotator.setTool(tool);
-  if (session?.cropOverlay?.isActive()) session.cropOverlay.exit();
+  if (session?.cropOverlay?.isActive()) session.cropOverlay.commit(); // switching tools keeps an edited box
   selectZoom(null);
   document.querySelectorAll("[data-tool]").forEach((x) => {
     x.classList.toggle("on", x.dataset.tool === tool);
@@ -549,37 +585,18 @@ function closeEditor() {
 
 const PLAY_SVG = '<svg viewBox="0 0 100 100" width="16" height="16" aria-hidden="true"><polygon points="30,20 30,80 82,50" fill="currentColor"/></svg>';
 const PAUSE_SVG = '<svg viewBox="0 0 100 100" width="16" height="16" aria-hidden="true"><rect x="28" y="22" width="16" height="56" fill="currentColor"/><rect x="56" y="22" width="16" height="56" fill="currentColor"/></svg>';
-function buildTransport(el, durationSec) {
+function buildTransport(el) {
   if (!el) return;
   el.innerHTML = `
     <button class="ss-step" id="ss-prev-edge" type="button" title="Previous clip edge or cut">⏮</button>
     <button class="ss-pp" id="ss-pp" type="button" aria-label="Play">${PLAY_SVG}</button>
     <button class="ss-step" id="ss-next-edge" type="button" title="Next clip edge or cut">⏭</button>
-    <span class="ss-time" id="ss-time">00:00 / ${fmtTime(durationSec)}</span>
-    <span class="ss-key-hint">space play · ←→ frame · ⇧←→ 1s</span>
+    <span class="ss-key-hint"><kbd>space</kbd> play · <kbd>←</kbd><kbd>→</kbd> frame · <kbd>⇧</kbd><kbd>←</kbd><kbd>→</kbd> 1s · <kbd>C</kbd> crop · <kbd>X</kbd> cut · <kbd>Z</kbd> zoom</span>
     <div class="ss-tb-spacer"></div>
-    <div class="ss-tlzoom">
-      <span class="ss-tlzoom-label">tl zoom</span>
-      <button class="ss-tlzoom-btn" id="ss-tlz-out" title="Zoom out" type="button">−</button>
-      <input type="range" id="ss-tlz-slider" class="ss-tlzoom-slider" min="0" max="1" step="0.01" value="0" title="Timeline zoom" />
-      <button class="ss-tlzoom-btn" id="ss-tlz-in" title="Zoom in" type="button">+</button>
-      <button class="ss-tlzoom-fit" id="ss-tlz-fit" title="Fit the whole clip" type="button">Fit</button>
-    </div>`;
+    <span class="ss-key-hint">⌘ scroll or pinch to zoom the timeline</span>`;
   el.querySelector("#ss-pp").addEventListener("click", () => togglePlay());
   el.querySelector("#ss-prev-edge").addEventListener("click", () => jumpEdge(-1));
   el.querySelector("#ss-next-edge").addEventListener("click", () => jumpEdge(1));
-  const slider = el.querySelector("#ss-tlz-slider");
-  // zoomBy/fit fire the timeline's onScaleChange -> syncTlZoomSlider, so ⌘-wheel zoom stays synced too.
-  el.querySelector("#ss-tlz-out").addEventListener("click", () => session?.timeline.zoomBy(1 / 1.4));
-  el.querySelector("#ss-tlz-in").addEventListener("click", () => session?.timeline.zoomBy(1.4));
-  el.querySelector("#ss-tlz-fit").addEventListener("click", () => session?.timeline.fit());
-  slider.addEventListener("input", () => session?.timeline.setZoomNorm(Number(slider.value)));
-}
-
-// Reflect the timeline's current zoom into the transport slider (fired via onScaleChange).
-function syncTlZoomSlider() {
-  const slider = document.getElementById("ss-tlz-slider");
-  if (slider && session?.timeline) slider.value = String(session.timeline.getZoomNorm());
 }
 
 // Reflect play state across the transport button + the centre stage overlay.
@@ -597,9 +614,7 @@ function updateTransport() {
 function onPreviewTime(sec) {
   lastTime = sec || 0;
   if (!session) return;
-  session.timeline.setPlayhead(sec);
-  const time = document.getElementById("ss-time");
-  if (time) time.textContent = `${fmtTime(sec)} / ${fmtTime(session.meta.durationSec)}`;
+  session.timeline.setPlayhead(sec, session.preview.isPlaying()); // the readout lives in the timeline's ruler header
 }
 
 // Scale a source image so it spans at most ~40% of the video width, never upscaling. Defensive against
@@ -710,6 +725,7 @@ function pickAudioFile() {
 // Add a ~2s zoom block at the current playhead, centered at 2x, and select it so the focus box shows.
 function addZoom() {
   if (!session) return;
+  if (session.cropOverlay.isActive()) session.cropOverlay.commit(); // one overlay on the stage at a time
   const dur = session.meta.durationSec || 0;
   const tIn = Math.max(0, Math.min(lastTime, Math.max(0, dur - 0.5)));
   const tOut = Math.min(dur, tIn + 2);
@@ -772,7 +788,7 @@ function selectLayer(id) {
 // selected shape's color (shapes only), opacity, and time-range controls; replaces the last job the
 // Layers sidebar did. Rebuilt whenever the selection changes.
 function updateInspector() {
-  if (!session) return;
+  if (!session || session.cropOverlay.isActive()) return; // the crop options own the row while the tool is open
   const el = session.shell.inspectorEl;
   const store = session.store;
   const l = selectedLayerId ? store.get(selectedLayerId) : null;
@@ -847,19 +863,35 @@ function changeExtraAudio(r, mode) {
   session.preview.redraw();
 }
 
+// Cut toolbar button / X: while on, dragging across the Video track removes that section.
+function toggleCut() {
+  if (!session?.timeline) return;
+  const on = !session.timeline.isCutMode();
+  session.timeline.setCutMode(on);
+  document.getElementById("ss-cut-btn")?.classList.toggle("on", on);
+}
+
+// What the stage draws while the crop tool is open: the whole frame, so the box can grow back out of an
+// applied crop, with no zoom block moving the picture under it.
+function stageTransforms(t) { return { ...t, crop: null, zoom: [] }; }
+
+// Crop toolbar button / C: open the tool; pressing it again applies an edited box (or just closes).
+function toggleCrop() {
+  if (!session?.cropOverlay) return;
+  if (session.cropOverlay.isActive()) session.cropOverlay.commit();
+  else session.cropOverlay.enter();
+}
+
 function markCropBtn(on) {
   const b = document.getElementById("ss-crop-btn");
-  if (b) b.classList.toggle("on", !!on);
+  if (!b) return;
+  b.classList.toggle("on", !!on);
+  b.classList.toggle("has", !on && !!session?.transforms?.crop); // a dot on the button while a crop is applied
 }
 
 function onPreviewStop(err) {
   updateTransport();
   if (session) setStatus(session.shell.statusEl, session.meta, session.transforms, "Playback stopped — " + ((err && err.message) || "decode error"));
-}
-
-function fmtTime(sec) {
-  const s = Math.max(0, Math.floor(sec || 0));
-  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 }
 
 // Save the recording exactly as captured — no transcode, instant. This is the robust "just download
@@ -1162,7 +1194,8 @@ function pickImageFile() {
 }
 
 // Keyboard shortcuts — all ignored while typing in a field (e.g. the text-annotation input).
-// Space = play/pause · V R A T B = tools · I = add image · esc = Select + deselect · ⌘D = duplicate.
+// Space = play/pause · V R A T B = tools · I = add image · C = crop · X = cut mode · Z = add zoom ·
+// esc = Select + deselect · ⌘D = duplicate.
 const TOOL_KEYS = { v: "select", r: "rect", a: "arrow", t: "text", b: "blur" };
 window.addEventListener("keydown", (e) => {
   const el = document.activeElement;
@@ -1189,6 +1222,9 @@ window.addEventListener("keydown", (e) => {
   if (e.key === "Escape") { setActiveTool("select"); selectLayer(null); return; }
   const k = e.key.toLowerCase();
   if (k === "i") { addImageFromPicker(); return; }
+  if (k === "c") { toggleCrop(); return; }
+  if (k === "x") { toggleCut(); return; }
+  if (k === "z") { addZoom(); return; }
   if (TOOL_KEYS[k]) setActiveTool(TOOL_KEYS[k], e.shiftKey);
 });
 

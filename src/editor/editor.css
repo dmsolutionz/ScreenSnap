@@ -106,14 +106,8 @@ body {
 .ss-step { width: 28px; height: 28px; border-radius: 7px; border: 1px solid var(--chrome-line); background: var(--chrome); font-size: 11px; color: var(--chrome-muted); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
 .ss-step:hover { color: var(--chrome-fg); background: #eef0f3; }
 .ss-key-hint { font-family: var(--mono); font-size: 10px; color: #9ca3af; }
+.ss-key-hint kbd { font-family: var(--mono); font-size: 9.5px; color: #6b7280; background: #fff; border: 1px solid var(--chrome-line); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; }
 .ss-tb-spacer { flex: 1; }
-.ss-tlzoom { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--chrome-muted); }
-.ss-tlzoom-btn { width: 22px; height: 22px; border: 1px solid var(--chrome-line); border-radius: 6px; background: var(--chrome); color: var(--chrome-fg); font-size: 13px; line-height: 1; cursor: pointer; }
-.ss-tlzoom-btn:hover { background: #eef0f3; }
-.ss-tlzoom-slider { width: 110px; accent-color: var(--green); cursor: pointer; }
-.ss-tlzoom-fit { border: 1px solid var(--chrome-line); border-radius: 6px; background: var(--chrome); color: var(--chrome-fg); font-size: 11px; padding: 3px 8px; cursor: pointer; }
-.ss-tlzoom-fit:hover { background: #eef0f3; }
-
 .ss-timeline { flex: 0 0 auto; background: var(--chrome-2); border-top: 1px solid var(--chrome-line); }
 .ss-status {
   flex: 0 0 auto; height: 30px; display: flex; align-items: center; padding: 0 16px;
@@ -130,10 +124,13 @@ body {
 .ss-btn-primary { background: var(--green); border-color: var(--green); color: #fff; font-weight: 600; }
 .ss-btn-primary:hover { background: #15803d; }
 .ss-btn-lg { padding: 12px 26px; font-size: 15px; }
+.ss-btn-sm { padding: 5px 11px; font-size: 12px; }
 
 .ss-tool { font-family: var(--sans); font-size: 12px; padding: 7px 11px; border-radius: 7px; border: 1px solid var(--chrome-line); background: transparent; color: var(--chrome-muted); cursor: pointer; }
 .ss-tool:hover { color: var(--chrome-fg); }
 .ss-tool.on { background: var(--green-tint); border-color: var(--green-line); color: var(--green); }
+.ss-tool.has { position: relative; }
+.ss-tool.has::after { content: ""; position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
 
 .ss-sw { width: 20px; height: 20px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
 .ss-sw.on { outline: 2px solid var(--green); outline-offset: 1px; }
@@ -141,61 +138,88 @@ body {
 .ss-select { font-family: var(--mono); font-size: 11px; background: var(--chrome); color: var(--chrome-fg); border: 1px solid var(--chrome-line); border-radius: 6px; padding: 4px 6px; cursor: pointer; }
 
 /* ── timeline: constant-height frozen-pane track grid (never reflows the stage) ── */
-.ss-tl { position: relative; height: 236px; display: flex; flex-direction: column; }
-/* every row is [172px header | flex time area] */
-.ss-tl-ruler, .ss-tl-vrow, .ss-tl-trk { display: flex; flex-shrink: 0; }
-.ss-tl-ruler { height: 26px; border-bottom: 1px solid var(--chrome-line); }
-.ss-tl-vrow { height: 40px; border-bottom: 1px solid var(--chrome-line); background: #fbfcfd; }
+.ss-tl { --track-v: #16a34a; --track-z: #7c3aed; --track-l: #d97706; --track-a: #0284c7; --track-x: #4f46e5;
+  position: relative; height: 256px; display: flex; flex-direction: column; user-select: none; }
+/* every row is [188px header | flex time area] */
+.ss-tl-ruler, .ss-tl-vrow, .ss-tl-trk, .ss-tl-nav { display: flex; flex-shrink: 0; }
+.ss-tl-ruler { height: 34px; border-bottom: 1px solid var(--chrome-line); background: var(--chrome); }
+.ss-tl-vrow { height: 64px; border-bottom: 1px solid var(--chrome-line); background: #fbfcfd; }
 .ss-tl-lanes { flex: 1; overflow-y: auto; overflow-x: hidden; }
 .ss-tl-trk { height: 32px; border-bottom: 1px solid #eef0f3; }
-.ss-tl-trk-audio { height: 36px; }
+.ss-tl-trk-audio { height: 38px; }
 .ss-tl-trk.ss-tl-drop { box-shadow: inset 0 2px 0 var(--green); }
+.ss-tl-nav { height: 24px; border-top: 1px solid var(--chrome-line); background: var(--chrome); }
 
-.ss-tl-thead { width: 172px; flex-shrink: 0; box-sizing: border-box; border-right: 1px solid var(--chrome-line); display: flex; align-items: center; gap: 7px; padding: 0 10px; }
-.ss-tl-rhead { font-family: var(--mono); font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; color: #9ca3af; }
-.ss-tl-ticon { font-size: 12px; }
-.ss-tl-tname { font-size: 12px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ss-tl-thead { width: 188px; flex-shrink: 0; box-sizing: border-box; border-right: 1px solid var(--chrome-line); display: flex; align-items: center; gap: 6px; padding: 0 8px; }
+.ss-tl-rhead { gap: 6px; padding-right: 6px; }
+.ss-tl-tc { font-family: var(--mono); font-size: 17px; font-weight: 500; letter-spacing: -0.03em; color: var(--chrome-fg); font-variant-numeric: tabular-nums; }
+.ss-tl-tctotal { font-family: var(--mono); font-size: 10.5px; color: #9ca3af; }
+.ss-tl-snap-btn { margin-left: auto; width: 26px; height: 24px; border: 1px solid var(--chrome-line); border-radius: 6px; background: var(--chrome); color: #9ca3af; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; }
+.ss-tl-snap-btn:hover { color: var(--chrome-fg); background: #eef0f3; }
+.ss-tl-snap-btn.on { color: var(--green); background: var(--green-tint); border-color: var(--green-line); }
+.ss-tl-tname { font-size: 12px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ss-tl-trk-layer.on-sel .ss-tl-tname, .ss-tl-lname.on { color: #15803d; font-weight: 600; }
 .ss-tl-tdur { font-family: var(--mono); font-size: 10px; color: var(--chrome-muted); }
-.ss-tl-grip { color: #c3c8d1; cursor: grab; font-size: 11px; letter-spacing: -1px; user-select: none; }
-.ss-tl-op { flex: 0 0 40px; width: 40px; height: 4px; accent-color: var(--green); cursor: pointer; }
-.ss-tl-eye { width: 20px; height: 20px; border: none; background: transparent; font-size: 11px; line-height: 1; cursor: pointer; padding: 0; }
-.ss-tl-del { width: 18px; height: 20px; border: none; background: transparent; color: #9ca3af; font-size: 14px; line-height: 1; cursor: pointer; padding: 0; }
+.ss-tl-grip { color: #c3c8d1; cursor: grab; font-size: 11px; letter-spacing: -1px; margin-right: -2px; }
+.ss-tl-badge { flex: 0 0 auto; min-width: 22px; height: 18px; padding: 0 4px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; font-family: var(--mono); font-size: 9.5px; font-weight: 600; letter-spacing: 0.02em; color: #fff; }
+.ss-tl-b-v { background: var(--track-v); } .ss-tl-b-z { background: var(--track-z); } .ss-tl-b-l { background: var(--track-l); }
+.ss-tl-b-a { background: var(--track-a); } .ss-tl-b-x { background: var(--track-x); }
+.ss-tl-op { flex: 0 0 44px; width: 44px; height: 4px; accent-color: var(--green); cursor: pointer; }
+.ss-tl-eye { width: 22px; height: 22px; border: none; border-radius: 6px; background: transparent; color: var(--chrome-muted); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; flex: 0 0 auto; }
+.ss-tl-eye:hover { background: #eef0f3; color: var(--chrome-fg); }
+.ss-tl-eye.off { color: #c3c8d1; }
+.ss-tl-del { width: 18px; height: 22px; border: none; background: transparent; color: #9ca3af; font-size: 14px; line-height: 1; cursor: pointer; padding: 0; flex: 0 0 auto; }
 .ss-tl-del:hover { color: #f87171; }
 
 /* time areas: shared horizontal scale, positioned in JS (px). overflow hidden clips scrolled content. */
 .ss-tl-ttime { position: relative; flex: 1; overflow: hidden; }
 .ss-tl-rtime { cursor: pointer; margin: 0 10px; } /* same 10px inset as every track's time area */
 .ss-tl-rlabels { position: absolute; inset: 0; pointer-events: none; }
-.ss-tl-tick { position: absolute; top: 50%; transform: translate(-50%, -50%); font-family: var(--mono); font-size: 9.5px; color: #9ca3af; white-space: nowrap; }
+.ss-tl-tk { position: absolute; bottom: 0; width: 1px; }
+.ss-tl-tk-major { top: 0; }
+.ss-tl-tk-major::before { content: ""; position: absolute; bottom: 0; left: 0; width: 1px; height: 14px; background: #9aa3b0; }
+.ss-tl-tk-major b { position: absolute; top: 5px; left: 5px; font-family: var(--mono); font-size: 10px; font-weight: 500; color: #6b7280; white-space: nowrap; }
+.ss-tl-tk-minor { height: 6px; background: #d3d8df; }
 .ss-tl-vtime { margin: 6px 10px; }
-.ss-tl-ztime, .ss-tl-ltime, .ss-tl-extime { margin: 5px 10px; }
-.ss-tl-atime { margin: 4px 10px; background: #fff; border: 1px solid var(--chrome-line); border-radius: 6px; cursor: crosshair; }
-.ss-tl-vtime, .ss-tl-ztime, .ss-tl-ltime, .ss-tl-extime { background: #fff; border: 1px solid var(--chrome-line); border-radius: 6px; }
+.ss-tl-ztime, .ss-tl-ltime, .ss-tl-extime { margin: 4px 10px; }
+.ss-tl-atime { margin: 4px 10px; cursor: crosshair; }
+.ss-tl-vtime, .ss-tl-ztime, .ss-tl-ltime, .ss-tl-extime, .ss-tl-atime { background: #fff; border: 1px solid var(--chrome-line); border-radius: 6px; }
 
-/* video track: trim window + handles + cut bands */
-.ss-tl-trim { position: absolute; top: 0; bottom: 0; box-sizing: border-box; background: var(--green-tint); border-left: 2px solid var(--green); border-right: 2px solid var(--green); border-radius: 6px; pointer-events: none; }
-.ss-tl-handle { position: absolute; top: -4px; bottom: -4px; width: 10px; margin-left: -5px; border-radius: 4px; background: var(--green); cursor: ew-resize; z-index: 3; }
-.ss-tl-cuts { position: absolute; inset: 0; pointer-events: none; }
-.ss-tl-cut { position: absolute; top: 0; bottom: 0; pointer-events: auto; background: repeating-linear-gradient(45deg, rgba(220,38,38,0.22) 0 6px, rgba(220,38,38,0.34) 6px 12px); border-left: 1px solid rgba(220,38,38,0.7); border-right: 1px solid rgba(220,38,38,0.7); }
-.ss-tl-cut-pending { background: rgba(220,38,38,0.30); }
+/* video clip: filmstrip + name chip, dimmed outside the trim, trim outline + grips, cut bands */
+.ss-tl-vtime { background: #d9e1e4; border-color: #c4cdd2; cursor: pointer; }
+.ss-tl-film { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.ss-tl-clipname { position: absolute; top: 0; height: 16px; line-height: 16px; padding: 0 8px 0 7px; border-radius: 0 0 6px 0; background: rgba(21,128,61,0.92); color: #fff; font-size: 10px; font-weight: 600; white-space: nowrap; max-width: 70%; overflow: hidden; text-overflow: ellipsis; pointer-events: none; z-index: 2; }
+.ss-tl-dim { position: absolute; top: 0; bottom: 0; background: rgba(248,249,250,0.74); pointer-events: none; z-index: 1; }
+.ss-tl-trim { position: absolute; top: 0; bottom: 0; box-sizing: border-box; border: 2px solid var(--green); border-radius: 5px; pointer-events: none; z-index: 2; }
+.ss-tl-handle { position: absolute; top: 0; bottom: 0; width: 12px; background: var(--green); cursor: ew-resize; z-index: 4; }
+.ss-tl-handle-in { margin-left: -1px; border-radius: 5px 0 0 5px; }
+.ss-tl-handle-out { margin-left: -11px; border-radius: 0 5px 5px 0; }
+.ss-tl-handle::after { content: ""; position: absolute; top: 50%; left: 50%; width: 4px; height: 18px; transform: translate(-50%, -50%); border-left: 1.5px solid rgba(255,255,255,0.85); border-right: 1.5px solid rgba(255,255,255,0.85); box-sizing: border-box; }
+.ss-tl-cuts { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
+.ss-tl-cut { position: absolute; top: 0; bottom: 0; pointer-events: auto; background: repeating-linear-gradient(45deg, rgba(220,38,38,0.30) 0 6px, rgba(220,38,38,0.46) 6px 12px); border-left: 1px solid rgba(220,38,38,0.8); border-right: 1px solid rgba(220,38,38,0.8); }
+.ss-tl-cut-pending { background: rgba(220,38,38,0.34); }
 .ss-tl-cut-x { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 16px; height: 16px; border: none; border-radius: 50%; background: #dc2626; color: #fff; font-size: 12px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; }
-.ss-tl-vtime.ss-tl-cutmode { cursor: crosshair; outline: 2px solid rgba(220,38,38,0.5); outline-offset: -2px; }
+.ss-tl-vtime.ss-tl-cutmode { cursor: crosshair; outline: 2px solid rgba(220,38,38,0.55); outline-offset: -2px; }
 
 /* generic block on a track time area (zoom / layer-range / extra) + shared edge handles */
 .ss-tl-zblock, .ss-tl-lblock, .ss-tl-exblock { position: absolute; top: 2px; bottom: 2px; box-sizing: border-box; min-width: 10px; display: flex; align-items: center; cursor: grab; border-radius: 5px; overflow: hidden; }
-.ss-tl-zblock { justify-content: center; background: var(--green-tint); border: 1px solid var(--green-line); }
-.ss-tl-zblock.on, .ss-tl-lblock.on { background: rgba(34,197,94,0.26); border-color: var(--green); box-shadow: 0 0 0 1px var(--green); }
-.ss-tl-zname { font-family: var(--mono); font-size: 10px; color: var(--green); pointer-events: none; }
-.ss-tl-lblock { background: var(--green-tint); border: 1px solid var(--green-line); }
-.ss-tl-lblock-full { cursor: default; background: rgba(148,163,184,0.14); border: 1px dashed var(--chrome-line); }
+.ss-tl-zblock { justify-content: center; background: rgba(124,58,237,0.12); border: 1px solid rgba(124,58,237,0.5); }
+.ss-tl-zblock.on { background: rgba(124,58,237,0.26); border-color: var(--track-z); box-shadow: 0 0 0 1px var(--track-z); }
+.ss-tl-zname { font-family: var(--mono); font-size: 10px; font-weight: 500; color: #6d28d9; pointer-events: none; }
+.ss-tl-lblock { background: rgba(217,119,6,0.12); border: 1px solid rgba(217,119,6,0.5); }
+.ss-tl-lblock.on { background: rgba(217,119,6,0.26); border-color: var(--track-l); box-shadow: 0 0 0 1px var(--track-l); }
+.ss-tl-lblock-full { cursor: default; background: rgba(148,163,184,0.12); border: 1px dashed #cbd0d8; }
+.ss-tl-lblock-full.on { border-style: solid; }
+.ss-tl-lname-in { padding: 0 9px; font-family: var(--mono); font-size: 10px; color: #b45309; pointer-events: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ss-tl-lblock-full .ss-tl-lname-in { color: #94a3b8; }
 .ss-tl-edge { position: absolute; top: 0; bottom: 0; width: 10px; cursor: ew-resize; z-index: 2; }
 .ss-tl-edge-l { left: -5px; } .ss-tl-edge-r { right: -5px; }
 
 /* audio track: waveform + mute bands */
 .ss-tl-atime.ss-tl-adisabled { opacity: 0.4; cursor: default; }
+.ss-tl-atime.ss-tl-amuted .ss-tl-await { opacity: 0.35; }
 .ss-tl-await { position: absolute; top: 0; bottom: 0; height: 100%; pointer-events: none; } /* left/width set in JS on the shared scale */
-.ss-tl-await path { fill: var(--green); opacity: 0.5; }
+.ss-tl-await path { fill: var(--track-a); opacity: 0.62; }
 .ss-tl-amutes { position: absolute; inset: 0; pointer-events: none; }
 .ss-tl-amute { position: absolute; top: 0; bottom: 0; pointer-events: auto; background: repeating-linear-gradient(45deg, rgba(100,116,139,0.32) 0 6px, rgba(100,116,139,0.48) 6px 12px); border-left: 1px solid rgba(100,116,139,0.8); border-right: 1px solid rgba(100,116,139,0.8); }
 .ss-tl-amute-pending { background: rgba(100,116,139,0.4); }
@@ -203,18 +227,33 @@ body {
 .ss-tl-amute-x { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 16px; height: 16px; border: none; border-radius: 50%; background: #64748b; color: #fff; font-size: 12px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; }
 
 /* imported-audio block */
-.ss-tl-exblock { background: rgba(59,130,246,0.18); border: 1px solid rgba(59,130,246,0.5); padding: 0 8px; }
-.ss-tl-exblock.on { background: rgba(59,130,246,0.3); border-color: #3b82f6; box-shadow: 0 0 0 1px #3b82f6; }
-.ss-tl-exname { font-family: var(--mono); font-size: 10px; color: #2563eb; pointer-events: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ss-tl-exname-h { color: #2563eb; }
+.ss-tl-exblock { background: rgba(79,70,229,0.14); border: 1px solid rgba(79,70,229,0.5); padding: 0 8px; }
+.ss-tl-exblock.on { background: rgba(79,70,229,0.26); border-color: var(--track-x); box-shadow: 0 0 0 1px var(--track-x); }
+.ss-tl-exname { font-family: var(--mono); font-size: 10px; color: #4338ca; pointer-events: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ss-tl-exname-h { color: #4338ca; }
 
-/* full-height playhead spanning the whole panel */
-.ss-tl-ph { position: absolute; top: 0; bottom: 0; width: 2px; background: #18181b; box-shadow: 0 0 0 1px rgba(255,255,255,0.7); z-index: 20; pointer-events: none; }
-.ss-tl-ph-grab { position: absolute; top: 0; left: 50%; transform: translateX(-50%); width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-top: 8px solid #18181b; }
+/* navigator: the thumb is the visible window. Drag it to pan, drag its round ends to zoom. */
+.ss-tl-nhead { gap: 4px; padding: 0 8px; }
+.ss-tl-zb { height: 18px; min-width: 20px; padding: 0 5px; border: 1px solid var(--chrome-line); border-radius: 5px; background: var(--chrome); color: var(--chrome-fg); font-size: 12px; line-height: 1; cursor: pointer; }
+.ss-tl-zb:hover { background: #eef0f3; }
+.ss-tl-zfit { font-size: 10px; margin-left: auto; }
+.ss-tl-ntime { margin: 0 10px; overflow: visible; cursor: pointer; }
+.ss-tl-nav-track { position: absolute; left: 0; right: 0; top: 8px; height: 8px; border-radius: 4px; background: #e8eaee; }
+.ss-tl-nav-ph { position: absolute; top: 5px; bottom: 5px; width: 2px; margin-left: -1px; background: var(--chrome-fg); opacity: 0.45; pointer-events: none; }
+.ss-tl-nav-thumb { position: absolute; top: 5px; height: 14px; min-width: 24px; border-radius: 7px; background: rgba(34,197,94,0.28); border: 1.5px solid var(--green); box-sizing: border-box; cursor: grab; }
+.ss-tl-nfit .ss-tl-nav-thumb { background: rgba(34,197,94,0.16); }
+.ss-tl-nav-h { position: absolute; top: 50%; width: 13px; height: 13px; border-radius: 50%; background: #fff; border: 2px solid var(--green); box-sizing: border-box; transform: translate(-50%, -50%); cursor: ew-resize; }
+.ss-tl-nav-h[data-edge="in"] { left: 0; }
+.ss-tl-nav-h[data-edge="out"] { left: 100%; }
 
-/* snap guide: a thin green line + mm:ss label while a dragged edge snaps to a target */
+/* full-height playhead: a flag head over the ruler (drag to scrub) + a line through every track */
+.ss-tl-ph { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--green); box-shadow: 0 0 0 1px rgba(255,255,255,0.7); z-index: 20; pointer-events: none; }
+.ss-tl-ph-grab { position: absolute; top: 3px; left: 50%; transform: translateX(-50%); width: 15px; height: 19px; background: var(--green); clip-path: polygon(0 0, 100% 0, 100% 62%, 50% 100%, 0 62%); border-radius: 3px 3px 0 0; pointer-events: auto; cursor: ew-resize; }
+
+/* snap guide: a thin green line + mm:ss label while a dragged edge snaps to a target; drag tip: exact time */
 .ss-tl-snap { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--green); opacity: 0.75; z-index: 25; pointer-events: none; }
 .ss-tl-snap-lbl { position: absolute; top: 3px; left: 50%; transform: translateX(-50%); font-family: var(--mono); font-size: 8.5px; color: var(--green); background: #fff; border: 1px solid var(--green-line); border-radius: 3px; padding: 0 4px; white-space: nowrap; }
+.ss-tl-tip { position: absolute; top: 6px; transform: translateX(-50%); z-index: 26; pointer-events: none; font-family: var(--mono); font-size: 10.5px; color: #fff; background: rgba(24,24,27,0.92); border-radius: 5px; padding: 2px 7px; white-space: nowrap; }
 
 /* zoom focus box over the preview (only shown while a block is selected) */
 .ss-zfocus { box-sizing: border-box; border: 2px solid var(--green); border-radius: 3px; box-shadow: 0 0 0 9999px rgba(0,0,0,0.30); }
@@ -234,24 +273,29 @@ body {
 .ss-sel-sw { left: 0; top: 100%; cursor: nesw-resize; }
 .ss-sel-w  { left: 0; top: 50%; cursor: ew-resize; }
 
-/* crop overlay (sits over the stage canvas while cropping) */
-.ss-crop { user-select: none; }
-.ss-crop-rect { box-sizing: border-box; }
-.ss-crop-g { position: absolute; background: rgba(255,255,255,0.45); }
+/* crop: a persistent box over the whole frame — dimmed outside, thirds inside, 8 handles. The options row
+   (ratio chips, W × H, swap, Reset / Cancel / Apply) lives in the inspector slot. */
+.ss-crop-frame { position: absolute; box-sizing: border-box; border: 1.5px solid #fff; box-shadow: 0 0 0 9999px rgba(8,10,14,0.56); pointer-events: none; }
+.ss-crop-frame.whole { box-shadow: 0 0 0 9999px rgba(8,10,14,0.30); border-style: dashed; }
+.ss-crop-g { position: absolute; background: rgba(255,255,255,0.28); pointer-events: none; }
+.ss-crop-frame.dragging .ss-crop-g { background: rgba(255,255,255,0.65); }
 .ss-crop-gv1 { left: 33.33%; top: 0; bottom: 0; width: 1px; }
 .ss-crop-gv2 { left: 66.66%; top: 0; bottom: 0; width: 1px; }
 .ss-crop-gh1 { top: 33.33%; left: 0; right: 0; height: 1px; }
 .ss-crop-gh2 { top: 66.66%; left: 0; right: 0; height: 1px; }
-.ss-crop-bar {
-  position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 2;
-  display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 10px;
-  background: rgba(24,24,27,0.92); box-shadow: 0 6px 22px rgba(0,0,0,0.35);
-}
-.ss-crop-bar .ss-btn { font-size: 12px; padding: 6px 12px; }
-.ss-crop-bar .ss-btn-ghost { color: #fff; border-color: rgba(255,255,255,0.25); background: transparent; }
-.ss-crop-bar .ss-btn-ghost:hover { background: rgba(255,255,255,0.1); }
-.ss-crop-hint { color: #fff; font-size: 12px; opacity: 0.85; margin-right: 4px; }
-.ss-crop-presets { display: flex; gap: 5px; margin-right: 6px; }
-.ss-crop-preset { font-family: var(--mono); font-size: 11px; padding: 4px 9px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.22); background: transparent; color: #e7e8ea; cursor: pointer; }
-.ss-crop-preset:hover { background: rgba(255,255,255,0.1); }
+.ss-crop-h { position: absolute; width: 12px; height: 12px; margin: -6px 0 0 -6px; box-sizing: border-box; background: #fff; border: 2px solid var(--green); border-radius: 3px; box-shadow: 0 1px 3px rgba(0,0,0,0.35); }
+.ss-crop-h[data-h$=",-1"], .ss-crop-h[data-h$=",0"], .ss-crop-h[data-h$=",1"] { top: 50%; }
+.ss-crop-h[data-h^="-1,"] { left: 0; } .ss-crop-h[data-h^="0,"] { left: 50%; } .ss-crop-h[data-h^="1,"] { left: 100%; }
+.ss-crop-h[data-h$=",-1"] { top: 0; } .ss-crop-h[data-h$=",1"] { top: 100%; }
+.ss-crop-h[data-h="0,-1"], .ss-crop-h[data-h="0,1"] { width: 24px; height: 8px; margin: -4px 0 0 -12px; border-radius: 4px; }
+.ss-crop-h[data-h="-1,0"], .ss-crop-h[data-h="1,0"] { width: 8px; height: 24px; margin: -12px 0 0 -4px; border-radius: 4px; }
+.ss-crop-chip { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); font-family: var(--mono); font-size: 11px; color: #fff; background: rgba(24,24,27,0.9); border-radius: 6px; padding: 3px 8px; white-space: nowrap; pointer-events: none; }
+.ss-crop-row { flex-wrap: wrap; row-gap: 6px; }
+.ss-crop-presets { display: flex; gap: 4px; }
+.ss-crop-preset { font-family: var(--mono); font-size: 11px; padding: 3px 9px; border-radius: 5px; border: 1px solid var(--chrome-line); background: var(--chrome-2); color: var(--chrome-muted); cursor: pointer; }
+.ss-crop-preset:hover { color: var(--chrome-fg); background: #eef0f3; }
 .ss-crop-preset.on { background: var(--green); border-color: var(--green); color: #fff; }
+.ss-crop-num { width: 56px; font-family: var(--mono); font-size: 11px; text-align: right; color: var(--chrome-fg); background: var(--chrome); border: 1px solid var(--chrome-line); border-radius: 5px; padding: 3px 6px; }
+.ss-crop-num:focus { outline: 2px solid var(--green-line); border-color: var(--green); }
+.ss-crop-row .ss-btn:disabled { opacity: 0.45; }
+@media (max-width: 1320px) { .ss-crop-hint { display: none; } }

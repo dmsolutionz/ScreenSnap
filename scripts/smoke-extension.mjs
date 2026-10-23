@@ -1,6 +1,6 @@
 // Live smoke test for the editors. Launches Google Chrome, loads this unpacked extension over the
 // DevTools Protocol (Extensions.loadUnpacked — the --load-extension switch is ignored in Chrome 137+),
-// boots the VIDEO editor with a generated clip and exercises crop / zoom / backdrop, and builds the
+// boots the VIDEO editor with a generated clip and exercises timeline / crop / zoom / backdrop, and builds the
 // IMAGE editor's content script against a stubbed chrome + test image. It fails (exit 1) on any
 // uncaught exception or console error in either editor — so it catches the class of bug that only
 // shows at runtime (e.g. a render helper referenced but never declared → ReferenceError).
@@ -135,12 +135,33 @@ try {
   const zoom = await evaluate(ed.sessionId, `({focusBox:!!document.querySelector('.ss-zfocus'),block:!!document.querySelector('.ss-tl-zblock')})`);
   log("  zoom: " + JSON.stringify(zoom));
   await shot(ed.sessionId, "video-zoom-backdrop");
-  await evaluate(ed.sessionId, `document.getElementById('ss-crop-btn').click()`); await sleep(300);
-  await evaluate(ed.sessionId, `(()=>{const b=[...document.querySelectorAll('.ss-crop-preset')].find(x=>x.textContent==='16:9');b&&b.click();})()`); await sleep(150);
+  // Timeline: timecode readout, ruler ticks, filmstrip clip, navigator bar.
+  const tl = await evaluate(ed.sessionId, `({tc:!!document.querySelector('.ss-tl-tc'),ticks:document.querySelectorAll('.ss-tl-tk-major').length,film:!!document.querySelector('canvas.ss-tl-film'),nav:!!document.querySelector('.ss-tl-nav-thumb'),badges:document.querySelectorAll('.ss-tl-badge').length})`);
+  log("  timeline: " + JSON.stringify(tl));
+  // Crop: the persistent box (8 handles) shows the WHOLE frame; a ratio chip refits it; Apply commits it.
+  await evaluate(ed.sessionId, `document.getElementById('ss-crop-btn').click()`); await sleep(400);
+  const crop1 = await evaluate(ed.sessionId, `({frame:!!document.querySelector('.ss-crop-frame'),handles:document.querySelectorAll('.ss-crop-h').length,w:document.getElementById('ss-crop-w')?.value,h:document.getElementById('ss-crop-h')?.value})`);
+  log("  crop open: " + JSON.stringify(crop1));
+  await shot(ed.sessionId, "video-crop-open");
+  await evaluate(ed.sessionId, `(()=>{const b=[...document.querySelectorAll('.ss-crop-preset')].find(x=>x.textContent==='1:1');b&&b.click();})()`); await sleep(150);
+  const crop2 = await evaluate(ed.sessionId, `({w:document.getElementById('ss-crop-w')?.value,h:document.getElementById('ss-crop-h')?.value,apply:!document.getElementById('ss-crop-apply')?.disabled})`);
+  log("  crop 1:1: " + JSON.stringify(crop2));
   await evaluate(ed.sessionId, `(()=>{const a=document.getElementById('ss-crop-apply');a&&!a.disabled&&a.click();})()`); await sleep(400);
+  const crop3 = await evaluate(ed.sessionId, `({closed:!document.querySelector('.ss-crop-frame'),status:document.getElementById('ss-status')?.textContent,has:document.getElementById('ss-crop-btn')?.classList.contains('has')})`);
+  log("  crop applied: " + JSON.stringify(crop3));
   await shot(ed.sessionId, "video-cropped");
+  // Re-open: the box is the applied crop, measured against the full frame, so it can grow back out.
+  await evaluate(ed.sessionId, `document.getElementById('ss-crop-btn').click()`); await sleep(300);
+  const crop4 = await evaluate(ed.sessionId, `({w:document.getElementById('ss-crop-w')?.value,h:document.getElementById('ss-crop-h')?.value})`);
+  log("  crop reopened: " + JSON.stringify(crop4));
+  await evaluate(ed.sessionId, `document.getElementById('ss-crop-cancel').click()`); await sleep(200);
   log("  console errors: " + (ed.errors.length ? "\n   " + ed.errors.join("\n   ") : "none"));
-  failures += ed.errors.length + (ui.toolbar && ui.zoomLane ? 0 : 1) + (zoom.focusBox && zoom.block ? 0 : 1);
+  failures += ed.errors.length + (ui.toolbar && ui.zoomLane ? 0 : 1) + (zoom.focusBox && zoom.block ? 0 : 1)
+    + (tl.tc && tl.ticks > 1 && tl.film && tl.nav && tl.badges >= 3 ? 0 : 1)
+    + (crop1.frame && crop1.handles === 8 && crop1.w === "960" && crop1.h === "540" ? 0 : 1)
+    + (crop2.w === "540" && crop2.h === "540" && crop2.apply ? 0 : 1)
+    + (crop3.closed && /cropped/.test(crop3.status || "") && crop3.has ? 0 : 1)
+    + (crop4.w === "540" && crop4.h === "540" ? 0 : 1);
 
   // ── image editor (content script against a stub) ──
   log("\nIMAGE EDITOR");

@@ -1,34 +1,70 @@
 // Timeline: a CONSTANT-HEIGHT panel so adding a layer never reflows the stage. Layout is a frozen-pane
-// track grid — a pinned ruler + pinned Video track at the top, then a vertically-scrolling stack of
-// track rows (zoom, one per overlay layer, audio, imported audio). Every row is [172px header | time
-// area]. The header column is fixed; the time area is a shared horizontal scale driven in JS by
-// `pxPerSecond` + `scrollX` (px, not %), so tl-zoom / pan keep every track aligned. A single
-// full-height playhead spans the panel. All block interactions (select / move / resize / paint) go
-// through one shared wireBlockDrag(); the video track keeps the trim / scrub / cut handlers.
+// track grid — a pinned ruler (big timecode + snap toggle in its header) and a pinned Video clip (filmstrip,
+// name strip, dimmed out-of-trim regions) at the top, then a vertically-scrolling stack of track rows (zoom,
+// one per overlay layer, audio, imported audio), then a zoom / pan navigator bar. Every row is [188px header |
+// time area]. The header column is fixed (colored track badge + the track's own toggles); the time area is a
+// shared horizontal scale driven in JS by `pxPerSecond` + `scrollX` (px, not %), so zoom / pan keep every
+// track aligned. A single full-height playhead (flag head you can drag) spans the panel. All block
+// interactions (select / move / resize / paint) go through one shared wireBlockDrag(); the video track keeps
+// the trim / scrub / cut handlers.
 //
 // Rebuild discipline: the row SKELETON (headers + persistent time containers that own the pointer
 // listeners) is only rebuilt when the layer set changes (a signature check), so a header control drag
 // or a block drag's pointer-capture is never torn down mid-gesture. refresh() only rebuilds the block
 // CHILDREN inside the persistent containers and re-lays-out positions. setPlayhead() only moves the
-// playhead. Pure DOM, no canvas (waveform is one SVG path).
+// playhead. Pure DOM (the filmstrip is one canvas; the waveform is one SVG path).
 
 import { escapeHtml } from "./shapes.js";
 
-const HEADER_W = 172; // px, the fixed track-header column
+const HEADER_W = 188; // px, the fixed track-header column (keep in step with .ss-tl-thead in editor.css)
+const TIME_PAD = 10;  // horizontal inset of every time area (matching margins on all rows + ruler)
 const ZOOM_STEP = 1.4;
-const MAX_ZOOM_MULT = 10; // furthest zoom-in relative to Fit
+const MAX_ZOOM_MULT = 10; // furthest zoom-in relative to Fit …
+const MAX_PPS = 240;      // … or this many px per second, whichever is further (frame-level editing on long clips)
+const FILM_BAR = 16;      // px, the clip's name strip over the filmstrip
+
+const svg = (body) => `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+const ICON = {
+  eye: svg('<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'),
+  eyeOff: svg('<path d="M17.9 17.9A10.9 10.9 0 0 1 12 19c-6.4 0-10-7-10-7a18.5 18.5 0 0 1 5.1-5.9M9.9 4.2A9.7 9.7 0 0 1 12 4c6.4 0 10 7 10 7a18.5 18.5 0 0 1-2.2 3.2M1 1l22 22"/>'),
+  vol: svg('<path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/>'),
+  mute: svg('<path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="m22 9-6 6m0-6 6 6"/>'),
+  magnet: svg('<path d="M6 15a6 6 0 0 0 12 0V3h-4v12a2 2 0 0 1-4 0V3H6v12z"/><path d="M6 8h4M14 8h4"/>'),
+};
 
 function fmt(sec) {
   const s = Math.max(0, Math.floor(sec));
   return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 }
+// Timecode with hundredths — the big readout and the drag tips: 0:07.12
+function fmtTc(sec) {
+  const t = Math.max(0, sec || 0);
+  const cs = Math.floor(t * 100);
+  return `${Math.floor(cs / 6000)}:${String(Math.floor(cs / 100) % 60).padStart(2, "0")}.${String(cs % 100).padStart(2, "0")}`;
+}
+// Ruler labels: m:ss, with tenths/hundredths only when the step is finer than a second.
+function fmtTick(sec, step) {
+  const t = Math.max(0, sec);
+  const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
+  const whole = step >= 1 ? String(Math.round(s)).padStart(2, "0") : String(s.toFixed(step >= 0.1 ? 1 : 2)).padStart(step >= 0.1 ? 4 : 5, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${whole}` : `${m}:${whole}`;
+}
 function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
 
+// Ruler: the smallest "nice" step that keeps labels >= 64px apart, and how many minor ticks to cut it into.
+const STEPS = [[0.05, 5], [0.1, 5], [0.2, 4], [0.5, 5], [1, 5], [2, 4], [5, 5], [10, 5], [15, 3], [30, 6], [60, 6], [120, 4], [300, 5], [600, 5], [900, 3], [1800, 6], [3600, 6]];
+function rulerStep(pps) { return STEPS.find(([s]) => s * pps >= 64) || STEPS[STEPS.length - 1]; }
+
+const LAYER_GLYPH = { rect: "▭", arrow: "↗", text: "T", blur: "◍", spot: "◉" };
 function laneLabel(l) {
   if (!l) return "Layer";
   if (l.kind === "image") return (l.image && l.image.frames) ? "GIF" : "Image";
   const t = (l.shape && l.shape.type) || "shape";
   return t.charAt(0).toUpperCase() + t.slice(1);
+}
+function laneGlyph(l) {
+  if (l && l.kind === "image") return (l.image && l.image.frames) ? "GIF" : "▣";
+  return LAYER_GLYPH[(l && l.shape && l.shape.type) || ""] || "◆";
 }
 
 // Closed SVG path (viewBox "0 0 100 30") tracing a waveform envelope from interleaved [min,max,…] peaks.
@@ -101,22 +137,26 @@ function wireBlockDrag(container, opts) {
 //   el, durationSec, onTrimChange, onSeek, onAddCut, onRemoveCut, getCuts,
 //   getZoomBlocks, getSelectedZoom, onZoomSelect, onZoomChange,
 //   getAudioPeaks, getAudioCuts, onAddAudioCut, onRemoveAudioCut, onAudioMuteChange, getAudioEnabled,
+//   getAudioState, onAudioMute, onAudioVolume,
 //   store, getSelectedLayer, onLayerSelect, onLayerRangeChange,
 //   onLayerVisible, onLayerOpacity, onLayerReorder, onLayerDelete,
 //   getExtraAudio, getExtraBlock, onExtraAudioChange, onExtraMute, onExtraVolume, onExtraRemove,
-//   onScaleChange
+//   getFilmstrip, getClipName, onScaleChange
 // }
 //   getExtraBlock() -> the imported track's {tIn,tOut} in SOURCE seconds (the controller converts from
-//   its output-time offset), or null. onScaleChange() fires when tl-zoom changes (slider stays synced).
+//   its output-time offset), or null. getAudioState() -> { muted, volume } of the recording's own audio.
+//   getFilmstrip() -> { items: (canvas|null)[], aspect() } from filmstrip.js, or null. onScaleChange()
+//   fires when the zoom changes.
 export function createTimeline(opts) {
   const {
     el, durationSec, onTrimChange, onSeek, onAddCut, onRemoveCut, getCuts,
     getZoomBlocks, getSelectedZoom, onZoomSelect, onZoomChange,
     getAudioPeaks, getAudioCuts, onAddAudioCut, onRemoveAudioCut, onAudioMuteChange, getAudioEnabled,
+    getAudioState, onAudioMute, onAudioVolume,
     store, getSelectedLayer, onLayerSelect, onLayerRangeChange,
     onLayerVisible, onLayerOpacity, onLayerReorder, onLayerDelete,
     getExtraAudio, getExtraBlock, onExtraAudioChange, onExtraMute, onExtraVolume, onExtraRemove,
-    onScaleChange,
+    getFilmstrip, getClipName, onScaleChange,
   } = opts;
 
   const dur = Math.max(0.001, durationSec || 0);
@@ -130,13 +170,13 @@ export function createTimeline(opts) {
   el.innerHTML = `<div class="ss-tl"></div>`;
   const panel = el.querySelector(".ss-tl");
 
-  const TIME_PAD = 10; // horizontal inset of every time area (matching margins on all rows + ruler)
   function timeW() {
     // usable width of a time area = panel minus the header column and the shared horizontal insets
     const w = panel.getBoundingClientRect().width - HEADER_W - TIME_PAD * 2;
     return Math.max(1, w);
   }
   function fitPps() { return timeW() / dur; }
+  function maxPps() { return Math.max(fitPps() * MAX_ZOOM_MULT, MAX_PPS); }
   function pps() { return fitMode ? fitPps() : userPps; }
   function maxScroll() { return Math.max(0, dur * pps() - timeW()); }
   function xOf(sec) { return sec * pps() - scrollX; }
@@ -146,12 +186,14 @@ export function createTimeline(opts) {
   }
 
   // ── skeleton (rebuilt only on layer-set change) ─────────────────────────────────────────────────
-  let inEl, outEl, trimEl, cutsEl, vtime, rtime, rlabels, lanesEl, playEl;
-  let ztime, atime, awsvg, awpath, amutesEl;
+  let inEl, outEl, trimEl, cutsEl, vtime, rtime, rlabels, lanesEl, playEl, filmEl, nameEl, dimL, dimR, tcEl, snapBtn;
+  let ztime, atime, awsvg, awpath, amutesEl, amuteBtn, avolEl;
+  let navTime, navThumb, navPh;
   const layerRows = new Map(); // id -> { time, block }
   let extraRow = null;         // { time }
   let lastSig = null;
   let cutMode = false;
+  let snapOn = true, altDown = false;
   let pendingCut = null, pendingAMute = null, selectedMuteId = null, selectedExtra = false;
 
   function sig() {
@@ -170,30 +212,46 @@ export function createTimeline(opts) {
     t.className = "ss-tl-ttime " + cls;
     return t;
   }
+  const badge = (kind, text) => `<span class="ss-tl-badge ss-tl-b-${kind}">${text}</span>`;
 
   function buildSkeleton() {
     layerRows.clear(); extraRow = null;
     panel.textContent = "";
 
-    // ruler row
+    // ruler row: [big timecode + snap toggle | tick ruler]
     const ruler = doc.createElement("div");
     ruler.className = "ss-tl-ruler";
-    ruler.appendChild(header("ss-tl-rhead", `<span>Tracks</span>`));
+    ruler.appendChild(header("ss-tl-rhead",
+      `<span class="ss-tl-tc" id="ss-tl-tc" title="Playhead position">0:00.00</span><span class="ss-tl-tctotal">/ ${fmt(dur)}</span>` +
+      `<button class="ss-tl-snap-btn${snapOn ? " on" : ""}" type="button" id="ss-tl-snapbtn" title="Snapping ${snapOn ? "on" : "off"} (hold ⌥ to bypass)" aria-pressed="${snapOn}">${ICON.magnet}</button>`));
+    tcEl = ruler.querySelector("#ss-tl-tc");
+    snapBtn = ruler.querySelector("#ss-tl-snapbtn");
+    snapBtn.addEventListener("click", () => {
+      snapOn = !snapOn;
+      snapBtn.classList.toggle("on", snapOn);
+      snapBtn.setAttribute("aria-pressed", String(snapOn));
+      snapBtn.title = `Snapping ${snapOn ? "on" : "off"} (hold ⌥ to bypass)`;
+      if (!snapOn) hideSnapGuide();
+    });
     rtime = timeArea("ss-tl-rtime");
     rlabels = doc.createElement("div"); rlabels.className = "ss-tl-rlabels"; rtime.appendChild(rlabels);
     ruler.appendChild(rtime);
     panel.appendChild(ruler);
 
-    // pinned video track
+    // pinned video clip
     const vrow = doc.createElement("div");
     vrow.className = "ss-tl-vrow";
-    vrow.appendChild(header("", `<span class="ss-tl-ticon">🎞</span><span class="ss-tl-tname">Video</span><span class="ss-tl-tdur">${fmt(dur)}</span>`));
+    vrow.appendChild(header("", `${badge("v", "V1")}<span class="ss-tl-tname">Video</span><span class="ss-tl-tdur">${fmt(dur)}</span>`));
     vtime = timeArea("ss-tl-vtime");
+    filmEl = doc.createElement("canvas"); filmEl.className = "ss-tl-film";
+    nameEl = doc.createElement("div"); nameEl.className = "ss-tl-clipname";
+    dimL = doc.createElement("div"); dimL.className = "ss-tl-dim";
+    dimR = doc.createElement("div"); dimR.className = "ss-tl-dim";
     trimEl = doc.createElement("div"); trimEl.className = "ss-tl-trim";
     cutsEl = doc.createElement("div"); cutsEl.className = "ss-tl-cuts";
-    inEl = doc.createElement("div"); inEl.className = "ss-tl-handle ss-tl-handle-in"; inEl.title = "Trim start";
-    outEl = doc.createElement("div"); outEl.className = "ss-tl-handle ss-tl-handle-out"; outEl.title = "Trim end";
-    vtime.append(trimEl, cutsEl, inEl, outEl);
+    inEl = doc.createElement("div"); inEl.className = "ss-tl-handle ss-tl-handle-in"; inEl.title = "Trim start — drag";
+    outEl = doc.createElement("div"); outEl.className = "ss-tl-handle ss-tl-handle-out"; outEl.title = "Trim end — drag";
+    vtime.append(filmEl, nameEl, dimL, dimR, trimEl, cutsEl, inEl, outEl);
     vrow.appendChild(vtime);
     panel.appendChild(vrow);
     wireVideoTrack();
@@ -206,7 +264,7 @@ export function createTimeline(opts) {
 
     // zoom track
     const zrow = doc.createElement("div"); zrow.className = "ss-tl-trk";
-    zrow.appendChild(header("", `<span class="ss-tl-ticon">🔍</span><span class="ss-tl-tname">Zoom</span>`));
+    zrow.appendChild(header("", `${badge("z", "Z")}<span class="ss-tl-tname">Zoom</span>`));
     ztime = timeArea("ss-tl-ztime"); zrow.appendChild(ztime); lanesEl.appendChild(zrow);
     wireBlockDrag(ztime, {
       secAt: (x) => secAtIn(x, ztime), maxSec: dur, minLen: Math.min(0.4, dur), blockSelector: ".ss-tl-zblock",
@@ -223,7 +281,14 @@ export function createTimeline(opts) {
 
     // audio track
     const arow = doc.createElement("div"); arow.className = "ss-tl-trk ss-tl-trk-audio";
-    arow.appendChild(header("", `<span class="ss-tl-ticon">🔊</span><span class="ss-tl-tname">Audio</span>`));
+    const ah = header("", `${badge("a", "A1")}<span class="ss-tl-tname">Audio</span>` +
+      `<button class="ss-tl-eye" data-amute type="button"></button>` +
+      `<input class="ss-tl-op" data-avol type="range" min="0" max="1" step="0.05" value="1" title="Volume" />`);
+    amuteBtn = ah.querySelector("[data-amute]");
+    avolEl = ah.querySelector("[data-avol]");
+    amuteBtn.addEventListener("click", () => onAudioMute && onAudioMute());
+    avolEl.addEventListener("input", (e) => onAudioVolume && onAudioVolume(Number(e.target.value)));
+    arow.appendChild(ah);
     atime = timeArea("ss-tl-atime");
     awsvg = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
     awsvg.setAttribute("class", "ss-tl-await"); awsvg.setAttribute("viewBox", "0 0 100 30"); awsvg.setAttribute("preserveAspectRatio", "none");
@@ -247,21 +312,41 @@ export function createTimeline(opts) {
     const ea = getExtraAudio && getExtraAudio();
     if (ea) buildExtraRow();
 
-    // full-height playhead
+    // navigator: zoom buttons | a scrollbar whose thumb pans and whose end handles zoom
+    const nav = doc.createElement("div"); nav.className = "ss-tl-nav";
+    nav.appendChild(header("ss-tl-nhead",
+      `<button class="ss-tl-zb" data-z="out" type="button" title="Zoom out">−</button><button class="ss-tl-zb" data-z="in" type="button" title="Zoom in">+</button><button class="ss-tl-zb ss-tl-zfit" data-z="fit" type="button" title="Fit the whole clip">Fit</button>`));
+    nav.querySelector("[data-z=out]").addEventListener("click", () => api.zoomBy(1 / ZOOM_STEP));
+    nav.querySelector("[data-z=in]").addEventListener("click", () => api.zoomBy(ZOOM_STEP));
+    nav.querySelector("[data-z=fit]").addEventListener("click", () => api.fit());
+    navTime = timeArea("ss-tl-ntime");
+    navTime.innerHTML = `<div class="ss-tl-nav-track"></div><div class="ss-tl-nav-ph"></div><div class="ss-tl-nav-thumb" title="Drag to pan · drag the ends to zoom"><span class="ss-tl-nav-h" data-edge="in"></span><span class="ss-tl-nav-h" data-edge="out"></span></div>`;
+    navThumb = navTime.querySelector(".ss-tl-nav-thumb");
+    navPh = navTime.querySelector(".ss-tl-nav-ph");
+    nav.appendChild(navTime);
+    panel.appendChild(nav);
+    wireNav();
+
+    // full-height playhead: a flag head over the ruler you can drag, and a line through every track
     playEl = doc.createElement("div"); playEl.className = "ss-tl-ph";
-    playEl.innerHTML = `<span class="ss-tl-ph-grab"></span>`;
+    playEl.innerHTML = `<span class="ss-tl-ph-grab" title="Drag to scrub"></span>`;
     panel.appendChild(playEl);
+    wirePlayheadGrab(playEl.querySelector(".ss-tl-ph-grab"));
 
     // snap guide (shown while a dragged edge snaps to the playhead / another edge / a whole second)
     snapEl = doc.createElement("div"); snapEl.className = "ss-tl-snap"; snapEl.style.display = "none";
     snapEl.innerHTML = `<span class="ss-tl-snap-lbl"></span>`;
     panel.appendChild(snapEl);
 
+    // drag tip: the exact time of a trim handle / cut edge while it is being dragged
+    tipEl = doc.createElement("div"); tipEl.className = "ss-tl-tip"; tipEl.style.display = "none";
+    panel.appendChild(tipEl);
+
     lastSig = sig();
   }
 
   // ── snapping ─────────────────────────────────────────────────────────────────────────────────
-  let snapEl = null;
+  let snapEl = null, tipEl = null;
   function showSnapGuide(sec) {
     if (!snapEl) return;
     snapEl.style.display = "block";
@@ -269,6 +354,13 @@ export function createTimeline(opts) {
     snapEl.querySelector(".ss-tl-snap-lbl").textContent = fmt(sec);
   }
   function hideSnapGuide() { if (snapEl) snapEl.style.display = "none"; }
+  function showTip(sec) {
+    if (!tipEl) return;
+    tipEl.style.display = "block";
+    tipEl.style.left = `${HEADER_W + TIME_PAD + xOf(sec)}px`;
+    tipEl.textContent = fmtTc(sec);
+  }
+  function hideTip() { if (tipEl) tipEl.style.display = "none"; }
 
   // Every interesting edge on the shared ruler, excluding the block being dragged (else it would
   // snap to itself): playhead, trim in/out, cut edges, zoom/layer/mute/extra block edges, whole seconds.
@@ -286,9 +378,11 @@ export function createTimeline(opts) {
     return c;
   }
 
-  // A snap fn for one lane: pulls the moving edge(s) onto the nearest candidate within ~8px.
+  // A snap fn for one lane: pulls the moving edge(s) onto the nearest candidate within ~8px. Off when the
+  // magnet is toggled off or ⌥ is held (exact placement).
   function makeSnap(kind, minLen) {
     return (id, r, mode) => {
+      if (!snapOn || altDown) { hideSnapGuide(); return r; }
       const th = 8 / pps();
       const cands = snapCandidates(kind, id);
       let best = null;
@@ -304,6 +398,9 @@ export function createTimeline(opts) {
       return { tIn, tOut };
     };
   }
+  const onKeyAlt = (e) => { altDown = e.altKey; };
+  window.addEventListener("keydown", onKeyAlt);
+  window.addEventListener("keyup", onKeyAlt);
 
   function buildLayerRow(l) {
     const row = doc.createElement("div"); row.className = "ss-tl-trk ss-tl-trk-layer"; row.dataset.id = l.id;
@@ -312,16 +409,18 @@ export function createTimeline(opts) {
     const op = typeof l.opacity === "number" ? l.opacity : 1;
     h.innerHTML =
       `<span class="ss-tl-grip" data-grip title="Drag to reorder">⋮⋮</span>` +
+      badge("l", laneGlyph(l)) +
       `<span class="ss-tl-tname ss-tl-lname">${laneLabel(l)}</span>` +
       `<input class="ss-tl-op" type="range" min="0" max="1" step="0.05" value="${op}" title="Opacity" />` +
-      `<button class="ss-tl-eye" data-eye title="${visible ? "Hide" : "Show"}">${visible ? "👁" : "🚫"}</button>` +
+      `<button class="ss-tl-eye${visible ? "" : " off"}" data-eye title="${visible ? "Hide" : "Show"}">${visible ? ICON.eye : ICON.eyeOff}</button>` +
       `<button class="ss-tl-del" data-del title="Delete">×</button>`;
     const eyeBtn = h.querySelector("[data-eye]");
     eyeBtn.addEventListener("click", () => {
       const cur = store.get(l.id); if (!cur) return;
       const nowVisible = cur.visible === false; // toggling a hidden layer makes it visible
       if (onLayerVisible) onLayerVisible(l.id, nowVisible);
-      eyeBtn.textContent = nowVisible ? "👁" : "🚫";
+      eyeBtn.innerHTML = nowVisible ? ICON.eye : ICON.eyeOff;
+      eyeBtn.classList.toggle("off", !nowVisible);
       eyeBtn.title = nowVisible ? "Hide" : "Show";
     });
     const opEl = h.querySelector(".ss-tl-op");
@@ -350,9 +449,9 @@ export function createTimeline(opts) {
     const row = doc.createElement("div"); row.className = "ss-tl-trk ss-tl-trk-extra";
     const h = header("", "");
     h.innerHTML =
-      `<span class="ss-tl-ticon">🎙</span>` +
+      badge("x", "A2") +
       `<span class="ss-tl-tname ss-tl-exname-h">${escapeHtml(ea.name || "audio")}</span>` +
-      `<button class="ss-tl-eye ss-tl-exmute" data-exmute title="Mute track">${ea.muted ? "🔇" : "🔊"}</button>` +
+      `<button class="ss-tl-eye ss-tl-exmute" data-exmute title="Mute track">${ea.muted ? ICON.mute : ICON.vol}</button>` +
       `<input class="ss-tl-op ss-tl-exvol" type="range" min="0" max="1" step="0.05" value="${typeof ea.volume === "number" ? ea.volume : 1}" title="Volume" />` +
       `<button class="ss-tl-del" data-exdel title="Remove track">×</button>`;
     h.querySelector("[data-exmute]").addEventListener("click", () => onExtraMute && onExtraMute());
@@ -404,12 +503,19 @@ export function createTimeline(opts) {
 
   function applyVDrag(clientX) {
     const sec = vSecAt(clientX);
-    if (dragging === "in") { inSec = clamp(sec, 0, outSec - MIN_GAP); if (onTrimChange) onTrimChange(inSec, outSec); }
-    else if (dragging === "out") { outSec = clamp(sec, inSec + MIN_GAP, dur); if (onTrimChange) onTrimChange(inSec, outSec); }
+    if (dragging === "in") { inSec = clamp(sec, 0, outSec - MIN_GAP); showTip(inSec); if (onTrimChange) onTrimChange(inSec, outSec); }
+    else if (dragging === "out") { outSec = clamp(sec, inSec + MIN_GAP, dur); showTip(outSec); if (onTrimChange) onTrimChange(inSec, outSec); }
     else if (dragging === "scrub") { playSec = sec; if (onSeek) onSeek(sec); }
-    else if (dragging === "cut") { pendingCut = { in: Math.min(cutAnchor, sec), out: Math.max(cutAnchor, sec) }; }
+    else if (dragging === "cut") { pendingCut = { in: Math.min(cutAnchor, sec), out: Math.max(cutAnchor, sec) }; showTip(sec); }
     layout();
   }
+  const vMove = (e) => { if (dragging) applyVDrag(e.clientX); };
+  const vEnd = (e) => {
+    if (!dragging) return;
+    e.currentTarget?.releasePointerCapture?.(e.pointerId);
+    if (dragging === "cut" && pendingCut) { const c = pendingCut; pendingCut = null; if (c.out - c.in > 0.08 && onAddCut) onAddCut(c.in, c.out); }
+    dragging = null; hideTip(); layout();
+  };
   function wireVideoTrack() {
     const handleDown = (which) => (e) => { e.preventDefault(); e.stopPropagation(); dragging = which; e.currentTarget.setPointerCapture?.(e.pointerId); applyVDrag(e.clientX); };
     inEl.addEventListener("pointerdown", handleDown("in"));
@@ -420,17 +526,47 @@ export function createTimeline(opts) {
       if (cutMode) { dragging = "cut"; cutAnchor = vSecAt(e.clientX); pendingCut = { in: cutAnchor, out: cutAnchor }; layout(); }
       else { dragging = "scrub"; applyVDrag(e.clientX); }
     });
-    const move = (e) => { if (dragging) applyVDrag(e.clientX); };
-    const endV = (e) => {
-      if (!dragging) return;
-      e.currentTarget?.releasePointerCapture?.(e.pointerId);
-      if (dragging === "cut" && pendingCut) { const c = pendingCut; pendingCut = null; if (c.out - c.in > 0.08 && onAddCut) onAddCut(c.in, c.out); }
-      dragging = null; layout();
-    };
-    for (const t of [inEl, outEl, vtime]) { t.addEventListener("pointermove", move); t.addEventListener("pointerup", endV); t.addEventListener("pointercancel", endV); }
+    for (const t of [inEl, outEl, vtime]) { t.addEventListener("pointermove", vMove); t.addEventListener("pointerup", vEnd); t.addEventListener("pointercancel", vEnd); }
     // scrub via the ruler too
     rtime.addEventListener("pointerdown", (e) => { e.preventDefault(); rtime.setPointerCapture?.(e.pointerId); dragging = "scrub"; applyVDrag(e.clientX); });
-    rtime.addEventListener("pointermove", move); rtime.addEventListener("pointerup", endV); rtime.addEventListener("pointercancel", endV);
+    rtime.addEventListener("pointermove", vMove); rtime.addEventListener("pointerup", vEnd); rtime.addEventListener("pointercancel", vEnd);
+  }
+  function wirePlayheadGrab(grab) {
+    grab.addEventListener("pointerdown", (e) => { e.preventDefault(); e.stopPropagation(); grab.setPointerCapture?.(e.pointerId); dragging = "scrub"; applyVDrag(e.clientX); });
+    grab.addEventListener("pointermove", vMove); grab.addEventListener("pointerup", vEnd); grab.addEventListener("pointercancel", vEnd);
+  }
+
+  // ── navigator: the thumb is the visible window — drag it to pan, drag an end to zoom that side ────
+  function setView(a, b) {
+    const span = Math.max(b - a, timeW() / maxPps());
+    setPps(timeW() / span);
+    scrollX = clamp(a * pps(), 0, maxScroll());
+    layout();
+    if (onScaleChange) onScaleChange();
+  }
+  function wireNav() {
+    let g = null;
+    const secAtNav = (clientX) => { const r = navTime.getBoundingClientRect(); return clamp((clientX - r.left) / Math.max(1, r.width), 0, 1) * dur; };
+    const win = () => { const a = scrollX / pps(); return { a, b: a + timeW() / pps() }; };
+    navTime.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      navTime.setPointerCapture?.(e.pointerId);
+      const { a, b } = win(), sec = secAtNav(e.clientX);
+      const edge = e.target.dataset && e.target.dataset.edge;
+      if (edge) g = { mode: edge };
+      else if (sec >= a && sec <= b) g = { mode: "pan", grab: sec - a };
+      else { g = { mode: "pan", grab: (b - a) / 2 }; setView(sec - g.grab, sec + (b - a) - g.grab); } // click the track: centre the window there
+    });
+    navTime.addEventListener("pointermove", (e) => {
+      if (!g) return;
+      const sec = secAtNav(e.clientX), { a, b } = win(), min = timeW() / maxPps();
+      if (g.mode === "pan") { const span = b - a, na = clamp(sec - g.grab, 0, dur - span); setView(na, na + span); }
+      else if (g.mode === "in") setView(clamp(sec, 0, b - min), b);
+      else setView(a, clamp(sec, a + min, dur));
+    });
+    const end = (e) => { g = null; navTime.releasePointerCapture?.(e.pointerId); };
+    navTime.addEventListener("pointerup", end);
+    navTime.addEventListener("pointercancel", end);
   }
 
   // ── block rendering (rebuilt every refresh; containers persist) ──────────────────────────────────
@@ -471,7 +607,7 @@ export function createTimeline(opts) {
       // The header is built once per layer set, so re-sync its controls from the store (undo/redo or
       // the inspector's opacity slider change these without rebuilding the row).
       const vis = l.visible !== false;
-      ref.eyeBtn.textContent = vis ? "👁" : "🚫"; ref.eyeBtn.title = vis ? "Hide" : "Show";
+      ref.eyeBtn.innerHTML = vis ? ICON.eye : ICON.eyeOff; ref.eyeBtn.title = vis ? "Hide" : "Show"; ref.eyeBtn.classList.toggle("off", !vis);
       const op = String(typeof l.opacity === "number" ? l.opacity : 1);
       if (ref.opEl.value !== op && doc.activeElement !== ref.opEl) ref.opEl.value = op;
       ref.time.textContent = "";
@@ -481,7 +617,7 @@ export function createTimeline(opts) {
       b.className = "ss-tl-lblock" + (r ? "" : " ss-tl-lblock-full") + (id === selId ? " on" : "");
       b.dataset.id = id; posBlock(b, lo, hi);
       b.title = r ? `${fmt(lo)}–${fmt(hi)}` : "Shown for the whole clip — drag an edge in to limit it";
-      b.innerHTML = `<span class="ss-tl-edge ss-tl-edge-l" data-edge="in"></span><span class="ss-tl-edge ss-tl-edge-r" data-edge="out"></span>`;
+      b.innerHTML = `<span class="ss-tl-edge ss-tl-edge-l" data-edge="in"></span><span class="ss-tl-lname-in">${laneLabel(l)}</span><span class="ss-tl-edge ss-tl-edge-r" data-edge="out"></span>`;
       ref.time.appendChild(b); ref.block = b;
     }
   }
@@ -510,12 +646,20 @@ export function createTimeline(opts) {
   function renderAudio() {
     const data = getAudioPeaks && getAudioPeaks();
     awpath.setAttribute("d", data ? waveformPath(data.peaks, data.buckets) : "");
-    // The waveform spans the WHOLE clip on the shared scale (stretched by tl-zoom, shifted by pan);
+    // The waveform spans the WHOLE clip on the shared scale (stretched by zoom, shifted by pan);
     // the lane's overflow:hidden clips it, keeping peaks aligned with the ruler and mute bands.
     awsvg.style.left = `${xOf(0)}px`;
     awsvg.style.width = `${dur * pps()}px`;
     const enabled = !getAudioEnabled || getAudioEnabled() !== false;
     atime.classList.toggle("ss-tl-adisabled", !enabled || !data);
+    // The header's own mute + volume mirror the project's master audio state (also set from Project ▾).
+    const st = (getAudioState && getAudioState()) || { muted: false, volume: 1 };
+    amuteBtn.innerHTML = st.muted ? ICON.mute : ICON.vol;
+    amuteBtn.classList.toggle("off", !!st.muted);
+    amuteBtn.title = st.muted ? "Unmute audio" : "Mute audio";
+    const vol = String(typeof st.volume === "number" ? st.volume : 1);
+    if (avolEl.value !== vol && doc.activeElement !== avolEl) avolEl.value = vol;
+    atime.classList.toggle("ss-tl-amuted", !!st.muted);
     renderMutes();
   }
   function renderExtra() {
@@ -525,7 +669,8 @@ export function createTimeline(opts) {
     if (!ea || !eb) return;
     // Header controls are built once (the row survives mute / volume / re-import), so sync them here.
     extraRow.nameEl.textContent = ea.name || "audio";
-    extraRow.muteBtn.textContent = ea.muted ? "🔇" : "🔊";
+    extraRow.muteBtn.innerHTML = ea.muted ? ICON.mute : ICON.vol;
+    extraRow.muteBtn.classList.toggle("off", !!ea.muted);
     extraRow.muteBtn.title = ea.muted ? "Unmute track" : "Mute track";
     const vol = String(typeof ea.volume === "number" ? ea.volume : 1);
     if (extraRow.volEl.value !== vol && doc.activeElement !== extraRow.volEl) extraRow.volEl.value = vol;
@@ -537,33 +682,88 @@ export function createTimeline(opts) {
     extraRow.time.appendChild(b);
   }
 
+  // Ruler: a major tick + label at each "nice" step and minor ticks between, only for the visible window.
   function renderRuler() {
     rlabels.textContent = "";
-    const step = Math.max(1, Math.ceil(52 / pps())); // ≥52px between labels
-    for (let s = 0; s <= dur + 0.001; s += step) {
-      const t = doc.createElement("span"); t.className = "ss-tl-tick"; t.textContent = fmt(s); t.style.left = `${xOf(s)}px`;
-      rlabels.appendChild(t);
+    const p = pps(), [step, minors] = rulerStep(p);
+    const t0 = scrollX / p, t1 = (scrollX + timeW()) / p;
+    const frag = doc.createDocumentFragment();
+    for (let k = Math.floor(t0 / step); k * step <= t1 + step; k++) {
+      const s = k * step;
+      if (s > dur + 1e-6) break;
+      if (s >= -1e-6) {
+        const t = doc.createElement("span"); t.className = "ss-tl-tk ss-tl-tk-major"; t.style.left = `${xOf(s)}px`;
+        t.innerHTML = `<b>${fmtTick(s, step)}</b>`;
+        frag.appendChild(t);
+      }
+      for (let j = 1; j < minors; j++) {
+        const ms = s + (step * j) / minors;
+        if (ms < 0 || ms > dur + 1e-6) continue;
+        const m = doc.createElement("span"); m.className = "ss-tl-tk ss-tl-tk-minor"; m.style.left = `${xOf(ms)}px`;
+        frag.appendChild(m);
+      }
     }
+    rlabels.appendChild(frag);
+  }
+
+  // Filmstrip: tile the decoded frames across the clip at the current scale (one canvas, only the visible
+  // part is painted). Slots that haven't decoded yet stay a flat tone and fill in as the strip arrives.
+  function renderFilm() {
+    const w = vtime.clientWidth, h = vtime.clientHeight;
+    if (!w || !h) return;
+    const dpr = Math.min(2, (doc.defaultView && doc.defaultView.devicePixelRatio) || 1);
+    if (filmEl.width !== Math.round(w * dpr) || filmEl.height !== Math.round(h * dpr)) { filmEl.width = Math.round(w * dpr); filmEl.height = Math.round(h * dpr); }
+    const c = filmEl.getContext("2d");
+    c.setTransform(dpr, 0, 0, dpr, 0, 0);
+    c.fillStyle = "#d9e1e4"; c.fillRect(0, 0, w, h);
+    const film = getFilmstrip && getFilmstrip();
+    filmEl.dataset.frames = String(film ? film.items.filter(Boolean).length : 0);
+    if (!film || !film.items.length) return;
+    const tw = Math.max(24, Math.round(h * (film.aspect() || 16 / 9)));
+    const clipPx = dur * pps() - scrollX;
+    c.save();
+    c.beginPath(); c.rect(0, 0, Math.min(w, clipPx), h); c.clip();
+    for (let i = Math.floor(scrollX / tw); i * tw - scrollX < w; i++) {
+      const x = i * tw - scrollX;
+      const sec = clamp(((i + 0.5) * tw) / pps(), 0, dur);
+      const img = film.items[Math.min(film.items.length - 1, Math.floor((sec / dur) * film.items.length))];
+      if (img) { c.drawImage(img, x, 0, tw, h); c.fillStyle = "rgba(0,0,0,0.18)"; c.fillRect(x + tw - 1, 0, 1, h); }
+    }
+    c.restore();
   }
 
   // reposition everything horizontal (no rebuild); also refresh trim/cut/playhead
   function layout() {
     scrollX = clamp(scrollX, 0, maxScroll());
     renderRuler();
+    renderFilm();
+    nameEl.textContent = `${(getClipName && getClipName()) || "Recording"} · ${fmt(dur)}`;
+    nameEl.style.left = `${Math.max(0, -xOf(0)) + 6}px`; // the name stays in view as the clip scrolls
+    const inX = xOf(inSec), outX = xOf(outSec), endX = xOf(dur);
+    dimL.style.left = `${Math.max(0, xOf(0))}px`; dimL.style.width = `${Math.max(0, inX - Math.max(0, xOf(0)))}px`;
+    dimR.style.left = `${Math.max(0, outX)}px`; dimR.style.width = `${Math.max(0, endX - Math.max(0, outX))}px`;
     posBlock(trimEl, inSec, outSec);
-    inEl.style.left = `${xOf(inSec)}px`;
-    outEl.style.left = `${xOf(outSec)}px`;
+    inEl.style.left = `${inX}px`;
+    outEl.style.left = `${outX}px`;
     renderCuts();
     renderZoom();
     renderLayerBlocks();
     renderAudio();
     renderExtra();
     positionPlayhead();
+    renderNav();
+  }
+  function renderNav() {
+    const total = dur * pps();
+    navThumb.style.left = `${(scrollX / total) * 100}%`;
+    navThumb.style.width = `${Math.min(100, (timeW() / total) * 100)}%`;
+    navTime.classList.toggle("ss-tl-nfit", fitMode);
   }
   function positionPlayhead() {
     if (!playEl) return;
     const x = xOf(playSec);
     const w = timeW();
+    navPh.style.left = `${(playSec / dur) * 100}%`;
     if (x < -1 || x > w + 1) { playEl.style.display = "none"; return; }
     playEl.style.display = "block";
     playEl.style.left = `${HEADER_W + TIME_PAD + x}px`;
@@ -582,8 +782,8 @@ export function createTimeline(opts) {
   // a block's in-progress pointer capture.
   const unsub = store && typeof store.subscribe === "function" ? store.subscribe(refresh) : null;
 
-  // ⌘/ctrl + wheel zooms around the pointer; a horizontal wheel/trackpad swipe (or ⇧+wheel) pans the
-  // zoomed timeline; a plain vertical wheel scrolls the lanes natively.
+  // ⌘/ctrl + wheel (or a trackpad pinch) zooms around the pointer; a horizontal wheel/trackpad swipe (or
+  // ⇧+wheel) pans the zoomed timeline; a plain vertical wheel scrolls the lanes natively.
   panel.addEventListener("wheel", (e) => {
     if (e.metaKey || e.ctrlKey) {
       e.preventDefault();
@@ -611,13 +811,22 @@ export function createTimeline(opts) {
 
   function setPps(v) {
     const fit = fitPps();
-    const clamped = clamp(v, fit, fit * MAX_ZOOM_MULT);
+    const clamped = clamp(v, fit, maxPps());
     fitMode = clamped <= fit * 1.001;
     userPps = clamped;
   }
 
-  return {
-    setPlayhead(sec) { playSec = clamp(sec || 0, 0, dur); positionPlayhead(); },
+  const api = {
+    // `follow`: while playing on a zoomed timeline, page the view along with the playhead.
+    setPlayhead(sec, follow = false) {
+      playSec = clamp(sec || 0, 0, dur);
+      if (tcEl) tcEl.textContent = fmtTc(playSec);
+      if (follow && !dragging && maxScroll() > 0) {
+        const x = xOf(playSec), w = timeW();
+        if (x > w - 24 || x < 0) { scrollX = clamp(playSec * pps() - w * 0.12, 0, maxScroll()); layout(); return; }
+      }
+      positionPlayhead();
+    },
     setTrim(i, o) {
       let lo = clamp(i || 0, 0, dur), hi = clamp(o == null ? dur : o, 0, dur);
       if (hi < lo + MIN_GAP) hi = Math.min(dur, lo + MIN_GAP);
@@ -628,9 +837,16 @@ export function createTimeline(opts) {
     isCutMode: () => cutMode,
     zoomBy(mult) { setPps(pps() * mult); scrollX = clamp(scrollX, 0, maxScroll()); layout(); if (onScaleChange) onScaleChange(); },
     fit() { fitMode = true; scrollX = 0; layout(); if (onScaleChange) onScaleChange(); },
-    setZoomNorm(t) { const fit = fitPps(); setPps(fit * (1 + clamp(t, 0, 1) * (MAX_ZOOM_MULT - 1))); scrollX = clamp(scrollX, 0, maxScroll()); layout(); },
-    getZoomNorm() { const fit = fitPps(); return clamp((pps() / fit - 1) / (MAX_ZOOM_MULT - 1), 0, 1); },
+    setZoomNorm(t) { const fit = fitPps(); setPps(fit * (1 + clamp(t, 0, 1) * (maxPps() / fit - 1))); scrollX = clamp(scrollX, 0, maxScroll()); layout(); },
+    getZoomNorm() { const fit = fitPps(), span = maxPps() / fit - 1; return span > 0 ? clamp((pps() / fit - 1) / span, 0, 1) : 0; },
+    isSnapping: () => snapOn,
+    redrawFilm() { renderFilm(); },
     refresh,
-    destroy() { if (unsub) unsub(); if (ro) ro.disconnect(); el.innerHTML = ""; },
+    destroy() {
+      if (unsub) unsub(); if (ro) ro.disconnect();
+      window.removeEventListener("keydown", onKeyAlt); window.removeEventListener("keyup", onKeyAlt);
+      el.innerHTML = "";
+    },
   };
+  return api;
 }

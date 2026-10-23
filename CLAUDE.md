@@ -70,11 +70,14 @@ re-injected by a `tabs.onUpdated` listener when the tab navigates; surviving a j
 starts (declining → same-site-only; shortcuts/toolbar still stop everywhere). Mic & camera
 permission is granted via a small dedicated window (`src/permission/`), since neither the popup nor the offscreen
 document can prompt. When a recording finishes it is stashed in IndexedDB and the **video editor** (`src/editor/`) opens in a
-tab — a WebCodecs-based **multi-track timeline** editor (constant-height frozen-pane track grid: pinned ruler + video
-track, then a track per overlay layer, audio with mute regions, and an optional imported voiceover/music track mixed
-in via `OfflineAudioContext` at export) with trim / cuts / crop / zoom blocks / speed / resolution, resizable +
-time-scoped overlay layers, a left tool rail with draw-once tools, snapping, and MP4 / GIF export (or Download the
-clip as-is). All surfaces reflect state live via `STATE_CHANGED` (the editor itself runs standalone off IndexedDB).
+tab — a WebCodecs-based **multi-track timeline** editor (constant-height frozen-pane track grid: pinned ruler with a
+big timecode + snap toggle, the video as a filmstrip clip — frames from a second hidden `<video>` seeked across the blob,
+`filmstrip.js` — then a colour-badged track per zoom / overlay layer, audio with mute regions and header mute / volume,
+an optional imported voiceover/music track mixed in via `OfflineAudioContext` at export, and a zoom / pan navigator bar)
+with trim / cuts / crop / zoom blocks / speed / resolution, resizable + time-scoped overlay layers, a left tool rail with
+draw-once tools, snapping, and MP4 / GIF export (or Download the clip as-is). Crop is a persistent 8-handle box over the
+WHOLE frame (the stage draws the uncropped, unzoomed frame while it is open; pure math in `crop-geometry.js`, options row in
+the inspector slot) that stays re-editable because it is always measured against the full source. All surfaces reflect state live via `STATE_CHANGED` (the editor itself runs standalone off IndexedDB).
 The **opt-in Google Drive backup** (`src/lib/drive.js`, plain fetch against the Drive v3 REST API, resumable chunked
 uploads) hangs off this flow: the service worker auto-uploads a finished clip from IndexedDB after `REC_DONE` (when
 the user enabled it), mirroring progress into `state.drive`. Connect/disconnect live in the **Cloud setup window**
