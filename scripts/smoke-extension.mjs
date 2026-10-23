@@ -148,7 +148,14 @@ try {
   await sleep(200);
   await evaluate(blank.sessionId, `(()=>{const c=document.createElement('canvas');c.width=800;c.height=520;const x=c.getContext('2d');x.fillStyle='#0f172a';x.fillRect(0,0,800,520);x.fillStyle='#22c55e';x.fillRect(90,90,300,180);const url=c.toDataURL('image/png');window.chrome={runtime:{lastError:null,sendMessage:(m,cb)=>{m&&m.type==='editor-get-image'?cb({ok:true,dataUrl:url,filename:'test.png'}):cb&&cb({});}}};})()`);
   let injectErr = null;
-  try { await evaluate(blank.sessionId, readFileSync(join(REPO, "src/content/editor-overlay.js"), "utf8")); } catch (e) { injectErr = e.message; }
+  // The annotation editor ships as several ordered plain scripts: evaluate exactly the list (and order) the
+  // service worker injects, so this exercises what ships.
+  const swSrc = readFileSync(join(REPO, "src/background/service-worker.js"), "utf8");
+  const editorFiles = [...((swSrc.match(/files: \[([^\]]*editor-overlay\.js[^\]]*)\]/) || [])[1] || "").matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  try {
+    if (!editorFiles.length) throw new Error("annotation editor file list not found in service-worker.js");
+    for (const f of editorFiles) await evaluate(blank.sessionId, readFileSync(join(REPO, f), "utf8"));
+  } catch (e) { injectErr = e.message; }
   await sleep(600);
   const overlay = await evaluate(blank.sessionId, `(()=>{const h=document.getElementById('__screensnap_editor');if(!h||!h.shadowRoot)return {built:false};const r=h.shadowRoot;return {built:true,tools:[...r.querySelectorAll('[data-tool]')].length,layers:!!r.querySelector('[class*=layer],.ly-list'),canvas:!!r.querySelector('canvas')};})()`);
   log("  inject error: " + (injectErr || "none"));

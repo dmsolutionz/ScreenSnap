@@ -25,11 +25,15 @@ Built because being nagged to log in just to save a screenshot is miserable.
   content scrolls inside a panel rather than the page, e.g. Gmail) · **Select Area**
   (on-page green marquee with live dimensions, Enter to capture)
 - After capture you get a **captured card**: **Annotate & save**, **Save PNG directly**, **Copy**, or Discard
-- **Annotation editor** — Draw, Arrow, Rectangle, Text, Highlight, Blur/Redact, Eraser, **Crop**
-  (a movable, resizable crop box; free-form or 16:9 / 1:1 / 9:16 / 4:3), Move-tool **transform handles**
-  with smart-guide snapping and arrow-key nudges, a **Layers panel** (select, reorder, show/hide, delete,
-  **re-edit text**, add **image/logo layers**), a **Beautify backdrop** (gradient/solid + rounded
-  corners + shadow), colours, stroke weights, undo/redo, copy-to-clipboard
+- **Annotation editor** — Pen, Arrow, Rectangle, **Text** (a visible frame you can move, re-wrap and
+  scale while typing), numbered **Step** badges, Highlight, **Spotlight** (dim everything else),
+  Blur/Redact, **Crop** (a movable, resizable box with exact W × H and an orientation swap; free-form or
+  16:9 / 1:1 / 9:16 / 4:3) and an **Eyedropper**. Every item stays selected with **move / resize handles** (plus
+  rotate on images, boxes, text and steps) right after you place it, with smart-guide snapping and arrow-key nudges; a contextual
+  **options bar** shows only the active tool's settings (colour, stroke, size, opacity); **zoom & pan**
+  (⌘-scroll, ⌘0 fit, space-drag); a **Layers panel** with the screenshot as a locked Background layer,
+  drag-to-reorder, duplicate (⌘D), show/hide, delete and **image/logo layers**; a **Beautify backdrop**
+  (gradient/solid + rounded corners + shadow), undo/redo, copy-to-clipboard
 
 **Screen recording** → **native `.mp4`**
 - **Current Tab** — instant, no picker; a Loom-style control bar sits on the page (auto-hidden during capture)
@@ -106,7 +110,7 @@ overlays.
 | **Service worker** | `src/background/service-worker.js` | Orchestrates everything: screenshots (`captureVisibleTab` + injected scroll/crop helpers stitched with `OffscreenCanvas`), the recording lifecycle, downloads, badge, and persisted state. |
 | **Popup** | `src/popup/` | The screensnap UI — capture/record tabs, captured card, recording / saving / done. UI + dispatch only. |
 | **Offscreen document** | `src/offscreen/` | Hosts `MediaRecorder` (a service worker has no DOM; the popup closes on blur). Opens the screen picker (`getDisplayMedia`), and for Screen + Cam composites the screen + webcam bubble onto a canvas (driven by `draw-worker.js`). Saves native MP4. |
-| **On-page overlays** | `src/content/` | Injected via `executeScript`: `editor-overlay` (annotation editor), `recorder-control` (the recording control bar: countdown → timer + pause + discard + stop) and `draw-overlay` (auto-fading pen). Re-injected on navigation so controls survive reloads / navigation. The Screen + Cam webcam is **not** an overlay — it's composited into the video in the offscreen document (`draw-worker.js` metronome + canvas), so it works over any screen/window. |
+| **On-page overlays** | `src/content/` | Injected via `executeScript`: `editor-overlay` (annotation editor — split into ordered plain scripts under `src/content/editor/`), `recorder-control` (the recording control bar: countdown → timer + pause + discard + stop) and `draw-overlay` (auto-fading pen). Re-injected on navigation so controls survive reloads / navigation. The Screen + Cam webcam is **not** an overlay — it's composited into the video in the offscreen document (`draw-worker.js` metronome + canvas), so it works over any screen/window. |
 
 `chrome.tabCapture` records the **entire tab**, and there is no API to exclude an on-page element — so a *visible*
 control would appear in the video. Like Loom, the control bar copies that constraint instead of fighting it: it's

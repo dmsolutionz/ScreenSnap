@@ -270,7 +270,16 @@ async function doScreenshot(mode) {
 
 async function shotAnnotate() {
   if (!pendingCapture) return { ok: false, error: "Nothing to annotate." };
-  await injectFile(pendingCapture.tabId, "src/content/editor-overlay.js");
+  // The annotation editor is split into ordered plain scripts sharing one namespace (src/content/editor/),
+  // booted by editor-overlay.js — inject them together, in this order. test/editor-files.test.js keeps
+  // this list in step with the directory.
+  await chrome.scripting.executeScript({ target: { tabId: pendingCapture.tabId }, files: [
+    "src/content/editor/core.js", "src/content/editor/geometry.js", "src/content/editor/styles.js",
+    "src/content/editor/editor.js", "src/content/editor/view.js", "src/content/editor/shell.js",
+    "src/content/editor/options.js", "src/content/editor/zoom.js", "src/content/editor/crop.js",
+    "src/content/editor/transform.js", "src/content/editor/text.js", "src/content/editor/layers.js",
+    "src/content/editor/eyedropper.js", "src/content/editor-overlay.js",
+  ] });
   return { ok: true };
 }
 async function shotSave() {

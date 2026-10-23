@@ -57,7 +57,9 @@ bubble's shape/size/corner/mirror/hidden are read live per frame (the popup/bar 
 `offscreen-set-bubble`, no rebuild). Screen capture has **no on-page countdown** (the native picker is the "get ready"
 beat) and its controls are the toolbar badge / popup / shortcuts, since on-page overlays can't follow it off-tab. The
 **popup** (`src/popup/`) is the screensnap UI; on-page controls are injected overlays (`src/content/`) —
-`editor-overlay` (annotation editor), `recorder-control` (the recording control bar: countdown / timer / pause /
+`editor-overlay` (annotation editor — split by concern into plain scripts under `src/content/editor/` that share one
+namespace, `globalThis.__screensnapEditorNS`; the service worker injects them as an ordered list ending in
+`editor-overlay.js`, and `test/editor-files.test.js` keeps that list in step with the folder), `recorder-control` (the recording control bar: countdown / timer / pause /
 discard / stop) and `draw-overlay` (auto-fading pen). Because `chrome.tabCapture` records the *whole* tab and there is
 no API to exclude an on-page element (any visible overlay appears in the video), the control bar copies Loom: it sits
 bottom-left and is **collapsed / auto-hidden during recording** (revealed by moving the pointer to the bottom-left

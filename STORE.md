@@ -5,6 +5,17 @@ Plain text only: no markdown, no emojis, no em dashes.
 
 ---
 
+v1.7 has been released with the following updates:
+• A friendlier screenshot editor. Everything you place, from arrows and boxes to blur, text and images, stays selected with handles, so you can move and resize it straight away without switching tools. Images, boxes, text and step badges can be rotated too.
+• Text works like a design app. Click to place a text frame, or drag to make a box that wraps. Move it by its border while you type, drag the sides to rewrap, and drag the corners to resize.
+• Numbered step badges (1, 2, 3) for walkthroughs. They renumber themselves when you reorder or delete one.
+• Spotlight: drag a box and everything else dims, to point at exactly what matters.
+• An eyedropper to pick any color from your screenshot.
+• A settings bar that shows only what the current tool needs: color, stroke, size and opacity.
+• Zoom and pan the screenshot (Ctrl or cmd and scroll, cmd 0 to fit, hold space to pan), which helps a lot on long full page captures.
+• Layers you can drag to reorder, duplicate and fade, with your screenshot shown as the locked background layer. The eraser is gone: select anything and press Delete.
+• Crop to an exact size by typing the width and height, and flip between portrait and landscape.
+
 v1.6 has been released with the following updates:
 • Pick your recording quality: Small (720p), Standard (1080p, the new default) or High (full resolution). Standard is about 15 MB a minute, so a 7 minute walkthrough lands around 100 MB, small enough to drop into Slack. Recordings used to come out up to three times that size.
 • Clearer record buttons. Each source in the Record tab now has its own Rec button, so tapping a row no longer starts a recording by surprise, and the popup shows a get ready screen with Cancel while the countdown or the screen picker is up.
@@ -59,8 +70,8 @@ A REAL VIDEO EDITOR, ALSO FREE
 
 SCREENSHOTS
 • Visible area or full page, saved as PNG. Full page also works on web apps that scroll inside a panel, like Gmail.
-• Annotate before saving with text, arrows, shapes, highlight, and blur.
-• Crop with a box you can move and resize, drag handles to resize anything you have drawn, reorder layers, add an image or logo, and come back later to re-edit your text.
+• Annotate before saving with text, arrows, shapes, numbered steps, spotlight, highlight, and blur. Everything you place can be moved and resized, and most things rotated.
+• Crop with a box you can move, resize, or set to an exact size, zoom in for detail, drag layers to reorder them, add an image or logo, and come back later to re-edit your text.
 • Add a padded backdrop, then copy to the clipboard or save to your computer.
 
 OPTIONAL CLOUD BACKUP (YOUR DRIVE, NOT OURS)
