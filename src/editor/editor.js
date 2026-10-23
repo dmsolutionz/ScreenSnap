@@ -1348,6 +1348,12 @@ window.addEventListener("keydown", (e) => {
   if (TOOL_KEYS[k]) setActiveTool(TOOL_KEYS[k], e.shiftKey);
 });
 
+// Buttons in the editor never take focus on click: otherwise the next shortcut (S, ⌘Z…) shows a focus ring on
+// whichever button was clicked last, and Enter / Space would press it again.
+document.addEventListener("mousedown", (e) => {
+  if (e.target instanceof Element && e.target.closest(".ss-ed button")) e.preventDefault();
+}, true);
+
 // Click-away deselect: clicking the stage background (outside the video) or an empty part of the
 // timeline dismisses the selection box. Clicks on the canvas keep their existing behavior (annotate.js
 // selects/deselects by hit-test), and clicks that act ON the selection — the resize handles, a layer's
