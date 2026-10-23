@@ -1,12 +1,11 @@
 #!/usr/bin/env node
 // Builds every image the Chrome Web Store listing needs into dist/store-assets/, with zero
-// npm dependencies: promo tiles are HTML rendered by headless Chrome (so the real Geist fonts
-// and brand styles are used), then re-encoded as 24-bit PNG because the store rejects alpha.
-// Store screenshots in screenshots/store/ are flattened the same way. Also emits a padded
+// npm dependencies: the promo tiles (screenshots/promo/) and store screenshots (screenshots/store/),
+// both made from real UI by scripts/media/store-shots.mjs, are re-encoded as 24-bit PNG because the
+// store rejects alpha. Also emits a padded
 // store icon (96px mark centered on a 128px transparent canvas, per CWS image guidelines).
 //
 //   node scripts/make-store-assets.mjs
-import { execFileSync } from "node:child_process";
 import { inflateSync, deflateSync } from "node:zlib";
 import { mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -14,7 +13,6 @@ import { dirname, join } from "node:path";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(ROOT, "dist", "store-assets");
-const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
 // --- tiny PNG codec (8-bit, non-interlaced, RGB/RGBA) ------------------------
 const CRC_TABLE = (() => {
@@ -117,92 +115,12 @@ function flatten(inFile, outFile) {
   writeFileSync(outFile, encodePNG(w, h, rgb, 3));
 }
 
-// --- promo tiles: brand HTML rendered by headless Chrome ----------------------
-const FONTS = join(ROOT, "src", "popup", "fonts");
-// The tile is laid out inside a fixed-size .stage pinned to the top-left corner: headless
-// Chrome clamps the window to a 500px minimum width, so viewport-relative centering drifts
-// on small canvases (the screenshot is cropped from a wider layout). The stage matches the
-// screenshot crop exactly, so centering inside it is exact.
-const tileHTML = (variant, w, h) => `<!doctype html>
-<meta charset="utf-8">
-<style>
-  @font-face { font-family: Geist; font-weight: 400; src: url("file://${FONTS}/geist-400.woff2") format("woff2"); }
-  @font-face { font-family: Geist; font-weight: 500; src: url("file://${FONTS}/geist-500.woff2") format("woff2"); }
-  @font-face { font-family: Geist; font-weight: 600; src: url("file://${FONTS}/geist-600.woff2") format("woff2"); }
-  @font-face { font-family: "Geist Mono"; font-weight: 500; src: url("file://${FONTS}/geist-mono-500.woff2") format("woff2"); }
-  * { margin: 0; box-sizing: border-box; }
-  html, body { width: 100%; height: 100%; overflow: hidden; background: #0b0b0d; }
-  body { font-family: Geist, system-ui, sans-serif; color: #fafafa; }
-  .stage {
-    position: fixed; left: 0; top: 0; width: ${w}px; height: ${h}px;
-    background: radial-gradient(120% 140% at 78% 18%, rgba(34,197,94,.13), transparent 55%), #0b0b0d;
-    display: flex; align-items: center; justify-content: center;
-  }
-  .lens { border-radius: 24%; background: #111113; border: 1px solid #232328;
-          display: flex; align-items: center; justify-content: center; }
-  .ring { border-radius: 50%; border-style: solid; border-color: #22c55e;
-          display: flex; align-items: center; justify-content: center; }
-  .pupil { border-radius: 50%; background: #050506; }
-  .word { font-weight: 600; letter-spacing: -0.03em; }
-  .word .dot { color: #22c55e; }
-  .tag { color: #a1a1aa; font-weight: 400; letter-spacing: -0.01em; }
-  .chips { display: flex; gap: 10px; }
-  .chip { border: 1px solid #26262b; background: rgba(255,255,255,.03); border-radius: 999px;
-          color: #d4d4d8; font-weight: 500; display: flex; align-items: center; gap: 8px; }
-  .chip i { width: 7px; height: 7px; border-radius: 50%; background: #22c55e; }
-  .pill { background: #161618; border: 1px solid #2a2a30; border-radius: 999px;
-          display: flex; align-items: center; box-shadow: 0 18px 50px rgba(0,0,0,.5); }
-  .rec { width: 11px; height: 11px; border-radius: 50%; background: #ef4444;
-         box-shadow: 0 0 14px rgba(239,68,68,.8); }
-  .time { font-family: "Geist Mono", monospace; font-weight: 500; color: #fafafa; }
-  .ctl { color: #71717a; font-size: 13px; letter-spacing: 2px; }
-</style>
-${variant === "small" ? `
-<body><div class="stage">
-  <div style="display:flex; flex-direction:column; align-items:center; gap:16px">
-    <div style="display:flex; align-items:center; gap:13px">
-      <div class="lens" style="width:50px;height:50px"><div class="ring" style="width:26px;height:26px;border-width:6px"><div class="pupil" style="width:11px;height:11px"></div></div></div>
-      <div class="word" style="font-size:36px">screensnap<span class="dot">.</span></div>
-    </div>
-    <div class="tag" style="font-size:14.5px">Free screen recording. No watermark. No catch.</div>
-  </div>
-</div></body>` : `
-<body><div class="stage" style="justify-content:space-between; padding: 0 96px">
-  <div style="display:flex; flex-direction:column; gap:26px">
-    <div class="word" style="font-size:84px">screensnap<span class="dot">.</span></div>
-    <div class="tag" style="font-size:29px">Free, unlimited screen recording &amp; screenshots —<br>everything stays on your machine.</div>
-    <div class="chips" style="font-size:17px">
-      <div class="chip" style="padding:10px 18px"><i></i>No watermark</div>
-      <div class="chip" style="padding:10px 18px"><i></i>No sign-up</div>
-      <div class="chip" style="padding:10px 18px"><i></i>No cloud</div>
-      <div class="chip" style="padding:10px 18px"><i></i>Built-in editor</div>
-    </div>
-  </div>
-  <div style="display:flex; flex-direction:column; align-items:center; gap:40px">
-    <div class="lens" style="width:200px;height:200px"><div class="ring" style="width:104px;height:104px;border-width:22px"><div class="pupil" style="width:46px;height:46px"></div></div></div>
-    <div class="pill" style="padding:14px 26px; gap:16px">
-      <div class="rec"></div><div class="time" style="font-size:21px">12:34</div><div class="ctl">❚❚&nbsp;&nbsp;■</div>
-    </div>
-  </div>
-</div></body>`}`;
-
+// --- promo tiles: made from real UI by scripts/media/store-shots.mjs into screenshots/promo/ ---------------
 mkdirSync(OUT, { recursive: true });
-const TILES = [
-  { name: "promo-small-440x280.png", w: 440, h: 280, variant: "small" },
-  { name: "promo-marquee-1400x560.png", w: 1400, h: 560, variant: "marquee" },
-];
-for (const t of TILES) {
-  const htmlFile = join(OUT, `_${t.variant}.html`);
-  writeFileSync(htmlFile, tileHTML(t.variant, t.w, t.h));
-  const shot = join(OUT, `_${t.variant}-raw.png`);
-  execFileSync(CHROME, [
-    "--headless=new", `--screenshot=${shot}`, `--window-size=${t.w},${t.h}`,
-    "--hide-scrollbars", "--force-device-scale-factor=1", "--allow-file-access-from-files",
-    "--disable-gpu", `file://${htmlFile}`,
-  ], { stdio: "pipe" });
-  flatten(shot, join(OUT, t.name));
-  rmSync(htmlFile); rmSync(shot);
-  console.log(`  ✓ ${t.name}`);
+const PROMO = join(ROOT, "screenshots", "promo");
+for (const f of readdirSync(PROMO).filter((f) => f.endsWith(".png")).sort()) {
+  flatten(join(PROMO, f), join(OUT, f));
+  console.log(`  ✓ ${f}`);
 }
 
 // --- store screenshots: flatten any RGBA ones to 24-bit RGB -------------------
