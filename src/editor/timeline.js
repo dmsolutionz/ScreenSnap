@@ -59,11 +59,13 @@ const LAYER_GLYPH = { rect: "▭", arrow: "↗", text: "T", blur: "◍", spot: "
 function laneLabel(l) {
   if (!l) return "Layer";
   if (l.kind === "image") return (l.image && l.image.frames) ? "GIF" : "Image";
+  if (l.kind === "video") return escapeHtml((l.video && l.video.name) || "Video"); // a file name, into innerHTML
   const t = (l.shape && l.shape.type) || "shape";
   return t.charAt(0).toUpperCase() + t.slice(1);
 }
 function laneGlyph(l) {
   if (l && l.kind === "image") return (l.image && l.image.frames) ? "GIF" : "▣";
+  if (l && l.kind === "video") return "▶";
   return LAYER_GLYPH[(l && l.shape && l.shape.type) || ""] || "◆";
 }
 
@@ -463,7 +465,7 @@ export function createTimeline(opts) {
         return [r ? { id: l.id, tIn: r.inSec, tOut: r.outSec } : { id: l.id, tIn: 0, tOut: dur, movable: false }];
       },
       onSelect: (id) => onLayerSelect && onLayerSelect(id),
-      onChange: (id, r) => onLayerRangeChange && onLayerRangeChange(id, { tIn: r.tIn, tOut: r.tOut }),
+      onChange: (id, r, mode) => onLayerRangeChange && onLayerRangeChange(id, { tIn: r.tIn, tOut: r.tOut }, mode),
       snap: makeSnap("layer", Math.min(0.1, dur)),
       onDragEnd: hideSnapGuide,
     });

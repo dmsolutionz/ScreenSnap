@@ -2,7 +2,7 @@
 // array order (index 0 = bottom). range:null means "show for the whole clip"; the feature phase can
 // set {inSec,outSec}. Kept deliberately small and framework-free.
 
-export const LAYER = Object.freeze({ SHAPE: "shape", IMAGE: "image" });
+export const LAYER = Object.freeze({ SHAPE: "shape", IMAGE: "image", VIDEO: "video" });
 
 const uid = () => crypto.randomUUID().slice(0, 8);
 
@@ -64,7 +64,7 @@ export function createLayerStore() {
 // Snapshot-based undo/redo over a layer store (⌘Z / ctrl+Z in the video editor). A continuous update
 // stream — drag-to-move, handle-resize, the opacity slider — coalesces into ONE step: the first change
 // of a gesture pushes the pre-change snapshot, and the gesture closes on pointer-up (or after a quiet
-// spell, for changes that aren't pointer-driven). Bitmaps/GIF frames are shared by reference across
+// spell, for changes that aren't pointer-driven). Bitmaps/GIF frames/clip blobs are shared by reference across
 // snapshots — only the positional/style data is copied, so history is cheap even with big images.
 // `extra` ({ get(), set(snapshot) }) folds non-layer edit state into the same steps — the editor passes the
 // timeline / crop / zoom transforms, so ⌘Z walks back trims, splits and crops as well as overlay edits.
@@ -74,11 +74,12 @@ export function createLayerHistory(store, { limit = 50, extra = null } = {}) {
     ...l,
     shape: l.shape ? JSON.parse(JSON.stringify(l.shape)) : l.shape,
     image: l.image ? { ...l.image } : l.image,
+    video: l.video ? { ...l.video } : l.video,
     range: l.range ? { ...l.range } : l.range,
   }));
   const snap = () => ({ layers: clone(store.layers), extra: extra ? extra.get() : null });
-  // Bitmaps aren't comparable data; positions, sizes, styles and the extra state are what a step changes.
-  const key = (s) => JSON.stringify({ l: s.layers.map((l) => ({ ...l, image: l.image ? { ...l.image, bitmap: 0, frames: 0 } : null })), e: s.extra });
+  // Bitmaps and clip blobs aren't comparable data; positions, sizes, styles and the extra state are what a step changes.
+  const key = (s) => JSON.stringify({ l: s.layers.map((l) => ({ ...l, image: l.image ? { ...l.image, bitmap: 0, frames: 0 } : null, video: l.video ? { ...l.video, blob: 0 } : null })), e: s.extra });
   const undoStack = [];
   let redoStack = [];
   let live = snap(); // the state BEFORE the in-flight gesture — what undo restores
@@ -161,4 +162,14 @@ export function newImageLayer({ bitmap, x, y, w, h, frames = null, totalMs = 0 }
 
 export function newShapeLayer(shape) {
   return { id: uid(), kind: "shape", visible: true, opacity: 1, range: null, shape };
+}
+
+// An imported video clip (see clip-layers.js). `blob` is the clip file (shared by reference across undo
+// snapshots, like bitmaps); {x,y,w,h} is where it draws in source px; it plays its file from `srcIn` for
+// the length of `range`, which is always set (a clip has its own duration, so it's never "whole clip").
+export function newVideoLayer({ blob, name, durationSec, hasAudio, x, y, w, h, range }) {
+  return {
+    id: uid(), kind: "video", visible: true, opacity: 1, range,
+    video: { blob, name, durationSec, hasAudio, srcIn: 0, volume: 1, muted: false, x, y, w, h },
+  };
 }

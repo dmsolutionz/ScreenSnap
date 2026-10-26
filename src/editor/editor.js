@@ -4,7 +4,8 @@
 import { loadClip, pickFile, toInput } from "./source.js";
 import { listIds } from "./idb.js";
 import { defaultTransforms, composeDims, cropRect, outDuration, segmentsOf, piecesOf, outTimestamp, srcTimestamp } from "./transforms.js";
-import { createLayerStore, createLayerHistory, newImageLayer, newShapeLayer } from "./layers-model.js";
+import { createLayerStore, createLayerHistory, newImageLayer, newShapeLayer, newVideoLayer } from "./layers-model.js";
+import { clipRangePatch } from "./clip-layers.js";
 import { translate } from "./shapes.js";
 import { buildShell } from "./ui-shell.js";
 import { createPreview } from "./preview.js";
@@ -21,8 +22,8 @@ import { decodeGif } from "./gif-decode.js";
 import { computeWaveformPeaks } from "./audio-waveform.js";
 
 const COLORS = ["#ef4444", "#f59e0b", "#22c55e", "#3b82f6", "#111111"];
-// Left tool rail: [id, label, keyboard shortcut, svg icon]. "image" is an action (file picker), not a
-// mode. Icons are inline SVG lifted from the design handoff.
+// Left tool rail: [id, label, keyboard shortcut, svg icon]. "image" and "video" are actions (file
+// pickers), not modes. Icons are inline SVG lifted from the design handoff.
 const RAIL_TOOLS = [
   ["select", "Select", "V", '<svg viewBox="0 0 24 24" width="17" height="17"><polygon points="7,4 7,17.5 10.5,14 13,19.5 15.2,18.5 12.7,13 17.5,12.5" fill="currentColor"/></svg>'],
   ["rect", "Rectangle", "R", '<svg viewBox="0 0 24 24" width="17" height="17"><rect x="4.5" y="7" width="15" height="10" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>'],
@@ -30,7 +31,9 @@ const RAIL_TOOLS = [
   ["text", "Text", "T", '<svg viewBox="0 0 24 24" width="17" height="17"><line x1="5.5" y1="6.5" x2="18.5" y2="6.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><line x1="12" y1="6.5" x2="12" y2="18.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>'],
   ["blur", "Blur", "B", '<svg viewBox="0 0 24 24" width="17" height="17"><circle cx="12" cy="12" r="6.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 2.4"/><circle cx="12" cy="12" r="3" fill="currentColor" opacity="0.4"/></svg>'],
   ["image", "Add image", "I", '<svg viewBox="0 0 24 24" width="17" height="17"><rect x="4.5" y="5.5" width="15" height="13" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="9" cy="10" r="1.5" fill="currentColor"/><polyline points="6,17 11,12.5 14,15 16.5,13 19,15.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>'],
+  ["video", "Add video clip", "O", '<svg viewBox="0 0 24 24" width="17" height="17"><rect x="3.5" y="6.5" width="12" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><polygon points="15.5,10.5 20.5,7.5 20.5,16.5 15.5,13.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>'],
 ];
+const ACTION_TOOLS = new Set(["image", "video"]); // one-shot pickers in the rail, never an armed mode
 
 const root = document.getElementById("root");
 const empty = document.getElementById("empty");
@@ -223,8 +226,10 @@ async function start(blob, fileName) {
     store,
     getSelectedLayer: () => selectedLayerId,
     onLayerSelect: (id) => selectLayer(id),
-    onLayerRangeChange: (id, r) => {
-      store.update(id, { range: { inSec: r.tIn, outSec: r.tOut } });
+    onLayerRangeChange: (id, r, mode) => {
+      const l = store.get(id);
+      if (l && l.kind === "video") store.update(id, clipRangePatch(l, r, mode)); // edges trim the clip's own file
+      else store.update(id, { range: { inSec: r.tIn, outSec: r.tOut } });
       setStatus(shell.statusEl, meta, transforms);
       if (id === selectedLayerId) updateInspector(); // keep the inspector's timing readout live
     },
@@ -539,22 +544,23 @@ function setActiveTool(t, lock = false) {
 }
 
 // The 52px left icon rail: single click arms a tool (draw-once), double-click locks it for repeated
-// shapes; "image" is a one-shot file-picker action. Tooltips show name + shortcut + lock hint.
+// shapes; "image" / "video" are one-shot file-picker actions. Tooltips show name + shortcut + lock hint.
 function buildRail(el) {
   el.innerHTML = RAIL_TOOLS.map(([id, label, key]) => `
     <button class="ss-rail-btn ${id === tool ? "on" : ""}" data-tool="${id}" aria-label="${label}">
       ${RAIL_TOOLS.find((t) => t[0] === id)[3]}
-      <span class="ss-rail-tip">${label} <kbd>${key}</kbd>${id !== "select" && id !== "image" ? '<span class="ss-rail-tip-hint">2× click = lock</span>' : ""}</span>
+      <span class="ss-rail-tip">${label} <kbd>${key}</kbd>${id !== "select" && !ACTION_TOOLS.has(id) ? '<span class="ss-rail-tip-hint">2× click = lock</span>' : ""}</span>
     </button>`).join("");
   el.addEventListener("click", async (e) => {
     const b = e.target.closest("[data-tool]");
     if (!b) return;
     if (b.dataset.tool === "image") { await addImageFromPicker(); return; }
+    if (b.dataset.tool === "video") { await addVideoFromPicker(); return; }
     setActiveTool(b.dataset.tool, false);
   });
   el.addEventListener("dblclick", (e) => {
     const b = e.target.closest("[data-tool]");
-    if (!b || b.dataset.tool === "image" || b.dataset.tool === "select") return;
+    if (!b || ACTION_TOOLS.has(b.dataset.tool) || b.dataset.tool === "select") return;
     setActiveTool(b.dataset.tool, true);
   });
 }
@@ -579,6 +585,9 @@ function duplicateSelected() {
     copy = session.store.add(newImageLayer({ ...l.image, x: l.image.x + OFF, y: l.image.y + OFF }));
   } else if (l.kind === "shape" && l.shape) {
     copy = session.store.add(newShapeLayer(translate(l.shape, OFF, OFF)));
+  } else if (l.kind === "video" && l.video) {
+    copy = session.store.add(newVideoLayer({ ...l.video, x: l.video.x + OFF, y: l.video.y + OFF, range: { ...l.range } }));
+    session.store.update(copy.id, { video: { ...copy.video, srcIn: l.video.srcIn, volume: l.video.volume, muted: l.video.muted } });
   }
   if (!copy) return;
   session.store.update(copy.id, { visible: l.visible, opacity: l.opacity, range: l.range ? { ...l.range } : null });
@@ -669,6 +678,64 @@ async function addImageLayer(file, store, base) {
     console.warn("[screensnap] couldn't add image layer:", err);
     alert("Sorry — that image couldn't be added.");
   }
+}
+
+// ── Imported video clips (overlay layers) ───────────────────────────────────────────────────────
+// A clip lands as a picture-in-picture in the bottom-right of the visible content, starting at the
+// playhead and running for its own length (or to the end of the recording). Drag it / its handles on the
+// stage to place it, drag "Fill frame" for a full cutaway, and drag its block on the timeline to retime
+// or trim it. Layers stack like tracks: reorder rows to put one clip over another.
+async function addVideoFromPicker() {
+  if (!session) return;
+  const picked = await pickFile();
+  if (!picked || !picked.blob) return;
+  await addVideoLayer(picked.blob, picked.fileName);
+}
+
+async function addVideoLayer(blob, name) {
+  let width, height, durationSec, hasAudio;
+  try {
+    const input = toInput(blob);
+    const vTrack = await input.getPrimaryVideoTrack();
+    if (!vTrack) { alert("That file doesn’t have a video track we can use."); return; }
+    width = await vTrack.getDisplayWidth();
+    height = await vTrack.getDisplayHeight();
+    durationSec = await vTrack.computeDuration();
+    hasAudio = !!(await input.getPrimaryAudioTrack().catch(() => null));
+    if (!(width > 0 && height > 0 && durationSec > 0)) throw new Error("empty video track");
+  } catch (err) {
+    console.warn("[screensnap] couldn't add video clip:", err);
+    alert("Sorry — that video couldn’t be added. Try an MP4 or WebM.");
+    return;
+  }
+  const { transforms, meta, store } = session;
+  const base = cropRect(transforms, meta.width, meta.height);
+  const inset = Math.max(24, Math.round(base.w / 40));
+  const scale = fitScale(width, base.w);
+  const w = width * scale, h = height * scale;
+  // Start at the playhead, unless that leaves less than a second of recording to play over.
+  const inSec = meta.durationSec - lastTime >= 1 ? lastTime : 0;
+  const layer = store.add(newVideoLayer({
+    blob, name: name || "clip", durationSec, hasAudio,
+    x: base.x + base.w - w - inset, y: base.y + base.h - h - inset, w, h,
+    range: { inSec, outSec: Math.min(meta.durationSec, inSec + durationSec) },
+  }));
+  setActiveTool("select");
+  selectLayer(layer.id);
+  session.timeline.refresh();
+}
+
+// Fit (letterboxed) or fill (cropped edges spill outside — the frame clips them) the selected clip to
+// the visible content rect, keeping the clip's aspect ratio.
+function fitClipToFrame(fill) {
+  const l = session && selectedLayerId ? session.store.get(selectedLayerId) : null;
+  if (!l || l.kind !== "video") return;
+  const base = cropRect(session.transforms, session.meta.width, session.meta.height);
+  const ar = l.video.w / l.video.h;
+  const byWidth = fill ? ar < base.w / base.h : ar >= base.w / base.h;
+  const w = byWidth ? base.w : base.h * ar;
+  const h = byWidth ? base.w / ar : base.h;
+  session.store.update(l.id, { video: { ...l.video, x: base.x + (base.w - w) / 2, y: base.y + (base.h - h) / 2, w, h } });
 }
 
 // ── Imported audio track (voiceover / music) ─────────────────────────────────────────────────────
@@ -812,7 +879,8 @@ function updateInspector() {
   const store = session.store;
   const l = selectedLayerId ? store.get(selectedLayerId) : null;
   if (!l) { el.innerHTML = ""; return; }
-  const typeName = l.kind === "image" ? (l.image && l.image.frames ? "GIF" : "Image") : (((l.shape && l.shape.type) || "Shape").replace(/^./, (c) => c.toUpperCase()));
+  const typeName = l.kind === "image" ? (l.image && l.image.frames ? "GIF" : "Image") : l.kind === "video" ? "Video clip" : (((l.shape && l.shape.type) || "Shape").replace(/^./, (c) => c.toUpperCase()));
+  const v = l.kind === "video" ? l.video : null;
   const hasColor = l.kind === "shape" && l.shape && l.shape.color != null;
   const opacity = typeof l.opacity === "number" ? l.opacity : 1;
   const range = l.range;
@@ -823,9 +891,14 @@ function updateInspector() {
     <span class="ss-insp-ctl">opacity <input type="range" id="ss-insp-op" min="0" max="1" step="0.05" value="${opacity}" /></span>
     <span class="ss-insp-sep"></span>
     <span class="ss-insp-ctl">timing <span class="ss-insp-range">${range ? `${fmtT(range.inSec)} – ${fmtT(range.outSec)}` : "always visible"}</span>
-      <button class="ss-insp-btn" data-timing="in">Set in</button>
+      ${v ? `<button class="ss-insp-btn" data-timing="start">Start at playhead</button>` : `<button class="ss-insp-btn" data-timing="in">Set in</button>
       <button class="ss-insp-btn" data-timing="out">Set out</button>
-      <button class="ss-insp-btn" data-timing="all">Always visible</button></span>
+      <button class="ss-insp-btn" data-timing="all">Always visible</button>`}</span>
+    ${v ? `<span class="ss-insp-sep"></span>
+    <span class="ss-insp-ctl"><button class="ss-insp-btn" data-fit="fit">Fit frame</button><button class="ss-insp-btn" data-fit="fill">Fill frame</button></span>
+    ${v.hasAudio ? `<span class="ss-insp-sep"></span>
+    <span class="ss-insp-ctl">clip audio <input type="range" id="ss-insp-vol" min="0" max="1" step="0.05" value="${v.muted ? 0 : v.volume}" title="Clip volume" />
+      <button class="ss-insp-btn" data-clipmute>${v.muted ? "Unmute" : "Mute"}</button></span>` : ""}` : ""}
     <span class="ss-insp-spacer"></span>
     <span class="ss-insp-hint">⌫ delete · ⌘D duplicate · esc deselect</span>
   </div>`;
@@ -838,12 +911,23 @@ function updateInspector() {
     updateInspector();
   });
   el.querySelector("#ss-insp-op").addEventListener("input", (e) => store.update(selectedLayerId, { opacity: Number(e.target.value) }));
+  el.querySelector("#ss-insp-vol")?.addEventListener("input", (e) => {
+    const cur = store.get(selectedLayerId); if (!cur || !cur.video) return;
+    const volume = Number(e.target.value);
+    store.update(cur.id, { video: { ...cur.video, volume, muted: volume === 0 ? cur.video.muted : false } }); // dragging up un-mutes
+  });
   const MINR = 0.1;
   el.querySelector(".ss-insp").addEventListener("click", (e) => {
-    const b = e.target.closest("[data-timing]"); if (!b) return;
     const cur = store.get(selectedLayerId); if (!cur) return;
+    if (e.target.closest("[data-fit]")) { fitClipToFrame(e.target.closest("[data-fit]").dataset.fit === "fill"); return; }
+    if (e.target.closest("[data-clipmute]")) { store.update(cur.id, { video: { ...cur.video, muted: !cur.video.muted } }); updateInspector(); return; }
+    const b = e.target.closest("[data-timing]"); if (!b) return;
     const r = cur.range;
-    if (b.dataset.timing === "all") store.update(selectedLayerId, { range: null });
+    if (b.dataset.timing === "start") {
+      const len = r.outSec - r.inSec;
+      const inSec = Math.max(0, Math.min(lastTime, session.meta.durationSec - Math.min(len, 0.1)));
+      store.update(cur.id, clipRangePatch(cur, { tIn: inSec, tOut: inSec + len }, "move"));
+    } else if (b.dataset.timing === "all") store.update(selectedLayerId, { range: null });
     else if (b.dataset.timing === "in") {
       const outSec = r ? r.outSec : session.meta.durationSec;
       store.update(selectedLayerId, { range: { inSec: Math.max(0, Math.min(lastTime, outSec - MINR)), outSec } });
@@ -1110,6 +1194,7 @@ function snapshotLayers(store) {
     ...l,
     shape: l.shape ? JSON.parse(JSON.stringify(l.shape)) : l.shape,
     image: l.image ? { ...l.image } : l.image,
+    video: l.video ? { ...l.video } : l.video,
     range: l.range ? { ...l.range } : l.range,
   }));
   return { visibleOrdered: () => layers };
@@ -1307,6 +1392,7 @@ function pickImageFile() {
 // Keyboard shortcuts — all ignored while typing in a field (e.g. the text-annotation input).
 // Space = play/pause · J K L = shuttle · ←→ frame · ↑↓ prev/next edit · S = split at playhead · Delete = remove
 // the selected piece · Q / W = trim start / end to the playhead · M = marker · V R A T B = tools · I = add image ·
+// O = add video clip ·
 // C = crop · X = cut mode · Z = add zoom · esc = Select + deselect · ⌘D = duplicate · ⌘Z / ⇧⌘Z = undo / redo.
 const TOOL_KEYS = { v: "select", r: "rect", a: "arrow", t: "text", b: "blur" };
 window.addEventListener("keydown", (e) => {
@@ -1342,6 +1428,7 @@ window.addEventListener("keydown", (e) => {
   if (k === "w") { trimToPlayhead("out"); return; }
   if (k === "j" || k === "k" || k === "l") { shuttle(k); return; }
   if (k === "i") { addImageFromPicker(); return; }
+  if (k === "o") { addVideoFromPicker(); return; }
   if (k === "c") { toggleCrop(); return; }
   if (k === "x") { toggleCut(); return; }
   if (k === "z") { addZoom(); return; }

@@ -5,6 +5,7 @@
 // what you'll export. Mediabunny is used only for the export pipeline, not here.
 import { drawComposite } from "./compositor.js";
 import { composeDims, effectiveSrcRect, segmentsOf, outTimestamp } from "./transforms.js";
+import { clipTimeAt } from "./clip-layers.js";
 
 function clamp01(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
 
@@ -107,6 +108,70 @@ export function createPreview({ canvas, blob, getTransforms, store, onTime, onSt
     }
   }
 
+  // Imported video clip layers: one hidden <video> per layer (its own decode + audio), positioned from the
+  // main playhead every frame via clipTimeAt(). Same drift policy as the imported audio above — the
+  // export decodes clip frames exactly. Elements are created/retired as layers come and go (undo
+  // restores a deleted clip with its blob, so it simply gets a fresh element).
+  const clipEls = new Map(); // layerId -> { el, url, blob, frame }
+  function clipEntry(layer) {
+    let c = clipEls.get(layer.id);
+    if (c && c.blob !== layer.video.blob) { dropClip(layer.id); c = null; }
+    if (c) return c;
+    const el = document.createElement("video");
+    el.preload = "auto";
+    el.playsInline = true;
+    el.style.cssText = "position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0;pointer-events:none";
+    const url = URL.createObjectURL(layer.video.blob);
+    el.src = url;
+    // A paused seek lands after the composite that asked for it — repaint once the frame is there. A
+    // fresh clip at its own 0s needs no seek, so its first decoded frame repaints too.
+    const repaint = () => { if (!playing) composite(); };
+    el.addEventListener("seeked", repaint);
+    el.addEventListener("loadeddata", repaint);
+    (document.body || document.documentElement).appendChild(el);
+    c = { el, url, blob: layer.video.blob, frame: { draw: (cx, ...args) => { if (el.readyState >= 2) { try { cx.drawImage(el, ...args); } catch {} } } } };
+    clipEls.set(layer.id, c);
+    return c;
+  }
+  function dropClip(id) {
+    const c = clipEls.get(id);
+    if (!c) return;
+    try { c.el.pause(); } catch {}
+    c.el.removeAttribute("src");
+    try { c.el.load(); } catch {}
+    c.el.remove();
+    URL.revokeObjectURL(c.url);
+    clipEls.delete(id);
+  }
+  // Position every clip for main source time srcSec and return Map(id -> drawable) for those on screen.
+  function syncClips(srcSec, t) {
+    const live = new Set();
+    const frames = new Map();
+    const masterMuted = !!(t && t.audio && t.audio.muted);
+    const speed = t && t.speed ? t.speed : 1;
+    for (const l of (store ? store.layers : [])) {
+      if (l.kind !== "video" || !l.video || !l.video.blob) continue;
+      live.add(l.id);
+      const c = clipEntry(l);
+      const ct = l.visible === false ? null : clipTimeAt(l, srcSec);
+      if (ct == null) { if (!c.el.paused) { try { c.el.pause(); } catch {} } continue; }
+      const vol = l.video.muted || masterMuted ? 0 : clamp01(l.video.volume);
+      if (c.el.volume !== vol) c.el.volume = vol;
+      if (c.el.playbackRate !== speed) c.el.playbackRate = speed;
+      const drift = Math.abs(c.el.currentTime - ct);
+      if (playing) {
+        if (c.el.paused) { try { c.el.currentTime = ct; } catch {} c.el.play().catch(() => {}); }
+        else if (drift > 0.25) { try { c.el.currentTime = ct; } catch {} }
+      } else {
+        if (!c.el.paused) { try { c.el.pause(); } catch {} }
+        if (drift > 1 / 120 && !c.el.seeking) { try { c.el.currentTime = ct; } catch {} }
+      }
+      frames.set(l.id, c.frame);
+    }
+    for (const id of [...clipEls.keys()]) if (!live.has(id)) dropClip(id);
+    return frames;
+  }
+
   const readyP = new Promise((resolve) => {
     video.addEventListener("loadedmetadata", () => {
       srcW = video.videoWidth || 2;
@@ -145,7 +210,8 @@ export function createPreview({ canvas, blob, getTransforms, store, onTime, onSt
     const layers = store && typeof store.visibleOrdered === "function" ? store.visibleOrdered() : [];
     const srcSec = video.currentTime || 0;
     const srcRect = t ? effectiveSrcRect(t, srcSec, srcW || 2, srcH || 2) : null;
-    drawComposite(ctx, ready ? baseFrame : null, layers, { outW: cd.outW, outH: cd.outH, srcW, srcH, unit, blurCanvas: null, srcRect, timeSec: srcSec, dest: cd.dest, backdrop: cd.backdrop });
+    const clips = syncClips(srcSec, t);
+    drawComposite(ctx, ready ? baseFrame : null, layers, { outW: cd.outW, outH: cd.outH, srcW, srcH, unit, blurCanvas: null, srcRect, timeSec: srcSec, dest: cd.dest, backdrop: cd.backdrop, clips });
   }
 
   function loop() {
@@ -216,6 +282,7 @@ export function createPreview({ canvas, blob, getTransforms, store, onTime, onSt
     raf = 0;
     try { video.pause(); } catch {}
     if (extraEl) { try { extraEl.pause(); } catch {} }
+    for (const c of clipEls.values()) { try { c.el.pause(); } catch {} }
   }
 
   // Re-composite the current frame (instant) so layer/transform edits show immediately while paused.
@@ -232,6 +299,7 @@ export function createPreview({ canvas, blob, getTransforms, store, onTime, onSt
     if (video.parentNode) video.parentNode.removeChild(video);
     URL.revokeObjectURL(url);
     setExtraAudio(null); // tear down the imported-audio element + revoke its URL
+    for (const id of [...clipEls.keys()]) dropClip(id);
   }
 
   // Paint the first frame once metadata is in.

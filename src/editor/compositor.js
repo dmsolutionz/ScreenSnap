@@ -91,7 +91,7 @@ function roundRectPath(ctx, d, r) {
   ctx.closePath();
 }
 
-// opts: { outW, outH, srcW, srcH, unit, blurCanvas|null, srcRect|null, timeSec, dest|null, backdrop|null }
+// opts: { outW, outH, srcW, srcH, unit, blurCanvas|null, srcRect|null, timeSec, dest|null, backdrop|null, clips|null }
 //   srcRect {x,y,w,h} in source px = the region of the base frame to draw (crop + zoom). Defaults to
 //     the full frame. Overlay layers (stored in source coords) map through srcRect → dest.
 //   dest {x,y,w,h} in output px = where the content is drawn within the output canvas. Defaults to the
@@ -99,10 +99,12 @@ function roundRectPath(ctx, d, r) {
 //   backdrop { bg, radius, shadow } = paint a background behind the content, clip it to a rounded card,
 //     and cast a soft shadow. radius is a fraction of the content's smaller side.
 //   timeSec = current SOURCE time, used for per-layer time ranges and animated GIF frames.
+//   clips = Map(layerId -> frame with .draw(ctx, dx,dy,dw,dh)) for the video clip layers on screen now
+//     (the preview passes its hidden <video> elements, the exports decoded samples; see clip-layers.js).
 // baseSample is a Mediabunny VideoSample / preview adapter (has .draw(ctx, sx,sy,sw,sh, dx,dy,dw,dh))
 // OR null. layers are in draw order.
 export function drawComposite(ctx, baseSample, layers, opts) {
-  const { outW, outH, srcW, srcH, unit, blurCanvas, srcRect, timeSec, dest, backdrop } = opts || {};
+  const { outW, outH, srcW, srcH, unit, blurCanvas, srcRect, timeSec, dest, backdrop, clips } = opts || {};
   const sr = srcRect && srcRect.w > 0 && srcRect.h > 0 ? srcRect : { x: 0, y: 0, w: srcW || outW, h: srcH || outH };
   const dst = dest && dest.w > 0 && dest.h > 0 ? dest : { x: 0, y: 0, w: outW, h: outH };
   ctx.clearRect(0, 0, outW, outH);
@@ -165,6 +167,10 @@ export function drawComposite(ctx, baseSample, layers, opts) {
         const im = layer.image;
         const bmp = layerBitmap(im, ts);
         if (bmp) ctx.drawImage(bmp, im.x * scaleX + offX, im.y * scaleY + offY, im.w * scaleX, im.h * scaleY);
+      } else if (layer.kind === "video" && layer.video) {
+        const v = layer.video;
+        const frame = clips && clips.get(layer.id);
+        if (frame) frame.draw(ctx, v.x * scaleX + offX, v.y * scaleY + offY, v.w * scaleX, v.h * scaleY);
       } else if (layer.kind === "shape" && layer.shape) {
         ctx.translate(offX, offY);
         ctx.scale(scaleX, scaleY);

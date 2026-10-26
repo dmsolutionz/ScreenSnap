@@ -90,7 +90,7 @@ export function createAnnotator({ canvas, store, getTool, getColor, getTransform
   function unit() { return Math.max(1, srcWidth() / 900); }
   function weight() { return Math.max(2, srcWidth() / 300); }
 
-  // Top-most layer (image OR shape) hit at p, searched front-to-back over visible layers.
+  // Top-most layer (image / video clip OR shape) hit at p, searched front-to-back over visible layers.
   function pointInRect(p, r) { return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h; }
   function topLayerAt(p) {
     const tol = 9 * unit();
@@ -99,6 +99,7 @@ export function createAnnotator({ canvas, store, getTool, getColor, getTransform
       const l = ordered[i];
       if (!l) continue;
       if (l.kind === "image" && l.image && pointInRect(p, l.image)) return l;
+      if (l.kind === "video" && l.video && pointInRect(p, l.video)) return l;
       if (l.kind === "shape" && l.shape && hit(l.shape, p, tol)) return l;
     }
     return null;
@@ -157,7 +158,7 @@ export function createAnnotator({ canvas, store, getTool, getColor, getTransform
       canvas.setPointerCapture?.(e.pointerId);
       const l = topLayerAt(p);
       setSelected(l ? l.id : null);
-      if (l && l.kind === "image") moving = { id: l.id, kind: "image", start: p, orig: { x: l.image.x, y: l.image.y } };
+      if (l && (l.kind === "image" || l.kind === "video")) moving = { id: l.id, kind: l.kind, start: p, orig: { x: l[l.kind].x, y: l[l.kind].y } };
       else if (l) moving = { id: l.id, kind: "shape", start: p, orig: JSON.parse(JSON.stringify(l.shape)) };
       return;
     }
@@ -173,9 +174,10 @@ export function createAnnotator({ canvas, store, getTool, getColor, getTransform
     if (moving) {
       const p = toImg(e);
       const dx = p.x - moving.start.x, dy = p.y - moving.start.y;
-      if (moving.kind === "image") {
+      if (moving.kind === "image" || moving.kind === "video") {
+        const k = moving.kind; // the rect lives at layer.image / layer.video
         const cur = store.get(moving.id);
-        if (cur && cur.image) store.update(moving.id, { image: { ...cur.image, x: moving.orig.x + dx, y: moving.orig.y + dy } });
+        if (cur && cur[k]) store.update(moving.id, { [k]: { ...cur[k], x: moving.orig.x + dx, y: moving.orig.y + dy } });
       } else {
         store.update(moving.id, { shape: translate(moving.orig, dx, dy) });
       }

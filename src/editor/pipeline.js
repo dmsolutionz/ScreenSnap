@@ -10,6 +10,7 @@ import {
 import { composeDims, keepFrame, outTimestamp, outDuration, audioEnabled, effectiveSrcRect, videoBitrateFor, audioGainFor, segmentsOf, sourceVideoBitrate, capToSource } from "./transforms.js";
 import { drawComposite } from "./compositor.js";
 import { outputFrames } from "./frame-clock.js";
+import { openClipFrames } from "./clip-layers.js";
 
 // Scale an AudioBuffer's samples in place by g (0..1) — used by the streaming (no-mix) audio path.
 function applyGain(buffer, g) {
@@ -87,15 +88,18 @@ function makeChunker(ctx, totalOut) {
 // NOTE: this renders the full output as one PCM buffer (~11MB/min stereo 48k) and holds the decoded
 // sources (packed into chunks) until rendering, so it's only used when an imported track actually
 // needs mixing — the plain path streams (see transcode below).
+// clipAudio: [{ track, layer }] — the audio of imported video clip layers, placed where each clip sits.
 // -> AudioBuffer, or null if there was genuinely nothing to render.
-async function mixAudio({ transforms, aTrack, wantMainAudio, extraTrack, extraAudio, totalOut, signal }) {
+async function mixAudio({ transforms, aTrack, wantMainAudio, extraTrack, extraAudio, clipAudio = [], totalOut, signal }) {
   // Size the context to the RICHEST of the two sources (mono up-mixes losslessly into stereo, lower
   // rates resample up) so imported stereo music isn't downmixed just because the mic track is mono.
   const mainFmt = wantMainAudio ? await firstBufferFormat(aTrack, transforms.trimIn) : null;
   const extraFmt = extraTrack ? await firstBufferFormat(extraTrack, extraAudio ? extraAudio.trimIn : 0) : null;
+  const fmts = [mainFmt, extraFmt];
+  for (const c of clipAudio) fmts.push(await firstBufferFormat(c.track, c.layer.video.srcIn || 0));
   const fmt = {
-    sampleRate: Math.max(mainFmt ? mainFmt.sampleRate : 0, extraFmt ? extraFmt.sampleRate : 0) || 48000,
-    channels: Math.max(mainFmt ? mainFmt.channels : 0, extraFmt ? extraFmt.channels : 0) || 2,
+    sampleRate: Math.max(0, ...fmts.map((f) => (f ? f.sampleRate : 0))) || 48000,
+    channels: Math.max(0, ...fmts.map((f) => (f ? f.channels : 0))) || 2,
   };
   const length = Math.max(1, Math.ceil(totalOut * fmt.sampleRate));
   const ctx = new OfflineAudioContext(Math.max(1, fmt.channels), length, fmt.sampleRate);
@@ -138,6 +142,29 @@ async function mixAudio({ transforms, aTrack, wantMainAudio, extraTrack, extraAu
       }
       chunks.flush();
     }
+  }
+
+  // Clip audio: a clip's frame at clip time c plays at main source time range.inSec + (c - srcIn), so each
+  // buffer maps onto the main timeline, is clipped to the clip's range and the kept (uncut) segments, and
+  // lands at that point's output time — a ripple cut removes the clip's audio along with its picture.
+  const segs = segmentsOf(transforms);
+  for (const { track, layer } of clipAudio) {
+    const v = layer.video, r = layer.range;
+    const srcIn = v.srcIn || 0;
+    const chunks = makeChunker(ctx, totalOut);
+    const sink = new AudioBufferSink(track);
+    for await (const { buffer, timestamp } of sink.buffers(srcIn, srcIn + (r.outSec - r.inSec))) {
+      if (signal && signal.aborted) throw new DOMException("Export cancelled", "AbortError");
+      const m = r.inSec + (timestamp - srcIn);
+      const mEnd = m + buffer.duration;
+      for (const s of segs) {
+        const from = Math.max(m, s.in, r.inSec);
+        const to = Math.min(mEnd, s.out, r.outSec);
+        if (to - from <= 1e-6) continue;
+        chunks.add(buffer, from - m, to - from, outTimestamp(from, transforms), v.volume);
+      }
+    }
+    chunks.flush();
   }
 
   return ctx.startRendering();
@@ -198,7 +225,20 @@ export async function transcode({ input, transforms, store, onProgress, signal, 
   }
   const extraAudible = !!extraTrack && !masterMuted && !ea.muted &&
     (typeof ea.volume !== "number" || ea.volume > 0) && (ea.offsetSec || 0) < totalOut;
-  const hasAnyAudioSource = wantMainAudio || extraAudible;
+  // Imported clip layers' own audio follows the same rule as the recording's (needs 1x speed, honours the
+  // master mute); a muted / silent / audio-less clip contributes nothing.
+  const layers = store && typeof store.visibleOrdered === "function" ? store.visibleOrdered() : [];
+  const clipAudio = [];
+  if (audioEnabled(transforms) && !masterMuted) {
+    for (const l of layers) {
+      if (l.kind !== "video" || !l.video || !l.video.hasAudio || l.video.muted || !(l.video.volume > 0) || !l.range) continue;
+      try {
+        const track = await new Input({ formats: ALL_FORMATS, source: new BlobSource(l.video.blob) }).getPrimaryAudioTrack();
+        if (track) clipAudio.push({ track, layer: l });
+      } catch { /* an unreadable clip track just stays silent */ }
+    }
+  }
+  const hasAnyAudioSource = wantMainAudio || extraAudible || clipAudio.length > 0;
   let aSrc = null;
   if (hasAnyAudioSource) {
     aSrc = new AudioBufferSource({ codec: "aac", bitrate: 192e3 });
@@ -215,7 +255,7 @@ export async function transcode({ input, transforms, store, onProgress, signal, 
     if (clamped - lastReported >= 0.01 || clamped >= 1) { lastReported = clamped; onProgress(clamped); }
   };
 
-  const layers = store && typeof store.visibleOrdered === "function" ? store.visibleOrdered() : [];
+  const clipFrames = await openClipFrames(layers);
 
   try {
     // outputFrames() holds a frame across static (variable-frame-rate) stretches so time-ranged
@@ -223,17 +263,18 @@ export async function transcode({ input, transforms, store, onProgress, signal, 
     // add() below throws (the old inline close() was skipped on that path, leaking the frame).
     for await (const f of outputFrames({ vSink, transforms, totalOut, signal })) {
       const srcRect = effectiveSrcRect(transforms, f.srcSec, srcW, srcH);
-      drawComposite(ctx, f.sample, layers, { outW, outH, srcW, srcH, unit, blurCanvas: null, srcRect, timeSec: f.srcSec, dest, backdrop });
+      const clips = await clipFrames.framesAt(f.srcSec);
+      drawComposite(ctx, f.sample, layers, { outW, outH, srcW, srcH, unit, blurCanvas: null, srcRect, timeSec: f.srcSec, dest, backdrop, clips });
       await vSrc.add(Math.max(0, f.outTs), Math.max(1 / 1000, f.dur));
       report(f.outTs / totalOut);
     }
 
     if (hasAnyAudioSource) {
-      if (extraAudible) {
-        // Two sources → mix offline into one buffer, then hand it to the encoder in a single add()
+      if (extraAudible || clipAudio.length) {
+        // Several sources → mix offline into one buffer, then hand it to the encoder in a single add()
         // (AudioBufferSource.add() auto-chunks an arbitrarily large buffer internally).
         const mixed = await mixAudio({
-          transforms, aTrack, wantMainAudio, extraTrack, extraAudio: ea, totalOut, signal,
+          transforms, aTrack, wantMainAudio, extraTrack: extraAudible ? extraTrack : null, extraAudio: ea, clipAudio, totalOut, signal,
         });
         if (mixed) await aSrc.add(mixed);
       } else {
@@ -258,5 +299,7 @@ export async function transcode({ input, transforms, store, onProgress, signal, 
   } catch (err) {
     try { await output.cancel(); } catch {}
     throw err;
+  } finally {
+    await clipFrames.close();
   }
 }

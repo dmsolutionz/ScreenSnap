@@ -155,6 +155,53 @@ try {
   const crop4 = await evaluate(ed.sessionId, `({w:document.getElementById('ss-crop-w')?.value,h:document.getElementById('ss-crop-h')?.value})`);
   log("  crop reopened: " + JSON.stringify(crop4));
   await evaluate(ed.sessionId, `document.getElementById('ss-crop-cancel').click()`); await sleep(200);
+  // Video clip layer: generate a solid-magenta clip with a tone, feed it to the picker the rail button
+  // opens (file inputs can't be driven over CDP, so click() is patched to hand over the file), then check
+  // the layer row / inspector / stage pixels, and run the real MP4 transcode with a clip layer and decode
+  // the result: the overlay's pixels must be magenta and the clip's tone must give the file an audio track.
+  const clip = await evaluate(ed.sessionId, `(async()=>{
+    // A solid-colour clip with a tone (canvas + oscillator → MediaRecorder).
+    window.__solidClip=async(color,w,h,name)=>{
+      const mime = MediaRecorder.isTypeSupported('video/mp4') ? 'video/mp4' : 'video/webm';
+      const c=document.createElement('canvas'); c.width=w; c.height=h; const x=c.getContext('2d');
+      const ac=new AudioContext(); const osc=ac.createOscillator(); const dst=ac.createMediaStreamDestination(); osc.connect(dst); osc.start();
+      const stream=new MediaStream([...c.captureStream(30).getVideoTracks(), ...dst.stream.getAudioTracks()]);
+      const rec=new MediaRecorder(stream,{mimeType:mime}); const ch=[]; rec.ondataavailable=e=>e.data.size&&ch.push(e.data); rec.start();
+      const iv=setInterval(()=>{x.fillStyle=color;x.fillRect(0,0,w,h);},33);
+      await new Promise(r=>setTimeout(r,1200)); clearInterval(iv); rec.stop(); await new Promise(r=>rec.onstop=r); osc.stop(); ac.close();
+      return new File(ch,name+'.'+(mime==='video/mp4'?'mp4':'webm'),{type:mime});
+    };
+    window.__clipFile=await window.__solidClip('#ff00ff',320,180,'pip');
+    const orig=HTMLInputElement.prototype.click;
+    HTMLInputElement.prototype.click=function(){ if(this.type!=='file'||!window.__clipFile) return orig.call(this); const dt=new DataTransfer(); dt.items.add(window.__clipFile); this.files=dt.files; this.dispatchEvent(new Event('change')); };
+    document.querySelector('.ss-rail-btn[data-tool=video]').click();
+    await new Promise(r=>setTimeout(r,1500));
+    const row=[...document.querySelectorAll('.ss-tl-trk-layer')].find(r=>r.textContent.includes('pip.'));
+    const cv=document.querySelector('.ss-stage canvas'), cr=cv.getBoundingClientRect(), br=document.querySelector('.ss-sel-box').getBoundingClientRect();
+    const px=cv.getContext('2d').getImageData((br.left+br.width/2-cr.left)*cv.width/cr.width,(br.top+br.height/2-cr.top)*cv.height/cr.height,1,1).data; // centre of the clip's selection box
+    return {row:!!row,insp:/Video clip selected/.test(document.querySelector('.ss-insp-title')?.textContent||''),fit:!!document.querySelector('[data-fit=fill]'),vol:!!document.getElementById('ss-insp-vol'),px:[...px].slice(0,3)};
+  })()`, true);
+  log("  clip layer: " + JSON.stringify(clip));
+  await shot(ed.sessionId, "video-clip-layer");
+  const clipExport = await evaluate(ed.sessionId, `(async()=>{
+    const [{transcode},{toInput},{newVideoLayer},{defaultTransforms},mb]=await Promise.all([import('./pipeline.js'),import('./source.js'),import('./layers-model.js'),import('./transforms.js'),import('../vendor/mediabunny.mjs')]);
+    const main=await window.__solidClip('#00ff00',640,360,'base'); const input=toInput(main); const vt=await input.getPrimaryVideoTrack();
+    const meta={durationSec:await vt.computeDuration(),width:await vt.getDisplayWidth(),height:await vt.getDisplayHeight()};
+    const layer=newVideoLayer({blob:window.__clipFile,name:'pip',durationSec:1.1,hasAudio:true,x:0,y:0,w:meta.width/2,h:meta.height/2,range:{inSec:0,outSec:meta.durationSec}});
+    const tf=defaultTransforms(meta); tf.audio.volume=0; // the recording is silent, so any output audio is the clip's own
+    const out=await transcode({input,transforms:tf,store:{visibleOrdered:()=>[layer]},sourceBytes:0});
+    const oin=new mb.Input({formats:mb.ALL_FORMATS,source:new mb.BlobSource(out)});
+    const hasAudio=!!(await oin.getPrimaryAudioTrack());
+    const s=await new mb.VideoSampleSink(await oin.getPrimaryVideoTrack()).getSample(0.5);
+    const c=new OffscreenCanvas(meta.width,meta.height); const x=c.getContext('2d'); s.draw(x,0,0); s.close();
+    const inPip=[...x.getImageData(meta.width/4,meta.height/4,1,1).data].slice(0,3), outPip=[...x.getImageData(meta.width*0.75,meta.height*0.75,1,1).data].slice(0,3);
+    return {size:out.size,hasAudio,inPip,outPip};
+  })()`, true).catch((e) => ({ error: e.message }));
+  log("  clip export: " + JSON.stringify(clipExport));
+  const magenta = (p) => p && p[0] > 200 && p[1] < 60 && p[2] > 200;
+  failures += (clip.row && clip.insp && clip.fit && clip.vol && magenta(clip.px) ? 0 : 1)
+    + (clipExport.size > 0 && clipExport.hasAudio && magenta(clipExport.inPip) && !magenta(clipExport.outPip) ? 0 : 1);
+
   log("  console errors: " + (ed.errors.length ? "\n   " + ed.errors.join("\n   ") : "none"));
   failures += ed.errors.length + (ui.toolbar && ui.zoomLane ? 0 : 1) + (zoom.focusBox && zoom.block ? 0 : 1)
     + (tl.tc && tl.ticks > 1 && tl.film && tl.nav && tl.badges >= 3 ? 0 : 1)

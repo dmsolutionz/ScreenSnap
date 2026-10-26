@@ -7,6 +7,7 @@ import { composeDims, outDuration, effectiveSrcRect } from "./transforms.js";
 import { drawComposite } from "./compositor.js";
 import { encodeGif } from "./gif-encode.js";
 import { outputFrames } from "./frame-clock.js";
+import { openClipFrames } from "./clip-layers.js";
 
 // Keep the captured-frame count bounded so memory stays sane (each frame is a full RGBA buffer); if
 // fps × duration would exceed this, the effective fps is lowered to fit while preserving duration.
@@ -45,16 +46,22 @@ export async function transcodeGif({ input, transforms, store, fps = 12, maxHeig
   // Same frame clock as the MP4 path (held across static stretches at the GIF's own step), so every
   // capture slot gets a frame and time-ranged overlays / zoom render in them; it owns sample close().
   const t = transforms.trimOut == null ? { ...transforms, trimOut: await vTrack.computeDuration() } : transforms;
-  for await (const f of outputFrames({ vSink, transforms: t, totalOut: total, step: frameStep, signal })) {
-    const outT = f.outTs;
-    if (outT + 1e-6 >= nextCapture) {
-      const srcRect = effectiveSrcRect(t, f.srcSec, srcW, srcH);
-      drawComposite(ctx, f.sample, layers, { outW, outH, srcW, srcH, unit, blurCanvas: null, srcRect, timeSec: f.srcSec, dest, backdrop });
-      const img = ctx.getImageData(0, 0, outW, outH);
-      frames.push({ data: img.data, outT });
-      do { nextCapture += frameStep; } while (nextCapture <= outT);
-      if (onProgress) onProgress(Math.min(0.6, (outT / total) * 0.6));
+  const clipFrames = await openClipFrames(layers);
+  try {
+    for await (const f of outputFrames({ vSink, transforms: t, totalOut: total, step: frameStep, signal })) {
+      const outT = f.outTs;
+      if (outT + 1e-6 >= nextCapture) {
+        const srcRect = effectiveSrcRect(t, f.srcSec, srcW, srcH);
+        const clips = await clipFrames.framesAt(f.srcSec);
+        drawComposite(ctx, f.sample, layers, { outW, outH, srcW, srcH, unit, blurCanvas: null, srcRect, timeSec: f.srcSec, dest, backdrop, clips });
+        const img = ctx.getImageData(0, 0, outW, outH);
+        frames.push({ data: img.data, outT });
+        do { nextCapture += frameStep; } while (nextCapture <= outT);
+        if (onProgress) onProgress(Math.min(0.6, (outT / total) * 0.6));
+      }
     }
+  } finally {
+    await clipFrames.close();
   }
 
   if (!frames.length) throw new Error("Nothing to export — the trim/cut range is empty.");

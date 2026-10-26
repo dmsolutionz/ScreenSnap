@@ -74,7 +74,10 @@ tab — a WebCodecs-based **multi-track timeline** editor (constant-height froze
 big timecode + snap toggle, the video as a filmstrip clip — frames from a second hidden `<video>` seeked across the blob,
 `filmstrip.js` — then a colour-badged track per zoom / overlay layer, audio with mute regions and header mute / volume,
 an optional imported voiceover/music track mixed in via `OfflineAudioContext` at export, and a zoom / pan navigator bar)
-with trim / cuts / crop / zoom blocks / speed / resolution, resizable + time-scoped overlay layers, a left tool rail with
+with trim / cuts / crop / zoom blocks / speed / resolution, resizable + time-scoped overlay layers (shapes, images/GIFs, and
+imported **video clips** — `clip-layers.js`: picture-in-picture / stacked clips placed like FilmCraft's V1/V2 tracks, each
+played by its own hidden `<video>` in the preview and decoded by a Mediabunny frame cursor + mixed into the audio at
+export), a left tool rail with
 draw-once tools, snapping, and MP4 / GIF export (or Download the clip as-is). Crop is a persistent 8-handle box over the
 WHOLE frame (the stage draws the uncropped, unzoomed frame while it is open; pure math in `crop-geometry.js`, options row in
 the inspector slot) that stays re-editable because it is always measured against the full source. All surfaces reflect state live via `STATE_CHANGED` (the editor itself runs standalone off IndexedDB).

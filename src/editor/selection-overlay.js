@@ -59,6 +59,7 @@ export function createSelectionOverlay({ stageEl, canvas, store, getTransforms, 
   function layerBounds(layer) {
     if (!layer) return null;
     if (layer.kind === "image" && layer.image) return { x: layer.image.x, y: layer.image.y, w: layer.image.w, h: layer.image.h };
+    if (layer.kind === "video" && layer.video) return { x: layer.video.x, y: layer.video.y, w: layer.video.w, h: layer.video.h };
     if (layer.kind === "shape" && layer.shape) return bbox(layer.shape, ctx2d);
     return null;
   }
@@ -130,6 +131,7 @@ export function createSelectionOverlay({ stageEl, canvas, store, getTransforms, 
       orig: {
         bounds,
         image: layer.image ? { ...layer.image } : null,
+        video: layer.video ? { ...layer.video } : null,
         shape: layer.shape ? JSON.parse(JSON.stringify(layer.shape)) : null,
       },
     };
@@ -153,8 +155,9 @@ export function createSelectionOverlay({ stageEl, canvas, store, getTransforms, 
     const dxSrc = (e.clientX - drag.startX) / m.dpx;
     const dySrc = (e.clientY - drag.startY) / m.dpy;
     const nb = applyHandle(drag.orig.bounds, drag.role, dxSrc, dySrc);
-    if (drag.kind === "image") {
-      store.update(drag.id, { image: { ...drag.orig.image, x: nb.x, y: nb.y, w: nb.w, h: nb.h } });
+    if (drag.kind === "image" || drag.kind === "video") {
+      const k = drag.kind;
+      store.update(drag.id, { [k]: { ...drag.orig[k], x: nb.x, y: nb.y, w: nb.w, h: nb.h } });
     } else {
       store.update(drag.id, { shape: setBounds(drag.orig.shape, nb, drag.orig.bounds) });
     }
