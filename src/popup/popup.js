@@ -51,6 +51,7 @@ const P = {
   pencil: '<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/>',
   copy: '<rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
   down: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+  film: '<rect x="2" y="3" width="20" height="18" rx="2"/><line x1="7" y1="3" x2="7" y2="21"/><line x1="17" y1="3" x2="17" y2="21"/><line x1="2" y1="9" x2="7" y2="9"/><line x1="2" y1="15" x2="7" y2="15"/><line x1="17" y1="9" x2="22" y2="9"/><line x1="17" y1="15" x2="22" y2="15"/>',
   cloud: '<path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>',
 };
 const ico = (n, { sz = 16, c = "currentColor", sw = 1.75 } = {}) =>
@@ -149,6 +150,7 @@ function recordTab() {
     ${sourceRow(SOURCE.TAB, "tab", "Current Tab", "No picker · tab audio")}
     ${sourceRow(SOURCE.SCREEN, "monitor", "Screen / Window", "Any screen or app")}
     ${sourceRow(SOURCE.VIDEO_CIRCLE, "video", "Screen + Cam", "Picker · webcam corner")}
+    ${navRow(`data-act="open-editor"`, "film", "Video editor", "Edit a video · new project · green screen", false)}
     <div style="padding:13px 16px;border-top:1px solid ${C.line};margin-top:5px">
       ${sectionLabel("Audio")}
       ${audioRow("vol", "System audio", "withSystemAudio")}
@@ -437,6 +439,7 @@ app.addEventListener("click", async (e) => {
   if (act === "copy") return doCopy(node);
   if (act === "shot-discard") { await send({ type: MSG.SHOT_DISCARD }); captured = null; return render(); }
   if (act === "done") { doneInfo = null; localTab = "record"; return render(); }
+  if (act === "open-editor") { send({ type: MSG.EDITOR_OPEN }); window.close(); return; }
   if (act === "edit-video") { if (doneInfo && doneInfo.clipId) send({ type: MSG.EDITOR_OPEN_CLIP, clipId: doneInfo.clipId }); window.close(); return; }
   if (act === "drive-setup") { send({ type: MSG.DRIVE_OPEN_SETUP }); window.close(); return; }
   if (act === "drive-disconnect") { await send({ type: MSG.DRIVE_DISCONNECT }).catch(() => {}); drive = await driveStatus(); return render(); }

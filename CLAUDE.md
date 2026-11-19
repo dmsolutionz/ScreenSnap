@@ -80,7 +80,14 @@ played by its own hidden `<video>` in the preview and decoded by a Mediabunny fr
 export), a left tool rail with
 draw-once tools, snapping, and MP4 / GIF export (or Download the clip as-is). Crop is a persistent 8-handle box over the
 WHOLE frame (the stage draws the uncropped, unzoomed frame while it is open; pure math in `crop-geometry.js`, options row in
-the inspector slot) that stays re-editable because it is always measured against the full source. All surfaces reflect state live via `STATE_CHANGED` (the editor itself runs standalone off IndexedDB).
+the inspector slot) that stays re-editable because it is always measured against the full source. The editor also opens
+standalone (popup **Video editor** row → `EDITOR_OPEN`) on a **home screen** (`home.js`): open any video file / drop
+one, reopen a recent recording from IndexedDB, or start a **new project** — `blank-project.js` encodes a 1 fps
+solid/gradient MP4 of the chosen format and length as the base video (so preview / timeline / export need no special
+case), optionally with picked clips laid end to end as clip layers. **Green screen**: `chroma.js` (pure detection +
+YCbCr key math, unit-tested) and `chroma-keyer.js` (WebGL shader, CPU fallback) key the main video
+(`transforms.chroma`, offered when a screen is detected on open) and clip layers (`video.chroma`, auto-applied on
+add); layers flagged `under` draw *behind* the main video as its replacement background, and clips can `loop`. All surfaces reflect state live via `STATE_CHANGED` (the editor itself runs standalone off IndexedDB).
 The **opt-in Google Drive backup** (`src/lib/drive.js`, plain fetch against the Drive v3 REST API, resumable chunked
 uploads) hangs off this flow: the service worker auto-uploads a finished clip from IndexedDB after `REC_DONE` (when
 the user enabled it), mirroring progress into `state.drive`. Connect/disconnect live in the **Cloud setup window**

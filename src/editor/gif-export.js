@@ -53,7 +53,7 @@ export async function transcodeGif({ input, transforms, store, fps = 12, maxHeig
       if (outT + 1e-6 >= nextCapture) {
         const srcRect = effectiveSrcRect(t, f.srcSec, srcW, srcH);
         const clips = await clipFrames.framesAt(f.srcSec);
-        drawComposite(ctx, f.sample, layers, { outW, outH, srcW, srcH, unit, blurCanvas: null, srcRect, timeSec: f.srcSec, dest, backdrop, clips });
+        drawComposite(ctx, f.sample, layers, { outW, outH, srcW, srcH, unit, blurCanvas: null, srcRect, timeSec: f.srcSec, dest, backdrop, clips, chroma: t.chroma });
         const img = ctx.getImageData(0, 0, outW, outH);
         frames.push({ data: img.data, outT });
         do { nextCapture += frameStep; } while (nextCapture <= outT);

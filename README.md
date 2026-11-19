@@ -47,7 +47,14 @@ Built because being nagged to log in just to save a screenshot is miserable.
 - **Quality** — Small (720p), **Standard** (1080p, the default) or High (full resolution), each with an
   explicit bitrate, so a Standard take is roughly 15 MB a minute (a 7-minute walkthrough ≈ 100 MB)
 
-**Video editor** (opens after a recording; WebCodecs, no ffmpeg/WASM)
+**Video editor** (opens after a recording, or any time from the popup's **Video editor** row; WebCodecs, no ffmpeg/WASM)
+- **Open any video** (MP4 / WebM / MOV — pick or drag in), reopen a **recent recording**, or start a **new
+  project**: a blank 16:9 / 9:16 / 1:1 / 4:5 canvas of any length and background, optionally pre-filled with
+  clips laid end to end
+- **Green screen removal** — a green or blue screen is detected automatically (offered for the main video,
+  applied to imported clips); tune strength, edge softness and spill, pick the key colour with an eyedropper,
+  and put a colour, an image or a **looping video behind** the subject. GPU-keyed (WebGL), identical in the
+  preview and the export
 - A **multi-track timeline** — a big timecode readout over a real ruler, the video as a **filmstrip clip**
   (frames across it, out-of-trim parts dimmed), then a colour-badged track per zoom / overlay / audio —
   with drag-to-move / drag-edge-to-resize clips, a draggable flag **playhead**, **snapping** (a magnet

@@ -34,6 +34,56 @@ body {
 .ss-dot { color: var(--green); }
 .ss-empty-sub { font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--chrome-muted); margin-top: 8px; }
 .ss-empty-text { color: var(--chrome-muted); font-size: 14px; line-height: 1.5; margin: 22px 0 26px; }
+.ss-empty { overflow-y: auto; align-items: safe center; justify-content: safe center; }
+.ss-empty-card { max-width: 520px; width: 100%; }
+
+/* home: open / new project / recent recordings */
+.ss-home-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; width: 100%; }
+.ss-home-card { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; text-align: left; padding: 18px; border: 1px solid var(--chrome-line); border-radius: 12px; background: var(--chrome); cursor: pointer; font-family: var(--sans); color: var(--chrome-fg); transition: border-color .15s, background .15s; }
+.ss-home-card:hover { border-color: var(--green-line); background: var(--green-tint); }
+.ss-home-card:first-child { border-color: var(--green-line); }
+.ss-home-t { font-size: 15px; font-weight: 600; }
+.ss-home-d { font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--chrome-muted); line-height: 1.5; }
+.ss-new { width: 100%; text-align: left; border: 1px solid var(--chrome-line); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 10px; background: var(--chrome-2); }
+.ss-new[hidden] { display: none; }
+.ss-new-row { display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--chrome-muted); }
+.ss-new-row > span:first-child { flex: 1; }
+.ss-new-row .ss-select { min-width: 190px; }
+.ss-new-row.disabled { opacity: 0.45; }
+.ss-new-list { list-style: decimal inside; font-size: 12px; color: var(--chrome-fg); display: flex; flex-direction: column; gap: 4px; }
+.ss-new-list:empty { display: none; }
+.ss-new-list li { display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: var(--chrome); border: 1px solid var(--chrome-line); border-radius: 7px; }
+.ss-new-list li .n { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ss-new-list li .d { font-family: var(--mono); font-size: 11px; color: var(--chrome-muted); }
+.ss-new-list li button { border: none; background: none; color: var(--chrome-muted); cursor: pointer; font-size: 14px; padding: 0 4px; }
+.ss-new-hint { font-size: 12px; color: var(--chrome-muted); line-height: 1.5; }
+.ss-new-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.ss-recent { width: 100%; margin-top: 26px; text-align: left; }
+.ss-recent[hidden] { display: none; }
+.ss-recent-h { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--chrome-muted); margin-bottom: 8px; }
+.ss-recent-list { display: flex; flex-direction: column; gap: 6px; }
+.ss-recent-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; border: 1px solid var(--chrome-line); border-radius: 9px; background: var(--chrome); cursor: pointer; font-family: var(--sans); font-size: 13px; color: var(--chrome-fg); text-align: left; }
+.ss-recent-item:hover { border-color: var(--green-line); background: var(--green-tint); }
+.ss-recent-item .n { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ss-recent-item .m { font-family: var(--mono); font-size: 11px; color: var(--chrome-muted); white-space: nowrap; }
+.ss-drop { position: fixed; inset: 12px; border: 2px dashed var(--green); border-radius: 16px; background: rgba(34,197,94,0.08); display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 600; color: var(--green); pointer-events: none; z-index: 100; }
+.ss-drop[hidden] { display: none; }
+.ss-busy { font-family: var(--mono); font-size: 12px; color: var(--chrome-muted); margin-top: 14px; }
+
+/* transient notice over the stage (green-screen detected, …) */
+.ss-toast { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); z-index: 80; display: flex; align-items: center; gap: 10px; padding: 9px 10px 9px 14px; background: #18181b; color: #fff; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.25); font-size: 13px; max-width: min(640px, calc(100vw - 32px)); }
+.ss-toast .ss-dotg { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; flex: 0 0 auto; }
+.ss-toast button { border: 1px solid rgba(255,255,255,0.22); background: transparent; color: #fff; border-radius: 7px; padding: 5px 10px; font-size: 12px; cursor: pointer; font-family: var(--sans); white-space: nowrap; }
+.ss-toast button.primary { background: #22c55e; border-color: #22c55e; color: #052e16; font-weight: 600; }
+
+/* green-screen popover extras */
+.ss-pop-chroma { min-width: 270px; }
+.ss-pop-row input[type="color"] { width: 30px; height: 22px; border: 1px solid var(--chrome-line); border-radius: 5px; padding: 0; background: none; cursor: pointer; }
+.ss-pop-note { font-size: 11.5px; line-height: 1.45; color: var(--chrome-muted); }
+.ss-pop-note:empty { display: none; }
+.ss-mini { border: 1px solid var(--chrome-line); border-radius: 5px; background: var(--chrome); padding: 3px 7px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--chrome-muted); cursor: pointer; font-family: var(--mono); }
+.ss-mini:hover { color: var(--chrome-fg); }
+.ss-insp-btn.on { color: var(--green); border-color: var(--green-line); background: var(--green-tint); }
 
 /* ── shell ── */
 .ss-root { height: 100vh; }
@@ -65,7 +115,7 @@ body {
 .ss-pop-menu button:hover { background: #eef0f3; }
 
 /* contextual inspector row (shown while a layer is selected) */
-.ss-insp { display: flex; align-items: center; gap: 14px; padding: 7px 16px; }
+.ss-insp { display: flex; align-items: center; gap: 10px 14px; padding: 7px 16px; flex-wrap: wrap; }
 .ss-insp-title { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--green); font-weight: 600; }
 .ss-insp-colors { display: flex; gap: 5px; }
 .ss-insp-sep { width: 1px; height: 18px; background: var(--chrome-line); }

@@ -30,6 +30,10 @@ export function defaultTransforms(meta) {
     // used (in the file's own seconds); durationSec is the file's native length. The file's Mediabunny
     // Input isn't plain data, so it lives on the editor `session` (session.extraAudioInput), not here.
     extraAudio: null, // { name, durationSec, trimIn, trimOut, offsetSec, volume, muted }
+    // Green / blue screen key on the main video (see chroma.js). null until the user turns it on (or accepts
+    // the auto-detect prompt); { on, key:[r,g,b], similarity, smoothness, spill, bg } — bg is the fill
+    // (a compositor preset) behind the keyed video; layers marked `under` draw over that fill.
+    chroma: null,
   };
 }
 

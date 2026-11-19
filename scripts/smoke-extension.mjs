@@ -110,6 +110,10 @@ try {
   for (let i = 0; i < 40 && !edTid; i++) { const p = (await cmd("Target.getTargets")).targetInfos.find((t) => t.type === "page" && t.url.includes("/src/editor/editor.html")); if (p) edTid = p.targetId; else await sleep(200); }
   const ed = await attach(edTid);
   await sleep(800);
+  // Opened with no clip (the popup's "Video editor" row): the home screen with Open / New project.
+  const home = await evaluate(ed.sessionId, `({visible:getComputedStyle(document.getElementById('empty')).display!=='none',open:!!document.getElementById('open-btn'),newp:!!document.getElementById('new-btn'),formats:document.querySelectorAll('#np-format option').length})`);
+  log("  home: " + JSON.stringify(home));
+  failures += home.visible && home.open && home.newp && home.formats >= 5 ? 0 : 1;
   const gen = await evaluate(ed.sessionId, `(async()=>{
     const mime = MediaRecorder.isTypeSupported('video/mp4') ? 'video/mp4' : 'video/webm';
     const c=document.createElement('canvas'); c.width=960; c.height=540; const x=c.getContext('2d');
@@ -201,6 +205,60 @@ try {
   const magenta = (p) => p && p[0] > 200 && p[1] < 60 && p[2] > 200;
   failures += (clip.row && clip.insp && clip.fit && clip.vol && magenta(clip.px) ? 0 : 1)
     + (clipExport.size > 0 && clipExport.hasAudio && magenta(clipExport.inPip) && !magenta(clipExport.outPip) ? 0 : 1);
+
+  // Green screen: a green clip with a white box in the middle is detected; exporting it keyed over a blue
+  // "behind the video" image must give blue where the screen was and white where the subject is, and a keyed
+  // clip layer (green with a magenta centre) on top shows its centre while its own screen shows what's below.
+  const chroma = await evaluate(ed.sessionId, `(async()=>{
+    const [{transcode},{toInput},{newVideoLayer,newImageLayer},{defaultTransforms},{chromaConfig},{detectScreenInBlob},mb]=await Promise.all([import('./pipeline.js'),import('./source.js'),import('./layers-model.js'),import('./transforms.js'),import('./chroma.js'),import('./chroma-keyer.js'),import('../vendor/mediabunny.mjs')]);
+    const boxClip=async(bg,fg,w,h,name)=>{
+      const mime = MediaRecorder.isTypeSupported('video/mp4') ? 'video/mp4' : 'video/webm';
+      const c=document.createElement('canvas'); c.width=w; c.height=h; const x=c.getContext('2d');
+      const rec=new MediaRecorder(c.captureStream(30),{mimeType:mime}); const ch=[]; rec.ondataavailable=e=>e.data.size&&ch.push(e.data); rec.start();
+      const iv=setInterval(()=>{x.fillStyle=bg;x.fillRect(0,0,w,h);x.fillStyle=fg;x.fillRect(w*0.35,h*0.3,w*0.3,h*0.4);},33);
+      await new Promise(r=>setTimeout(r,1200)); clearInterval(iv); rec.stop(); await new Promise(r=>rec.onstop=r);
+      return new File(ch,name+'.'+(mime==='video/mp4'?'mp4':'webm'),{type:mime});
+    };
+    const base=await boxClip('#1fb84a','#ffffff',640,360,'gs'); const pip=await boxClip('#1fb84a','#ff00ff',320,180,'gspip');
+    const det=await detectScreenInBlob(base,0.5);
+    const input=toInput(base); const vt=await input.getPrimaryVideoTrack();
+    const meta={durationSec:await vt.computeDuration(),width:await vt.getDisplayWidth(),height:await vt.getDisplayHeight()};
+    const bc=new OffscreenCanvas(64,36); const bx=bc.getContext('2d'); bx.fillStyle='#2050ff'; bx.fillRect(0,0,64,36);
+    const bgLayer=newImageLayer({bitmap:await createImageBitmap(bc),x:0,y:0,w:meta.width,h:meta.height,under:true});
+    const clipLayer=newVideoLayer({blob:pip,name:'gspip',durationSec:1.1,hasAudio:false,x:0,y:0,w:meta.width/2,h:meta.height/2,range:{inSec:0,outSec:meta.durationSec},chroma:chromaConfig(det?det.key:[31,184,74])});
+    const tf=defaultTransforms(meta); tf.chroma={...chromaConfig(det?det.key:[31,184,74]),bg:'black'};
+    const out=await transcode({input,transforms:tf,store:{visibleOrdered:()=>[bgLayer,clipLayer]},sourceBytes:0});
+    const oin=new mb.Input({formats:mb.ALL_FORMATS,source:new mb.BlobSource(out)});
+    const s=await new mb.VideoSampleSink(await oin.getPrimaryVideoTrack()).getSample(0.5);
+    const c=new OffscreenCanvas(meta.width,meta.height); const x=c.getContext('2d'); s.draw(x,0,0); s.close();
+    const at=(fx,fy)=>[...x.getImageData(meta.width*fx,meta.height*fy,1,1).data].slice(0,3);
+    return {det:det&&det.kind, corner:at(0.95,0.95), subject:at(0.55,0.5), clipCentre:at(0.25,0.25), clipScreen:at(0.05,0.05)};
+  })()`, true).catch((e) => ({ error: e.message }));
+  log("  green screen export: " + JSON.stringify(chroma));
+  const blue = (p) => p && p[2] > 180 && p[1] < 130 && p[0] < 90, white = (p) => p && p.every((v) => v > 200);
+  failures += chroma.det === "green" && blue(chroma.corner) && white(chroma.subject) && magenta(chroma.clipCentre) && blue(chroma.clipScreen) ? 0 : 1;
+  // The main video's key from the toolbar popover: on → the status line says so.
+  await evaluate(ed.sessionId, `document.getElementById('ss-chroma-pop').click()`); await sleep(150);
+  await evaluate(ed.sessionId, `(()=>{const c=document.getElementById('ss-ck-on');c.checked=true;c.dispatchEvent(new Event('change',{bubbles:true}));})()`); await sleep(400);
+  const ckUi = await evaluate(ed.sessionId, `({status:document.getElementById('ss-status')?.textContent,has:document.getElementById('ss-chroma-pop')?.classList.contains('has'),toast:document.querySelector('.ss-toast')?.textContent||null})`);
+  log("  green screen ui: " + JSON.stringify(ckUi));
+  failures += /green screen removed/.test(ckUi.status || "") && ckUi.has ? 0 : 1;
+  await shot(ed.sessionId, "video-green-screen");
+
+  // New project from the home screen: a 9:16 15 s blank, built with WebCodecs, opens in the editor.
+  const npTab = await swEval(`(async()=>{const t=await chrome.tabs.create({url:chrome.runtime.getURL('src/editor/editor.html?np=1'),active:true});return {id:t.id};})()`);
+  let npTid = null;
+  for (let i = 0; i < 40 && !npTid; i++) { const p = (await cmd("Target.getTargets")).targetInfos.find((t) => t.type === "page" && t.url.includes("editor.html?np=1")); if (p) npTid = p.targetId; else await sleep(150); }
+  const np = await attach(npTid);
+  await sleep(900);
+  await evaluate(np.sessionId, `(()=>{document.getElementById('new-btn').click();document.getElementById('np-format').value='portrait';document.getElementById('np-length').value='15';document.getElementById('np-create').click();})()`);
+  let npRes = null;
+  for (let i = 0; i < 40; i++) { npRes = await evaluate(np.sessionId, `({status:document.getElementById('ss-status')?.textContent||'',orig:!!document.querySelector('[data-exp=orig]:not([hidden])')})`); if (/1080×1920/.test(npRes.status)) break; await sleep(250); }
+  log("  new project: " + JSON.stringify(npRes));
+  await shot(np.sessionId, "video-new-project");
+  log("  new-project console errors: " + (np.errors.length ? "\n   " + np.errors.join("\n   ") : "none"));
+  failures += np.errors.length + (/1080×1920/.test(npRes.status) && /15\.0s out/.test(npRes.status) && !npRes.orig ? 0 : 1);
+  await swEval(`chrome.tabs.remove(${npTab.id})`).catch(() => {});
 
   log("  console errors: " + (ed.errors.length ? "\n   " + ed.errors.join("\n   ") : "none"));
   failures += ed.errors.length + (ui.toolbar && ui.zoomLane ? 0 : 1) + (zoom.focusBox && zoom.block ? 0 : 1)

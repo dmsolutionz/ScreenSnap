@@ -158,6 +158,7 @@ export function createPreview({ canvas, blob, getTransforms, store, onTime, onSt
       const vol = l.video.muted || masterMuted ? 0 : clamp01(l.video.volume);
       if (c.el.volume !== vol) c.el.volume = vol;
       if (c.el.playbackRate !== speed) c.el.playbackRate = speed;
+      if (c.el.loop !== !!l.video.loop) c.el.loop = !!l.video.loop; // a looping background wraps seamlessly
       const drift = Math.abs(c.el.currentTime - ct);
       if (playing) {
         if (c.el.paused) { try { c.el.currentTime = ct; } catch {} c.el.play().catch(() => {}); }
@@ -211,7 +212,7 @@ export function createPreview({ canvas, blob, getTransforms, store, onTime, onSt
     const srcSec = video.currentTime || 0;
     const srcRect = t ? effectiveSrcRect(t, srcSec, srcW || 2, srcH || 2) : null;
     const clips = syncClips(srcSec, t);
-    drawComposite(ctx, ready ? baseFrame : null, layers, { outW: cd.outW, outH: cd.outH, srcW, srcH, unit, blurCanvas: null, srcRect, timeSec: srcSec, dest: cd.dest, backdrop: cd.backdrop, clips });
+    drawComposite(ctx, ready ? baseFrame : null, layers, { outW: cd.outW, outH: cd.outH, srcW, srcH, unit, blurCanvas: null, srcRect, timeSec: srcSec, dest: cd.dest, backdrop: cd.backdrop, clips, chroma: t && t.chroma });
   }
 
   function loop() {

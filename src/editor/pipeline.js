@@ -148,21 +148,30 @@ async function mixAudio({ transforms, aTrack, wantMainAudio, extraTrack, extraAu
   // buffer maps onto the main timeline, is clipped to the clip's range and the kept (uncut) segments, and
   // lands at that point's output time — a ripple cut removes the clip's audio along with its picture.
   const segs = segmentsOf(transforms);
+  // A looping clip repeats that mapping once per pass over its file (pass k starts where pass k-1 ran out).
   for (const { track, layer } of clipAudio) {
     const v = layer.video, r = layer.range;
     const srcIn = v.srcIn || 0;
     const chunks = makeChunker(ctx, totalOut);
     const sink = new AudioBufferSink(track);
-    for await (const { buffer, timestamp } of sink.buffers(srcIn, srcIn + (r.outSec - r.inSec))) {
-      if (signal && signal.aborted) throw new DOMException("Export cancelled", "AbortError");
-      const m = r.inSec + (timestamp - srcIn);
-      const mEnd = m + buffer.duration;
-      for (const s of segs) {
-        const from = Math.max(m, s.in, r.inSec);
-        const to = Math.min(mEnd, s.out, r.outSec);
-        if (to - from <= 1e-6) continue;
-        chunks.add(buffer, from - m, to - from, outTimestamp(from, transforms), v.volume);
+    const loop = !!v.loop && v.durationSec > 0;
+    for (let passStart = r.inSec, fileFrom = srcIn; passStart < r.outSec - 1e-6;) {
+      const fileTo = loop ? v.durationSec : srcIn + (r.outSec - r.inSec);
+      for await (const { buffer, timestamp } of sink.buffers(fileFrom, fileTo)) {
+        if (signal && signal.aborted) throw new DOMException("Export cancelled", "AbortError");
+        const m = passStart + (timestamp - fileFrom);
+        const mEnd = m + buffer.duration;
+        for (const s of segs) {
+          const from = Math.max(m, s.in, r.inSec, passStart);
+          const to = Math.min(mEnd, s.out, r.outSec);
+          if (to - from <= 1e-6) continue;
+          chunks.add(buffer, from - m, to - from, outTimestamp(from, transforms), v.volume);
+        }
       }
+      if (!loop) break;
+      passStart += fileTo - fileFrom;
+      fileFrom = 0;
+      if (fileTo - 0 <= 1e-3) break; // degenerate file length: never spin
     }
     chunks.flush();
   }
@@ -264,7 +273,7 @@ export async function transcode({ input, transforms, store, onProgress, signal, 
     for await (const f of outputFrames({ vSink, transforms, totalOut, signal })) {
       const srcRect = effectiveSrcRect(transforms, f.srcSec, srcW, srcH);
       const clips = await clipFrames.framesAt(f.srcSec);
-      drawComposite(ctx, f.sample, layers, { outW, outH, srcW, srcH, unit, blurCanvas: null, srcRect, timeSec: f.srcSec, dest, backdrop, clips });
+      drawComposite(ctx, f.sample, layers, { outW, outH, srcW, srcH, unit, blurCanvas: null, srcRect, timeSec: f.srcSec, dest, backdrop, clips, chroma: transforms.chroma });
       await vSrc.add(Math.max(0, f.outTs), Math.max(1 / 1000, f.dur));
       report(f.outTs / totalOut);
     }

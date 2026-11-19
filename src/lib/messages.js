@@ -62,6 +62,8 @@ export const MSG = Object.freeze({
 
   // popup -> service worker: open the just-recorded clip in the video editor
   EDITOR_OPEN_CLIP: "editor-open-clip",
+  // popup -> service worker: open the video editor on its home screen (open a video / new project)
+  EDITOR_OPEN: "editor-open",
 
   // popup -> service worker: opt-in Google Drive backup (src/lib/drive.js). Connect runs the OAuth
   // consent flow in the service worker (the popup closes when the consent window takes focus);

@@ -58,6 +58,11 @@ function rulerStep(pps) { return STEPS.find(([s]) => s * pps >= 64) || STEPS[STE
 const LAYER_GLYPH = { rect: "▭", arrow: "↗", text: "T", blur: "◍", spot: "◉" };
 function laneLabel(l) {
   if (!l) return "Layer";
+  // Behind-the-video layers (a replacement background for a keyed green screen) and keyed clips say so.
+  const tags = (l.under ? " · behind" : "") + (l.video && l.video.chroma && l.video.chroma.on ? " · keyed" : "") + (l.video && l.video.loop ? " · loop" : "");
+  return laneName(l) + tags;
+}
+function laneName(l) {
   if (l.kind === "image") return (l.image && l.image.frames) ? "GIF" : "Image";
   if (l.kind === "video") return escapeHtml((l.video && l.video.name) || "Video"); // a file name, into innerHTML
   const t = (l.shape && l.shape.type) || "shape";

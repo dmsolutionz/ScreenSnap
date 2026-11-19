@@ -156,8 +156,9 @@ export function createLayerHistory(store, { limit = 50, extra = null } = {}) {
 // A static image layer; or, when `frames`/`totalMs` are supplied, an animated GIF layer. For GIFs,
 // `bitmap` is the poster (first frame) used when no time is available, and `frames`
 // (= [{ bitmap, delayMs }]) + `totalMs` (loop period) drive the compositor's per-frame selection.
-export function newImageLayer({ bitmap, x, y, w, h, frames = null, totalMs = 0 }) {
-  return { id: uid(), kind: "image", visible: true, opacity: 1, range: null, image: { bitmap, x, y, w, h, frames, totalMs } };
+// `under: true` draws it BEHIND the main video (a replacement background for a keyed green screen).
+export function newImageLayer({ bitmap, x, y, w, h, frames = null, totalMs = 0, under = false }) {
+  return { id: uid(), kind: "image", visible: true, opacity: 1, range: null, under, image: { bitmap, x, y, w, h, frames, totalMs } };
 }
 
 export function newShapeLayer(shape) {
@@ -167,9 +168,11 @@ export function newShapeLayer(shape) {
 // An imported video clip (see clip-layers.js). `blob` is the clip file (shared by reference across undo
 // snapshots, like bitmaps); {x,y,w,h} is where it draws in source px; it plays its file from `srcIn` for
 // the length of `range`, which is always set (a clip has its own duration, so it's never "whole clip").
-export function newVideoLayer({ blob, name, durationSec, hasAudio, x, y, w, h, range }) {
+// `loop` repeats the file across a longer range; `chroma` keys out its green / blue screen (chroma.js) —
+// both replaced, never mutated, so undo snapshots that share the video object stay correct.
+export function newVideoLayer({ blob, name, durationSec, hasAudio, x, y, w, h, range, loop = false, muted = false, under = false, chroma = null }) {
   return {
-    id: uid(), kind: "video", visible: true, opacity: 1, range,
-    video: { blob, name, durationSec, hasAudio, srcIn: 0, volume: 1, muted: false, x, y, w, h },
+    id: uid(), kind: "video", visible: true, opacity: 1, range, under,
+    video: { blob, name, durationSec, hasAudio, srcIn: 0, volume: 1, muted, loop, chroma, x, y, w, h },
   };
 }

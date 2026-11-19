@@ -94,7 +94,12 @@ export function createAnnotator({ canvas, store, getTool, getColor, getTransform
   function pointInRect(p, r) { return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h; }
   function topLayerAt(p) {
     const tol = 9 * unit();
-    const ordered = store.visibleOrdered ? store.visibleOrdered() : store.layers;
+    const all = store.visibleOrdered ? store.visibleOrdered() : store.layers;
+    // Front-most first: layers over the video top-down, then the ones behind it — and those only while the
+    // video is green-screen keyed (otherwise the opaque video hides them, and a click there is the video).
+    const t = typeof getTransforms === "function" ? getTransforms() : null;
+    const keyed = !!(t && t.chroma && t.chroma.on);
+    const ordered = [...all.filter((l) => l && l.under && keyed), ...all.filter((l) => l && !l.under)];
     for (let i = ordered.length - 1; i >= 0; i--) {
       const l = ordered[i];
       if (!l) continue;

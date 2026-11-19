@@ -5,12 +5,16 @@
 // Shared by the preview (time mapping only) and both exports (decoded frames via Mediabunny).
 import { Input, ALL_FORMATS, BlobSource, VideoSampleSink } from "../vendor/mediabunny.mjs";
 
-// The clip's own time at main source time srcSec, or null when the clip isn't on screen then.
+// The clip's own time at main source time srcSec, or null when the clip isn't on screen then. A looping
+// clip (video.loop — e.g. a background behind a keyed green screen) restarts from the file's start each
+// time it runs out, so its range may be longer than the file.
 export function clipTimeAt(layer, srcSec) {
   const r = layer && layer.range;
   const v = layer && layer.video;
   if (!r || !v || srcSec < r.inSec || srcSec >= r.outSec) return null;
-  return Math.min(v.durationSec, (v.srcIn || 0) + (srcSec - r.inSec));
+  const t = (v.srcIn || 0) + (srcSec - r.inSec);
+  if (v.loop && v.durationSec > 0) return t % v.durationSec;
+  return Math.min(v.durationSec, t);
 }
 
 // Apply a timeline drag ({tIn,tOut} in main source seconds) to a clip layer. Moving keeps the clip's
@@ -22,6 +26,12 @@ export function clipRangePatch(layer, r, mode) {
   const cur = layer.range;
   let srcIn = v.srcIn || 0;
   let inSec = r.tIn, outSec = r.tOut;
+  if (v.loop && v.durationSec > 0) {
+    // A looping clip has no ends to run past: edges trim freely, the in-point wraps around the file.
+    if (mode === "in") srcIn = (((srcIn + (inSec - cur.inSec)) % v.durationSec) + v.durationSec) % v.durationSec;
+    else if (mode === "move") outSec = inSec + (cur.outSec - cur.inSec);
+    return { range: { inSec, outSec }, video: { ...v, srcIn } };
+  }
   if (mode === "in") {
     let delta = inSec - cur.inSec;
     if (srcIn + delta < 0) delta = -srcIn; // no frames before the file's start

@@ -4,6 +4,7 @@
 // source coordinates. Everything maps through the same source-rect transform so crop, zoom, and
 // overlay positions all stay consistent between the live preview and the export.
 import { drawShape } from "./shapes.js";
+import { sharedKeyer } from "./chroma-keyer.js";
 
 // Reusable scratch canvases for the cheap blur fallback (downscale → upscale gives a soft blur
 // without WASM or canvas filters that some offscreen contexts disallow). The blur canvas is sized in
@@ -66,8 +67,9 @@ function lin(ctx, w, h, stops) {
   stops.forEach((c, i) => g.addColorStop(stops.length > 1 ? i / (stops.length - 1) : 0, c));
   return g;
 }
-function resolveBg(ctx, key, w, h) {
+export function resolveBg(ctx, key, w, h) {
   switch (key) {
+    case "black": return "#000000";
     case "dark": return "#18181b";
     case "light": return "#f3f4f6";
     case "white": return "#ffffff";
@@ -91,7 +93,7 @@ function roundRectPath(ctx, d, r) {
   ctx.closePath();
 }
 
-// opts: { outW, outH, srcW, srcH, unit, blurCanvas|null, srcRect|null, timeSec, dest|null, backdrop|null, clips|null }
+// opts: { outW, outH, srcW, srcH, unit, blurCanvas|null, srcRect|null, timeSec, dest|null, backdrop|null, clips|null, chroma|null }
 //   srcRect {x,y,w,h} in source px = the region of the base frame to draw (crop + zoom). Defaults to
 //     the full frame. Overlay layers (stored in source coords) map through srcRect → dest.
 //   dest {x,y,w,h} in output px = where the content is drawn within the output canvas. Defaults to the
@@ -101,10 +103,15 @@ function roundRectPath(ctx, d, r) {
 //   timeSec = current SOURCE time, used for per-layer time ranges and animated GIF frames.
 //   clips = Map(layerId -> frame with .draw(ctx, dx,dy,dw,dh)) for the video clip layers on screen now
 //     (the preview passes its hidden <video> elements, the exports decoded samples; see clip-layers.js).
+//   chroma = transforms.chroma: when .on, the base frame is green/blue-screen keyed (chroma-keyer.js) and
+//     what shows through is chroma.bg (a resolveBg preset) plus any layer marked `under` (drawn BEHIND the
+//     base video — a replacement background image / video). Video clip layers key themselves via
+//     layer.video.chroma. Under-layers draw in store order, before the base; the rest after it, as before.
 // baseSample is a Mediabunny VideoSample / preview adapter (has .draw(ctx, sx,sy,sw,sh, dx,dy,dw,dh))
 // OR null. layers are in draw order.
 export function drawComposite(ctx, baseSample, layers, opts) {
-  const { outW, outH, srcW, srcH, unit, blurCanvas, srcRect, timeSec, dest, backdrop, clips } = opts || {};
+  const { outW, outH, srcW, srcH, unit, blurCanvas, srcRect, timeSec, dest, backdrop, clips, chroma } = opts || {};
+  const keyed = !!(chroma && chroma.on);
   const sr = srcRect && srcRect.w > 0 && srcRect.h > 0 ? srcRect : { x: 0, y: 0, w: srcW || outW, h: srcH || outH };
   const dst = dest && dest.w > 0 && dest.h > 0 ? dest : { x: 0, y: 0, w: outW, h: outH };
   ctx.clearRect(0, 0, outW, outH);
@@ -137,48 +144,93 @@ export function drawComposite(ctx, baseSample, layers, opts) {
     clipped = true;
   }
 
+  const scaleX = sr.w ? dst.w / sr.w : 1;
+  const scaleY = sr.h ? dst.h / sr.h : 1;
+  const offX = dst.x - sr.x * scaleX;
+  const offY = dst.y - sr.y * scaleY;
+  const ts = timeSec || 0;
+  const all = layers || [];
+  const under = all.filter((l) => l && l.under);
+  const over = under.length ? all.filter((l) => l && !l.under) : all;
+
+  // Keyed base: lay the replacement background first (a preset fill, then any behind-the-video layers),
+  // so the keyed-out screen shows it. Without a key the opaque base frame covers all of this anyway.
+  if (keyed) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(dst.x, dst.y, dst.w, dst.h);
+    ctx.clip();
+    ctx.fillStyle = resolveBg(ctx, chroma.bg || "grad-slate", outW, outH);
+    ctx.fillRect(dst.x, dst.y, dst.w, dst.h);
+    ctx.restore();
+  }
+  if (under.length) drawLayers(ctx, under, { scaleX, scaleY, offX, offY, ts, unit, blurCanvas, baseSample, srcW, srcH, outW, outH, clips });
+
   // Draw the source sub-rect into the dest rect. With the default full-frame srcRect + full-output
   // dest and no backdrop, this is identical to the previous straight scale-to-output behavior.
-  if (baseSample) baseSample.draw(ctx, sr.x, sr.y, sr.w, sr.h, dst.x, dst.y, dst.w, dst.h);
-
-  if (layers && layers.length) {
-    const scaleX = sr.w ? dst.w / sr.w : 1;
-    const scaleY = sr.h ? dst.h / sr.h : 1;
-    const offX = dst.x - sr.x * scaleX;
-    const offY = dst.y - sr.y * scaleY;
-    const ts = timeSec || 0;
-
-    // The blur shape draws from a pre-blurred copy of the base frame (in source coords). If the caller
-    // did not supply one and a visible blur shape exists, build a cheap per-frame fallback.
-    let blur = blurCanvas || null;
-    if (!blur) {
-      const needsBlur = layers.some(
-        (l) => l && l.visible !== false && l.kind === "shape" && l.shape && l.shape.type === "blur" && inRange(l, ts)
-      );
-      if (needsBlur) blur = buildBlurCanvas(baseSample, srcW || outW, srcH || outH);
-    }
-
-    for (const layer of layers) {
-      if (!layer || layer.visible === false) continue;
-      if (!inRange(layer, ts)) continue;
-      ctx.save();
-      ctx.globalAlpha = layer.opacity == null ? 1 : layer.opacity;
-      if (layer.kind === "image" && layer.image) {
-        const im = layer.image;
-        const bmp = layerBitmap(im, ts);
-        if (bmp) ctx.drawImage(bmp, im.x * scaleX + offX, im.y * scaleY + offY, im.w * scaleX, im.h * scaleY);
-      } else if (layer.kind === "video" && layer.video) {
-        const v = layer.video;
-        const frame = clips && clips.get(layer.id);
-        if (frame) frame.draw(ctx, v.x * scaleX + offX, v.y * scaleY + offY, v.w * scaleX, v.h * scaleY);
-      } else if (layer.kind === "shape" && layer.shape) {
-        ctx.translate(offX, offY);
-        ctx.scale(scaleX, scaleY);
-        drawShape(ctx, layer.shape, unit || 1, blur);
-      }
-      ctx.restore();
+  if (baseSample) {
+    if (keyed) {
+      const k = sharedKeyer().key((c, w, h) => baseSample.draw(c, sr.x, sr.y, sr.w, sr.h, 0, 0, w, h), dst.w, dst.h, chroma);
+      ctx.drawImage(k.canvas, k.sx, k.sy, k.sw, k.sh, dst.x, dst.y, dst.w, dst.h);
+    } else {
+      baseSample.draw(ctx, sr.x, sr.y, sr.w, sr.h, dst.x, dst.y, dst.w, dst.h);
     }
   }
 
+  if (over.length) drawLayers(ctx, over, { scaleX, scaleY, offX, offY, ts, unit, blurCanvas, baseSample, srcW, srcH, outW, outH, clips });
+
   if (clipped) ctx.restore();
+}
+
+// Draw overlay layers mapped through the source-rect → dest transform (m: scale/offset + frame context).
+function drawLayers(ctx, layers, m) {
+  const { scaleX, scaleY, offX, offY, ts, unit, blurCanvas, baseSample, srcW, srcH, outW, outH, clips } = m;
+  // The blur shape draws from a pre-blurred copy of the base frame (in source coords). If the caller
+  // did not supply one and a visible blur shape exists, build a cheap per-frame fallback.
+  let blur = blurCanvas || null;
+  if (!blur) {
+    const needsBlur = layers.some(
+      (l) => l && l.visible !== false && l.kind === "shape" && l.shape && l.shape.type === "blur" && inRange(l, ts)
+    );
+    if (needsBlur) blur = buildBlurCanvas(baseSample, srcW || outW, srcH || outH);
+  }
+
+  for (const layer of layers) {
+    if (!layer || layer.visible === false) continue;
+    if (!inRange(layer, ts)) continue;
+    ctx.save();
+    ctx.globalAlpha = layer.opacity == null ? 1 : layer.opacity;
+    if (layer.kind === "image" && layer.image) {
+      const im = layer.image;
+      const bmp = layerBitmap(im, ts);
+      if (bmp) ctx.drawImage(bmp, im.x * scaleX + offX, im.y * scaleY + offY, im.w * scaleX, im.h * scaleY);
+    } else if (layer.kind === "video" && layer.video) {
+      const v = layer.video;
+      const frame = clips && clips.get(layer.id);
+      const dx = v.x * scaleX + offX, dy = v.y * scaleY + offY, dw = v.w * scaleX, dh = v.h * scaleY;
+      if (frame && v.chroma && v.chroma.on) {
+        // Key at the size it lands on screen, clipped to the output so a "fill" clip doesn't key pixels
+        // nobody sees (and stays under the keyer's max surface).
+        const vis = intersect({ x: dx, y: dy, w: dw, h: dh }, { x: 0, y: 0, w: outW, h: outH });
+        if (vis) {
+          const k = sharedKeyer().key((c, w, h) => {
+            c.scale(w / vis.w, h / vis.h);
+            frame.draw(c, dx - vis.x, dy - vis.y, dw, dh);
+          }, vis.w, vis.h, v.chroma);
+          ctx.drawImage(k.canvas, k.sx, k.sy, k.sw, k.sh, vis.x, vis.y, vis.w, vis.h);
+        }
+      } else if (frame) frame.draw(ctx, dx, dy, dw, dh);
+    } else if (layer.kind === "shape" && layer.shape) {
+      ctx.translate(offX, offY);
+      ctx.scale(scaleX, scaleY);
+      drawShape(ctx, layer.shape, unit || 1, blur);
+    }
+    ctx.restore();
+  }
+}
+
+function intersect(a, b) {
+  const x = Math.max(a.x, b.x), y = Math.max(a.y, b.y);
+  const r = Math.min(a.x + a.w, b.x + b.w), btm = Math.min(a.y + a.h, b.y + b.h);
+  return r - x >= 1 && btm - y >= 1 ? { x, y, w: r - x, h: btm - y } : null;
 }

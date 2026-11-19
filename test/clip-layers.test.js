@@ -44,3 +44,22 @@ test("clipRangePatch: the right edge can't run past the file's last frame", () =
   const p = clipRangePatch(clip(), { tIn: 4, tOut: 30 }, "out");
   assert.deepEqual(p.range, { inSec: 4, outSec: 12 }); // 10s file from srcIn 2 = 8s of clip
 });
+
+test("clipTimeAt: a looping clip restarts from the file's start when it runs out", () => {
+  const l = clip({ range: { inSec: 0, outSec: 30 }, video: { durationSec: 10, srcIn: 0, loop: true, x: 0, y: 0, w: 1, h: 1 } });
+  assert.equal(clipTimeAt(l, 4), 4);
+  assert.equal(clipTimeAt(l, 12), 2);
+  assert.equal(clipTimeAt(l, 25.5), 5.5);
+  assert.equal(clipTimeAt(l, 30), null);
+});
+
+test("clipRangePatch: a looping clip's edges aren't capped at the file length; its in-point wraps", () => {
+  const l = clip({ range: { inSec: 0, outSec: 10 }, video: { durationSec: 10, srcIn: 0, loop: true, x: 0, y: 0, w: 1, h: 1 } });
+  assert.deepEqual(clipRangePatch(l, { tIn: 0, tOut: 45 }, "out").range, { inSec: 0, outSec: 45 });
+  const p = clipRangePatch(l, { tIn: 13, tOut: 20 }, "in");
+  assert.deepEqual(p.range, { inSec: 13, outSec: 20 });
+  assert.equal(p.video.srcIn, 3);
+  // The frame at main time 15 is the same before and after the left-edge trim.
+  const looped = { ...l, range: { inSec: 0, outSec: 30 } };
+  assert.equal(clipTimeAt({ ...looped, ...p }, 15), clipTimeAt(looped, 15));
+});

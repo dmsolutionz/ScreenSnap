@@ -1,7 +1,11 @@
 // Editor boot / controller. Loads a clip (from ?clipId= or a file pick), builds the shell, wires the
 // preview / timeline / layers / annotation modules, owns the transforms state, and drives export.
 // FOUNDATION-OWNED and final — feature work happens inside the modules this orchestrates.
-import { loadClip, pickFile, toInput } from "./source.js";
+import { loadClip, pickFile, toInput, probeVideo } from "./source.js";
+import { initHome, showHome } from "./home.js";
+import { FORMATS, makeBlankVideo, sequenceClips, blankLength } from "./blank-project.js";
+import { chromaConfig, rgbToHex, hexToRgb } from "./chroma.js";
+import { detectScreenInBlob } from "./chroma-keyer.js";
 import { listIds } from "./idb.js";
 import { defaultTransforms, composeDims, cropRect, outDuration, segmentsOf, piecesOf, outTimestamp, srcTimestamp } from "./transforms.js";
 import { createLayerStore, createLayerHistory, newImageLayer, newShapeLayer, newVideoLayer } from "./layers-model.js";
@@ -37,7 +41,7 @@ const ACTION_TOOLS = new Set(["image", "video"]); // one-shot pickers in the rai
 
 const root = document.getElementById("root");
 const empty = document.getElementById("empty");
-const openBtn = document.getElementById("open-btn");
+const DEFAULT_KEY = [0, 177, 64]; // broadcast "chroma green" — the starting key before detection / picking
 
 let session = null; // { input, meta, transforms, store, preview, timeline, annotator, cropOverlay, zoomOverlay, selectionOverlay, shell, fileName, blob, extraAudioInput, extraAudioBlob }
 let stageResizeObserver = null; // re-places the stage overlays when the stage's box changes
@@ -53,32 +57,60 @@ let selectedPiece = null; // {in,out} of the clip piece selected on the timeline
 const NEW_ZOOM_SCALE = 2;  // default magnification for a freshly-added zoom block
 
 async function boot() {
-  const params = new URLSearchParams(location.search);
-  const clipId = params.get("clipId");
-  if (clipId) {
-    const clip = await loadClip(clipId);
-    if (clip && clip.blob) return start(clip.blob, (clip.meta && clip.meta.fileName) || "recording.mp4");
-    // A clip was handed off (?clipId=) but isn't in IndexedDB — the recording didn't finish stashing,
-    // or it was cleared. Log what IS in the store to aid diagnosis, then surface the failure.
-    try { console.warn("[screensnap] clip not found:", clipId, "— stored ids:", await listIds()); } catch {}
-    return showEmpty("That recording couldn’t be loaded — it may not have finished saving. You can still open an MP4 below.");
-  }
+  initHome({
+    onOpen: (blob, name) => start(blob, name),
+    onOpenClip: (id) => openStored(id),
+    onCreate: (opts) => createProject(opts),
+  });
+  const clipId = new URLSearchParams(location.search).get("clipId");
+  if (clipId) return openStored(clipId);
   showEmpty();
 }
 
-function showEmpty(msg) {
-  if (empty) empty.style.display = "flex";
-  const text = document.getElementById("empty-text");
-  if (text && msg) text.textContent = msg;
-  root.style.display = "none";
+// A recording stashed in IndexedDB: the just-recorded handoff (?clipId=) or a pick from the home's list.
+async function openStored(clipId) {
+  const clip = await loadClip(clipId);
+  if (clip && clip.blob) return start(clip.blob, (clip.meta && clip.meta.fileName) || "recording.mp4");
+  // The clip isn't in IndexedDB — the recording didn't finish stashing, or it was cleared. Log what IS in
+  // the store to aid diagnosis, then surface the failure.
+  try { console.warn("[screensnap] clip not found:", clipId, "— stored ids:", await listIds()); } catch {}
+  return showEmpty("That recording couldn’t be loaded — it may not have finished saving. You can still open a video below.");
 }
 
-openBtn?.addEventListener("click", async () => {
-  const picked = await pickFile();
-  if (picked && picked.blob) start(picked.blob, picked.fileName);
-});
+function showEmpty(msg) { showHome(msg); }
 
-async function start(blob, fileName) {
+// New project: generate the blank base (blank-project.js) at the chosen format, then lay any chosen clips
+// end to end on it as video layers, each fitted to the frame (and keyed if it's a green-screen clip).
+async function createProject({ format, lengthSec, bg, clips = [] }) {
+  const first = clips[0] && clips[0].probe;
+  const dims = format === "match" && first ? fitDims(first.width, first.height) : (FORMATS.find((f) => f.id === format) || FORMATS[0]);
+  const seq = sequenceClips(clips.map((c) => c.probe));
+  const durationSec = blankLength(clips.length ? seq.totalSec : lengthSec);
+  let blob;
+  try {
+    blob = await makeBlankVideo({ width: dims.w, height: dims.h, durationSec, bg });
+  } catch (err) {
+    console.warn("[screensnap] couldn't create a project:", err);
+    return showEmpty(`Couldn’t create the project — ${(err && err.message) || err}`);
+  }
+  await start(blob, "new-project.mp4", { project: true });
+  if (!session) return;
+  for (let i = 0; i < clips.length; i++) {
+    await addVideoLayer(clips[i].blob, clips[i].fileName, { probe: clips[i].probe, range: seq.ranges[i], place: "fit", select: false });
+  }
+  session.timeline.refresh();
+}
+
+// A clip's own size as an encodable project size: even dims (H.264), at most 4K on the long side.
+function fitDims(w, h) {
+  const k = Math.min(1, 3840 / Math.max(w, h));
+  const even = (n) => Math.max(2, Math.round((n * k) / 2) * 2);
+  return { w: even(w), h: even(h) };
+}
+
+// opts.project: the base is a generated blank (a new project), not footage — no green-screen check, no
+// "Download original".
+async function start(blob, fileName, opts = {}) {
   // Probe the file BEFORE building any UI: an unreadable / non-video file (Mediabunny throws
   // UnsupportedInputFormatError) must land back on the open screen with a reason, not a blank page.
   let input, width, height, durationSec;
@@ -117,6 +149,7 @@ async function start(blob, fileName) {
   const shell = buildShell(root);
 
   buildToolbar(shell.toolbarEl, transforms);
+  if (opts.project) { const o = shell.toolbarEl.querySelector('[data-exp="orig"]'); if (o) o.hidden = true; }
   buildRail(shell.railEl);
   setStatus(shell.statusEl, meta, transforms);
 
@@ -350,7 +383,7 @@ async function start(blob, fileName) {
   // (add/remove/move/opacity/visibility), so annotations show live without a second subscription
   // here — adding one would double-composite each edit.
 
-  session = { input, meta, transforms, store, history, preview, timeline, film, annotator, cropOverlay, zoomOverlay, selectionOverlay, shell, fileName, blob, extraAudioInput: null, extraAudioBlob: null };
+  session = { input, meta, transforms, store, history, preview, timeline, film, annotator, cropOverlay, zoomOverlay, selectionOverlay, shell, fileName, blob, extraAudioInput: null, extraAudioBlob: null, project: !!opts.project, detected: null };
 
   // The stage overlays position from the canvas rect, but the stage reflows when the chrome around it
   // changes size (inspector row appearing on selection, window resize) — re-place them when that happens.
@@ -373,8 +406,15 @@ async function start(blob, fileName) {
 
   // Render the first frame.
   preview.seekTo(0);
+
+  // Footage shot on a green / blue screen: offer to key it out (never automatic for the main video — it
+  // swaps what's behind the subject, which the user should choose).
+  if (!opts.project) offerBaseKey();
 }
 
+// What shows where the main video's screen is keyed out (compositor resolveBg presets). Layers marked
+// "behind video" draw over this fill.
+const CK_BG = [["grad-slate", "Slate"], ["grad-violet", "Violet"], ["grad-ocean", "Ocean"], ["grad-sunset", "Sunset"], ["grad-mint", "Mint"], ["dark", "Dark"], ["black", "Black"], ["light", "Light"], ["white", "White"]];
 const BD_OPTS = [["grad-violet", "Violet"], ["grad-ocean", "Ocean"], ["grad-sunset", "Sunset"], ["grad-mint", "Mint"], ["grad-slate", "Slate"], ["dark", "Dark"], ["light", "Light"], ["white", "White"]];
 
 function buildToolbar(el, transforms) {
@@ -388,6 +428,7 @@ function buildToolbar(el, transforms) {
     </div>
     <span class="ss-tb-sep"></span>
     <div class="ss-tb-group">
+      <button class="ss-tool" data-pop="chroma" id="ss-chroma-pop" title="Remove a green / blue screen and put something else behind (G)">Green screen ▾</button>
       <button class="ss-tool" data-pop="backdrop" id="ss-backdrop-pop" title="Padded background">Backdrop ▾</button>
       <button class="ss-tool" data-pop="project" id="ss-project-pop" title="Resolution, speed, audio">Project ▾</button>
     </div>
@@ -400,6 +441,16 @@ function buildToolbar(el, transforms) {
       <button class="ss-btn ss-btn-ghost" id="ss-close">Close</button>
     </div>
 
+    <div class="ss-pop ss-pop-chroma" id="ss-pop-chroma" data-popbody hidden>
+      <label class="ss-pop-row"><input type="checkbox" id="ss-ck-on" /><span>Remove green screen</span></label>
+      <div class="ss-pop-row"><span>Key colour</span><input type="color" id="ss-ck-color" value="${rgbToHex(DEFAULT_KEY)}" title="The screen colour to remove" />${"EyeDropper" in window ? '<button class="ss-mini" id="ss-ck-pick" title="Pick the screen colour from the video">Pick</button>' : ""}<button class="ss-mini" id="ss-ck-auto" title="Detect the screen colour at the playhead">Auto</button></div>
+      <label class="ss-pop-row"><span>Strength</span><input type="range" id="ss-ck-sim" min="0.05" max="0.7" step="0.01" value="0.4" /></label>
+      <label class="ss-pop-row"><span>Edge softness</span><input type="range" id="ss-ck-smooth" min="0.005" max="0.3" step="0.005" value="0.08" /></label>
+      <label class="ss-pop-row"><span>Spill removal</span><input type="range" id="ss-ck-spill" min="0.01" max="0.5" step="0.01" value="0.1" /></label>
+      <label class="ss-pop-row"><span>Behind the video</span><select id="ss-ck-bg" class="ss-select">${CK_BG.map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select></label>
+      <div class="ss-pop-row ss-pop-actions"><button class="ss-btn ss-btn-ghost" id="ss-ck-img">+ Image behind</button><button class="ss-btn ss-btn-ghost" id="ss-ck-vid">+ Video behind</button></div>
+      <div class="ss-pop-note" id="ss-ck-note"></div>
+    </div>
     <div class="ss-pop" id="ss-pop-backdrop" data-popbody hidden>
       <label class="ss-pop-row"><input type="checkbox" id="ss-bd-on" /><span>Enable backdrop</span></label>
       <label class="ss-pop-row"><span>Background</span><select id="ss-bd-bg" class="ss-select">${BD_OPTS.map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select></label>
@@ -449,6 +500,21 @@ function buildToolbar(el, transforms) {
   el.querySelector("#ss-split-btn").addEventListener("click", () => splitAtPlayhead());
   el.querySelector("#ss-zoom-add").addEventListener("click", () => addZoom());
   el.querySelector("#ss-zoom-remove").addEventListener("click", () => removeSelectedZoom());
+
+  // ── Green screen popover (the main video's key; clip layers have theirs in the inspector) ────────
+  el.querySelector("#ss-ck-on").addEventListener("change", (e) => setBaseKey({ on: e.target.checked }));
+  el.querySelector("#ss-ck-color").addEventListener("input", (e) => { const rgb = hexToRgb(e.target.value); if (rgb) setBaseKey({ key: rgb, on: true }); });
+  el.querySelector("#ss-ck-sim").addEventListener("input", (e) => setBaseKey({ similarity: Number(e.target.value) }));
+  el.querySelector("#ss-ck-smooth").addEventListener("input", (e) => setBaseKey({ smoothness: Number(e.target.value) }));
+  el.querySelector("#ss-ck-spill").addEventListener("input", (e) => setBaseKey({ spill: Number(e.target.value) }));
+  el.querySelector("#ss-ck-bg").addEventListener("change", (e) => setBaseKey({ bg: e.target.value }));
+  el.querySelector("#ss-ck-auto").addEventListener("click", () => autoKeyBase());
+  el.querySelector("#ss-ck-pick")?.addEventListener("click", async () => {
+    const rgb = await pickScreenColor();
+    if (rgb) setBaseKey({ key: rgb, on: true });
+  });
+  el.querySelector("#ss-ck-img").addEventListener("click", () => addBackgroundImage());
+  el.querySelector("#ss-ck-vid").addEventListener("click", () => addBackgroundVideo());
 
   // ── Backdrop popover ──────────────────────────────────────────────────────────────────────────
   const applyBackdrop = () => {
@@ -590,7 +656,7 @@ function duplicateSelected() {
     session.store.update(copy.id, { video: { ...copy.video, srcIn: l.video.srcIn, volume: l.video.volume, muted: l.video.muted } });
   }
   if (!copy) return;
-  session.store.update(copy.id, { visible: l.visible, opacity: l.opacity, range: l.range ? { ...l.range } : null });
+  session.store.update(copy.id, { visible: l.visible, opacity: l.opacity, under: !!l.under, range: l.range ? { ...l.range } : null });
   selectLayer(copy.id);
 }
 
@@ -655,28 +721,30 @@ function fitScale(imgW, videoW) {
 // Add an image (or animated GIF) as an overlay layer. GIFs are decoded to frames so they animate;
 // if decode fails we fall back to the first frame as a static image. `base` is the visible content
 // rect in source px ({x,y,w,h}); the image is sized to it and inset from its top-left corner.
-async function addImageLayer(file, store, base) {
+// opts: { under, fill } — a background: behind the main video, covering the frame. -> the layer, or null.
+async function addImageLayer(file, store, base, opts = {}) {
   const inset = Math.max(24, Math.round(base.w / 40));
+  const place = (w, h) => {
+    if (opts.fill) return fitRect(base, w / h, true);
+    const scale = fitScale(w, base.w);
+    return { x: base.x + inset, y: base.y + inset, w: w * scale, h: h * scale };
+  };
+  const add = (l) => { const layer = store.add(l); if (opts.under) store.move(layer.id, 0); return layer; };
   try {
     if (file.type === "image/gif") {
       try {
         const g = await decodeGif(file);
-        const scale = fitScale(g.width, base.w);
-        store.add(newImageLayer({
-          bitmap: g.frames[0].bitmap, x: base.x + inset, y: base.y + inset, w: g.width * scale, h: g.height * scale,
-          frames: g.frames, totalMs: g.totalMs,
-        }));
-        return;
+        return add(newImageLayer({ bitmap: g.frames[0].bitmap, ...place(g.width, g.height), frames: g.frames, totalMs: g.totalMs, under: !!opts.under }));
       } catch (err) {
         console.warn("[screensnap] GIF decode failed — adding first frame as static image:", err);
       }
     }
     const bitmap = await createImageBitmap(file);
-    const scale = fitScale(bitmap.width, base.w);
-    store.add(newImageLayer({ bitmap, x: base.x + inset, y: base.y + inset, w: bitmap.width * scale, h: bitmap.height * scale }));
+    return add(newImageLayer({ bitmap, ...place(bitmap.width, bitmap.height), under: !!opts.under }));
   } catch (err) {
     console.warn("[screensnap] couldn't add image layer:", err);
     alert("Sorry — that image couldn't be added.");
+    return null;
   }
 }
 
@@ -692,37 +760,38 @@ async function addVideoFromPicker() {
   await addVideoLayer(picked.blob, picked.fileName);
 }
 
-async function addVideoLayer(blob, name) {
-  let width, height, durationSec, hasAudio;
-  try {
-    const input = toInput(blob);
-    const vTrack = await input.getPrimaryVideoTrack();
-    if (!vTrack) { alert("That file doesn’t have a video track we can use."); return; }
-    width = await vTrack.getDisplayWidth();
-    height = await vTrack.getDisplayHeight();
-    durationSec = await vTrack.computeDuration();
-    hasAudio = !!(await input.getPrimaryAudioTrack().catch(() => null));
-    if (!(width > 0 && height > 0 && durationSec > 0)) throw new Error("empty video track");
-  } catch (err) {
-    console.warn("[screensnap] couldn't add video clip:", err);
-    alert("Sorry — that video couldn’t be added. Try an MP4 or WebM.");
-    return;
-  }
+// opts: { probe, range, place: "pip"|"fit"|"fill", loop, muted, under, select=true, detect=true }. A clip
+// lands as a picture-in-picture by default; `under` puts it behind the main video (a background for a
+// keyed green screen). Unless detect:false, a green-screen clip is keyed automatically (with an Undo).
+async function addVideoLayer(blob, name, opts = {}) {
+  if (!session) return null;
+  const probe = opts.probe || (await probeVideo(blob));
+  if (!probe) { alert("Sorry — that video couldn’t be added. Try an MP4, WebM or MOV."); return null; }
+  const { width, height, durationSec, hasAudio } = probe;
   const { transforms, meta, store } = session;
   const base = cropRect(transforms, meta.width, meta.height);
-  const inset = Math.max(24, Math.round(base.w / 40));
-  const scale = fitScale(width, base.w);
-  const w = width * scale, h = height * scale;
+  let rect;
+  if (opts.place === "fit" || opts.place === "fill") rect = fitRect(base, width / height, opts.place === "fill");
+  else {
+    const inset = Math.max(24, Math.round(base.w / 40));
+    const scale = fitScale(width, base.w);
+    const w = width * scale, h = height * scale;
+    rect = { x: base.x + base.w - w - inset, y: base.y + base.h - h - inset, w, h };
+  }
   // Start at the playhead, unless that leaves less than a second of recording to play over.
-  const inSec = meta.durationSec - lastTime >= 1 ? lastTime : 0;
+  const at = meta.durationSec - lastTime >= 1 ? lastTime : 0;
+  const range = opts.range ? { ...opts.range } : { inSec: at, outSec: at + durationSec };
+  range.outSec = Math.min(range.outSec, meta.durationSec);
+  if (!opts.loop) range.outSec = Math.min(range.outSec, range.inSec + durationSec);
   const layer = store.add(newVideoLayer({
-    blob, name: name || "clip", durationSec, hasAudio,
-    x: base.x + base.w - w - inset, y: base.y + base.h - h - inset, w, h,
-    range: { inSec, outSec: Math.min(meta.durationSec, inSec + durationSec) },
+    blob, name: name || "clip", durationSec, hasAudio, ...rect, range,
+    loop: !!opts.loop, muted: !!opts.muted, under: !!opts.under,
   }));
-  setActiveTool("select");
-  selectLayer(layer.id);
+  if (opts.under) store.move(layer.id, 0);
+  if (opts.select !== false) { setActiveTool("select"); selectLayer(layer.id); }
   session.timeline.refresh();
+  if (opts.detect !== false) autoKeyClip(layer.id);
+  return layer;
 }
 
 // Fit (letterboxed) or fill (cropped edges spill outside — the frame clips them) the selected clip to
@@ -731,11 +800,173 @@ function fitClipToFrame(fill) {
   const l = session && selectedLayerId ? session.store.get(selectedLayerId) : null;
   if (!l || l.kind !== "video") return;
   const base = cropRect(session.transforms, session.meta.width, session.meta.height);
-  const ar = l.video.w / l.video.h;
+  session.store.update(l.id, { video: { ...l.video, ...fitRect(base, l.video.w / l.video.h, fill) } });
+}
+
+// A box of aspect ratio `ar` centred in `base`: contained (fit) or covering it (fill).
+function fitRect(base, ar, fill) {
   const byWidth = fill ? ar < base.w / base.h : ar >= base.w / base.h;
   const w = byWidth ? base.w : base.h * ar;
   const h = byWidth ? base.w / ar : base.h;
-  session.store.update(l.id, { video: { ...l.video, x: base.x + (base.w - w) / 2, y: base.y + (base.h - h) / 2, w, h } });
+  return { x: base.x + (base.w - w) / 2, y: base.y + (base.h - h) / 2, w, h };
+}
+
+// ── Green screen (chroma key) ───────────────────────────────────────────────────────────────────
+// The main video's key lives on transforms.chroma (so undo / export see it); each clip layer's on
+// layer.video.chroma. Keying itself happens in the compositor (chroma-keyer.js), so preview, MP4 and GIF
+// all match. Detection samples one frame and looks for a screen-coloured border (chroma.js).
+
+// Patch the main video's key (creating it from the detected / default colour on first use).
+function setBaseKey(patch) {
+  if (!session) return;
+  const t = session.transforms;
+  const cur = t.chroma || chromaConfig((session.detected && session.detected.key) || DEFAULT_KEY, { on: false, bg: "grad-slate" });
+  t.chroma = { ...cur, ...patch };
+  syncChromaControls();
+  setStatus(session.shell.statusEl, session.meta, t);
+  session.preview.redraw();
+  session.timeline.refresh();
+}
+
+// The popover's controls + the toolbar button's "applied" dot, from transforms.chroma.
+function syncChromaControls() {
+  if (!session) return;
+  const c = session.transforms.chroma, $ = (id) => document.getElementById(id);
+  const set = (id, v) => { const e = $(id); if (e && document.activeElement !== e) e.value = String(v); };
+  if ($("ss-ck-on")) $("ss-ck-on").checked = !!(c && c.on);
+  if (c) {
+    set("ss-ck-color", rgbToHex(c.key));
+    set("ss-ck-sim", c.similarity);
+    set("ss-ck-smooth", c.smoothness);
+    set("ss-ck-spill", c.spill);
+    set("ss-ck-bg", c.bg || "grad-slate");
+  }
+  document.getElementById("ss-chroma-pop")?.classList.toggle("has", !!(c && c.on));
+}
+
+function chromaNote(msg) { const n = document.getElementById("ss-ck-note"); if (n) n.textContent = msg || ""; }
+
+// "Auto": find the screen colour in the frame under the playhead.
+async function autoKeyBase() {
+  if (!session) return;
+  chromaNote("Looking for a green screen…");
+  const det = await detectScreenInBlob(session.blob, lastTime || 0.5);
+  if (!det) { chromaNote("No green or blue screen found at the playhead. Pick the screen colour with the swatch" + ("EyeDropper" in window ? " or Pick" : "") + " instead."); return; }
+  session.detected = det;
+  setBaseKey({ key: det.key, on: true });
+  chromaNote(`Found a ${det.kind} screen (${Math.round(det.coverage * 100)}% of the frame). Fine-tune with Strength and Edge softness.`);
+}
+
+// On open: if the footage was shot on a green / blue screen, offer to remove it.
+async function offerBaseKey() {
+  const s0 = session;
+  const det = await detectScreenInBlob(s0.blob, Math.min(1, s0.meta.durationSec * 0.25));
+  if (!det || session !== s0 || s0.transforms.chroma) return;
+  s0.detected = det;
+  toast(`${det.kind === "blue" ? "Blue" : "Green"} screen detected in this video.`, [
+    { label: "Remove background", primary: true, fn: () => {
+      setBaseKey({ on: true, key: det.key });
+      toast("Background removed. Pick what goes behind it under Green screen ▾ (a colour, an image, or a video).", [{ label: "Open", fn: () => document.getElementById("ss-chroma-pop")?.click() }]);
+    } },
+    { label: "Not now" },
+  ], 15000);
+}
+
+// The browser's native eyedropper (Chrome). The main video's key is suspended while picking so the
+// screen colour is on the stage to be picked. -> [r,g,b] or null.
+async function pickScreenColor() {
+  if (!("EyeDropper" in window) || !session) return null;
+  const t = session.transforms;
+  const was = !!(t.chroma && t.chroma.on);
+  if (was) { t.chroma = { ...t.chroma, on: false }; session.preview.redraw(); }
+  let rgb = null;
+  try { rgb = hexToRgb((await new window.EyeDropper().open()).sRGBHex); } catch { /* cancelled */ }
+  if (was && t.chroma && !t.chroma.on) { t.chroma = { ...t.chroma, on: true }; session.preview.redraw(); }
+  return rgb;
+}
+
+// A replacement background for the keyed main video: an image / GIF or a looping, muted video, filling the
+// frame BEHIND the video. Adding one turns the key on (a background only shows through a keyed screen).
+async function addBackgroundImage() {
+  if (!session) return;
+  const file = await pickImageFile();
+  if (!file) return;
+  const base = cropRect(session.transforms, session.meta.width, session.meta.height);
+  const layer = await addImageLayer(file, session.store, base, { under: true, fill: true });
+  if (!layer) return;
+  if (!(session.transforms.chroma && session.transforms.chroma.on)) setBaseKey({ on: true });
+  selectLayer(layer.id);
+  session.timeline.refresh();
+}
+
+async function addBackgroundVideo() {
+  if (!session) return;
+  const picked = await pickFile();
+  if (!picked || !picked.blob) return;
+  const layer = await addVideoLayer(picked.blob, picked.fileName, {
+    under: true, place: "fill", loop: true, muted: true, detect: false,
+    range: { inSec: 0, outSec: session.meta.durationSec },
+  });
+  if (layer && !(session.transforms.chroma && session.transforms.chroma.on)) setBaseKey({ on: true });
+}
+
+// Detect + key a clip layer's green screen. announce: show the "removed — Undo" notice.
+async function autoKeyClip(id, { announce = true } = {}) {
+  const s0 = session;
+  const l = s0 && s0.store.get(id);
+  if (!l || !l.video) return null;
+  const v = l.video;
+  const det = await detectScreenInBlob(v.blob, Math.min((v.srcIn || 0) + 1, v.durationSec * 0.5));
+  const cur = session === s0 ? s0.store.get(id) : null;
+  if (!det || !cur) return null;
+  setClipKey(id, { ...chromaConfig(det.key), on: true });
+  if (announce) {
+    toast(`${det.kind === "blue" ? "Blue" : "Green"} screen detected in “${v.name}” — background removed.`, [
+      { label: "Adjust", fn: () => selectLayer(id) },
+      { label: "Undo", fn: () => setClipKey(id, { on: false }) },
+    ]);
+  }
+  return det;
+}
+
+// A slider drag: patch the clip's key without rebuilding the inspector under the pointer.
+function setClipKeyQuiet(id, patch) {
+  const l = session && session.store.get(id);
+  if (!l || !l.video || !l.video.chroma) return;
+  session.store.update(id, { video: { ...l.video, chroma: { ...l.video.chroma, ...patch } } });
+}
+
+function setClipKey(id, patch) {
+  const l = session && session.store.get(id);
+  if (!l || !l.video) return;
+  const cur = l.video.chroma || chromaConfig(DEFAULT_KEY, { on: false });
+  session.store.update(id, { video: { ...l.video, chroma: { ...cur, ...patch } } });
+  session.timeline.refresh();
+  if (id === selectedLayerId) updateInspector();
+}
+
+// One transient notice at a time, over the stage. actions: [{ label, primary?, fn? }] (each dismisses it).
+let toastEl = null, toastTimer = 0;
+function toast(msg, actions = [], ms = 9000) {
+  if (toastEl) toastEl.remove();
+  clearTimeout(toastTimer);
+  const el = document.createElement("div");
+  el.className = "ss-toast";
+  el.setAttribute("role", "status");
+  el.innerHTML = '<span class="ss-dotg"></span><span class="ss-toast-m"></span>';
+  el.querySelector(".ss-toast-m").textContent = msg;
+  const dismiss = () => { el.remove(); if (toastEl === el) toastEl = null; };
+  for (const a of actions) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = a.label;
+    if (a.primary) b.className = "primary";
+    b.addEventListener("click", (e) => { e.stopPropagation(); dismiss(); if (a.fn) a.fn(); });
+    el.appendChild(b);
+  }
+  document.body.appendChild(el);
+  toastEl = el;
+  if (ms) toastTimer = setTimeout(dismiss, ms);
 }
 
 // ── Imported audio track (voiceover / music) ─────────────────────────────────────────────────────
@@ -881,6 +1112,7 @@ function updateInspector() {
   if (!l) { el.innerHTML = ""; return; }
   const typeName = l.kind === "image" ? (l.image && l.image.frames ? "GIF" : "Image") : l.kind === "video" ? "Video clip" : (((l.shape && l.shape.type) || "Shape").replace(/^./, (c) => c.toUpperCase()));
   const v = l.kind === "video" ? l.video : null;
+  const ck = v && v.chroma;
   const hasColor = l.kind === "shape" && l.shape && l.shape.color != null;
   const opacity = typeof l.opacity === "number" ? l.opacity : 1;
   const range = l.range;
@@ -898,7 +1130,18 @@ function updateInspector() {
     <span class="ss-insp-ctl"><button class="ss-insp-btn" data-fit="fit">Fit frame</button><button class="ss-insp-btn" data-fit="fill">Fill frame</button></span>
     ${v.hasAudio ? `<span class="ss-insp-sep"></span>
     <span class="ss-insp-ctl">clip audio <input type="range" id="ss-insp-vol" min="0" max="1" step="0.05" value="${v.muted ? 0 : v.volume}" title="Clip volume" />
-      <button class="ss-insp-btn" data-clipmute>${v.muted ? "Unmute" : "Mute"}</button></span>` : ""}` : ""}
+      <button class="ss-insp-btn" data-clipmute>${v.muted ? "Unmute" : "Mute"}</button></span>` : ""}
+    <span class="ss-insp-sep"></span>
+    <span class="ss-insp-ctl">green screen <button class="ss-insp-btn ${ck && ck.on ? "on" : ""}" data-ck title="Remove the clip's green / blue screen">${ck && ck.on ? "On" : "Off"}</button>
+      ${ck && ck.on ? `<input type="color" id="ss-insp-ckc" value="${rgbToHex(ck.key)}" title="Key colour" />
+      ${"EyeDropper" in window ? '<button class="ss-insp-btn" data-ckpick title="Pick the screen colour from the stage">Pick</button>' : ""}
+      strength <input type="range" id="ss-insp-cks" min="0.05" max="0.7" step="0.01" value="${ck.similarity}" />
+      edge <input type="range" id="ss-insp-cke" min="0.005" max="0.3" step="0.005" value="${ck.smoothness}" />
+      spill <input type="range" id="ss-insp-ckp" min="0.01" max="0.5" step="0.01" value="${ck.spill}" />` : ""}</span>
+    <span class="ss-insp-sep"></span>
+    <span class="ss-insp-ctl"><button class="ss-insp-btn ${v.loop ? "on" : ""}" data-loop title="Repeat the clip to fill its block — drag the block's right edge to extend it">Loop</button></span>` : ""}
+    ${l.kind === "video" || l.kind === "image" ? `<span class="ss-insp-sep"></span>
+    <span class="ss-insp-ctl"><button class="ss-insp-btn ${l.under ? "on" : ""}" data-under title="Draw this layer behind the main video — it shows through where a green screen is removed">${l.under ? "Behind video" : "Send behind video"}</button></span>` : ""}
     <span class="ss-insp-spacer"></span>
     <span class="ss-insp-hint">⌫ delete · ⌘D duplicate · esc deselect</span>
   </div>`;
@@ -916,9 +1159,49 @@ function updateInspector() {
     const volume = Number(e.target.value);
     store.update(cur.id, { video: { ...cur.video, volume, muted: volume === 0 ? cur.video.muted : false } }); // dragging up un-mutes
   });
+  // Clip green-screen sliders / swatch: live updates to layer.video.chroma (replaced, never mutated).
+  const ckInput = (sel, key, parse) => el.querySelector(sel)?.addEventListener("input", (e) => {
+    const val = parse(e.target.value);
+    if (val != null) setClipKeyQuiet(selectedLayerId, { [key]: val });
+  });
+  ckInput("#ss-insp-ckc", "key", hexToRgb);
+  ckInput("#ss-insp-cks", "similarity", Number);
+  ckInput("#ss-insp-cke", "smoothness", Number);
+  ckInput("#ss-insp-ckp", "spill", Number);
   const MINR = 0.1;
-  el.querySelector(".ss-insp").addEventListener("click", (e) => {
+  el.querySelector(".ss-insp").addEventListener("click", async (e) => {
     const cur = store.get(selectedLayerId); if (!cur) return;
+    if (e.target.closest("[data-ck]")) {
+      if (cur.video.chroma && cur.video.chroma.on) setClipKey(cur.id, { on: false });
+      else if (cur.video.chroma) setClipKey(cur.id, { on: true });
+      else if (!(await autoKeyClip(cur.id, { announce: false }))) setClipKey(cur.id, { on: true }); // no screen found: start from chroma green
+      return;
+    }
+    if (e.target.closest("[data-ckpick]")) {
+      const id = cur.id;
+      setClipKeyQuiet(id, { on: false }); // show the raw clip while picking
+      const rgb = await pickScreenColor();
+      setClipKey(id, rgb ? { key: rgb, on: true } : { on: true });
+      return;
+    }
+    if (e.target.closest("[data-loop]")) {
+      const nv = { ...cur.video, loop: !cur.video.loop };
+      const patch = { video: nv };
+      if (!nv.loop && cur.range) patch.range = { inSec: cur.range.inSec, outSec: Math.min(cur.range.outSec, cur.range.inSec + nv.durationSec - (nv.srcIn || 0)) };
+      store.update(cur.id, patch);
+      session.timeline.refresh();
+      updateInspector();
+      return;
+    }
+    if (e.target.closest("[data-under]")) {
+      store.update(cur.id, { under: !cur.under });
+      session.timeline.refresh();
+      updateInspector();
+      if (!cur.under && !(session.transforms.chroma && session.transforms.chroma.on)) {
+        toast("This layer is now behind the video — it shows through once the video's green screen is removed.", [{ label: "Remove green screen", primary: true, fn: () => setBaseKey({ on: true }) }]);
+      }
+      return;
+    }
     if (e.target.closest("[data-fit]")) { fitClipToFrame(e.target.closest("[data-fit]").dataset.fit === "fill"); return; }
     if (e.target.closest("[data-clipmute]")) { store.update(cur.id, { video: { ...cur.video, muted: !cur.video.muted } }); updateInspector(); return; }
     const b = e.target.closest("[data-timing]"); if (!b) return;
@@ -1053,6 +1336,7 @@ function syncProjectControls() {
   if ($("ss-speed")) $("ss-speed").value = String(t.speed || 1);
   if ($("ss-audio-mute-cb")) $("ss-audio-mute-cb").checked = !!t.audio.muted;
   if ($("ss-audio-vol")) $("ss-audio-vol").value = String(typeof t.audio.volume === "number" ? t.audio.volume : 1);
+  syncChromaControls();
 }
 
 // Cut toolbar button / X: while on, dragging across the Video track removes that section.
@@ -1350,7 +1634,7 @@ function setStatus(el, meta, t, errMsg) {
   const res = `${d.outW}×${d.outH}${t.crop ? " cropped" : ""}`;
   const cuts = Array.isArray(t.cuts) && t.cuts.length ? ` · ${t.cuts.length} cut${t.cuts.length > 1 ? "s" : ""}` : "";
   const zoom = Array.isArray(t.zoom) && t.zoom.length ? ` · ${t.zoom.length} zoom` : "";
-  const bd = t.backdrop ? " · backdrop" : "";
+  const bd = (t.backdrop ? " · backdrop" : "") + (t.chroma && t.chroma.on ? " · green screen removed" : "");
   const a = t.audio || {};
   let audio;
   if ((t.speed || 1) !== 1) audio = "audio off (speed ≠ 1x)";
@@ -1393,7 +1677,7 @@ function pickImageFile() {
 // Space = play/pause · J K L = shuttle · ←→ frame · ↑↓ prev/next edit · S = split at playhead · Delete = remove
 // the selected piece · Q / W = trim start / end to the playhead · M = marker · V R A T B = tools · I = add image ·
 // O = add video clip ·
-// C = crop · X = cut mode · Z = add zoom · esc = Select + deselect · ⌘D = duplicate · ⌘Z / ⇧⌘Z = undo / redo.
+// C = crop · G = green screen · X = cut mode · Z = add zoom · esc = Select + deselect · ⌘D = duplicate · ⌘Z / ⇧⌘Z = undo / redo.
 const TOOL_KEYS = { v: "select", r: "rect", a: "arrow", t: "text", b: "blur" };
 window.addEventListener("keydown", (e) => {
   const el = document.activeElement;
@@ -1430,6 +1714,7 @@ window.addEventListener("keydown", (e) => {
   if (k === "i") { addImageFromPicker(); return; }
   if (k === "o") { addVideoFromPicker(); return; }
   if (k === "c") { toggleCrop(); return; }
+  if (k === "g") { document.getElementById("ss-chroma-pop")?.click(); return; }
   if (k === "x") { toggleCut(); return; }
   if (k === "z") { addZoom(); return; }
   if (TOOL_KEYS[k]) setActiveTool(TOOL_KEYS[k], e.shiftKey);
@@ -1455,5 +1740,23 @@ document.addEventListener("pointerdown", (e) => {
   if (t.closest(".ss-sel-host, .ss-tl-trk-layer")) return;
   selectLayer(null);
 }, true);
+
+// Drop a file onto the open editor: a video becomes a clip layer (keyed if it's green-screen), an image an
+// image layer. (The home screen has its own drop handler for opening a video.)
+window.addEventListener("dragover", (e) => {
+  if (session && [...((e.dataTransfer && e.dataTransfer.types) || [])].includes("Files")) e.preventDefault();
+});
+window.addEventListener("drop", async (e) => {
+  if (!session) return;
+  const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  if (!f) return;
+  e.preventDefault();
+  if (ALLOWED_IMAGE_TYPES.includes(f.type)) {
+    const layer = await addImageLayer(f, session.store, cropRect(session.transforms, session.meta.width, session.meta.height));
+    if (layer) selectLayer(layer.id);
+  } else {
+    await addVideoLayer(f, f.name || "clip");
+  }
+});
 
 boot();

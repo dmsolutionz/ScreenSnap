@@ -52,6 +52,8 @@ async function handle(msg, sender) {
       return shotClear();
     case MSG.EDITOR_OPEN_CLIP:
       return openEditor(msg.clipId);
+    case MSG.EDITOR_OPEN:
+      return openEditorHome();
     case MSG.EDITOR_GET_IMAGE:
       return editorGetImage();
     case MSG.EDITOR_SAVE:
@@ -292,11 +294,16 @@ async function shotSave() {
 async function shotCopy() { return pendingCapture ? { ok: true, dataUrl: pendingCapture.dataUrl } : { ok: false }; }
 async function shotClear() { pendingCapture = null; return { ok: true }; }
 // Open the video editor on a previously-recorded clip (persisted in IndexedDB by the offscreen
-// document). This is the ONLY place that opens the editor tab.
+// document). This and openEditorHome below are the only places that open the editor tab.
 async function openEditor(clipId) {
   if (!clipId) return { ok: false, error: "No clip to edit." };
   const url = chrome.runtime.getURL("src/editor/editor.html") + "?clipId=" + encodeURIComponent(clipId);
   await chrome.tabs.create({ url });
+  return { ok: true };
+}
+// The editor with no clip: its home screen (open any video, a recent recording, or start a new project).
+async function openEditorHome() {
+  await chrome.tabs.create({ url: chrome.runtime.getURL("src/editor/editor.html") });
   return { ok: true };
 }
 async function editorGetImage() { return pendingCapture ? { ok: true, dataUrl: pendingCapture.dataUrl, filename: pendingCapture.filename } : { ok: false, error: "no pending image" }; }

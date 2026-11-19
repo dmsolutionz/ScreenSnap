@@ -114,3 +114,27 @@ export async function listIds() {
     db.close();
   }
 }
+
+// The stored recordings for the editor's home screen, newest first: [{ id, fileName, savedAt, size, durationMs }].
+// Blobs in IndexedDB are handles, so reading the records doesn't pull any video data into memory.
+export async function listClips() {
+  const db = await open();
+  try {
+    const out = await new Promise((resolve, reject) => {
+      const acc = [];
+      const req = tx(db, "readonly").openCursor();
+      req.onsuccess = () => {
+        const c = req.result;
+        if (!c) return resolve(acc);
+        const v = c.value || {};
+        const meta = v.meta || {};
+        acc.push({ id: v.id, fileName: meta.fileName || "recording", savedAt: v.savedAt || 0, size: (v.blob && v.blob.size) || 0, durationMs: meta.durationMs || 0 });
+        c.continue();
+      };
+      req.onerror = () => reject(req.error);
+    });
+    return out.sort((a, b) => b.savedAt - a.savedAt);
+  } finally {
+    db.close();
+  }
+}
